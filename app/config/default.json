@@ -8,7 +8,9 @@
     "activeTickMs": 60000,
     "activeWindowMs": 600000,
     "debounceMs": 30000,
-    "debounceMaxWaitMs": 120000
+    "debounceMaxWaitMs": 120000,
+    "watchdogMs": 5000,
+    "overdueGraceMs": 2000
   },
 
   "send": {

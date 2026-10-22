@@ -4,6 +4,9 @@
  *   tick 时有未读才唤醒（不调用 LLM 做判断），并检查计划时间表。
  * - 私聊新消息 / 群里被 @：进入去抖；最后一条后静默 debounceMs（且最长 debounceMaxWaitMs）再入队，不插队。
  * - 群里未被 @ 的消息：只在 tick 时被读到。
+ * - 看门狗（watchdogMs>0）：按墙上时间检查去抖/tick 是否逾期未触发（定时器丢失、事件循环卡住、VM 被冻结后恢复），
+ *   逾期就立即补触发；并比较墙上时间与单调时间，发现暂停/时钟跳变时记日志。
+ * 调度与收发长连接完全无关：连接断开时照样唤醒、照样经 HTTP 发送。
  */
 import type { Clock } from "./clock.ts";
 import { makeWake, type RunQueue } from "./queue.ts";
@@ -18,27 +21,46 @@ export interface SchedulerDeps {
   /** 当前到期的计划触发（tick 用），由 PlanEngine 提供 */
   duePlans: (now: number) => Wake["planFires"];
   log?: (msg: string) => void;
+  warn?: (msg: string) => void;
 }
-export interface SchedulerConfig { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number }
+export interface SchedulerConfig {
+  tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number;
+  /** 看门狗间隔，0/缺省 = 关闭 */
+  watchdogMs?: number;
+  /** 逾期多少毫秒算“丢了”，默认 2000 */
+  overdueGraceMs?: number;
+}
 
-interface Debounce { timer: unknown; firstAt: number; count: number; reason: string }
+interface Debounce { timer: unknown; firstAt: number; dueAt: number; count: number; reason: string }
+
+export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
 
 export class Scheduler {
   private debounces = new Map<string, Debounce>();
   private tickTimer: unknown = null;
+  private tickDueAt: number | null = null;
+  private lastTickAt: number | null = null;
   private lastActivity = -Infinity;
   private running = false;
+  private wdTimer: unknown = null;
+  private wdLast: { wall: number; mono: number } | null = null;
+  private recovered = 0;
+  private pausesDetected = 0;
   constructor(private cfg: SchedulerConfig, private d: SchedulerDeps) {}
 
   start() {
     if (this.running) return;
     this.running = true;
     this.scheduleTick();
+    if (this.cfg.watchdogMs && this.cfg.watchdogMs > 0) this.scheduleWatchdog();
   }
   stop() {
     this.running = false;
     if (this.tickTimer) this.d.clock.clearTimeout(this.tickTimer);
     this.tickTimer = null;
+    this.tickDueAt = null;
+    if (this.wdTimer) this.d.clock.clearTimeout(this.wdTimer);
+    this.wdTimer = null;
     for (const db of this.debounces.values()) this.d.clock.clearTimeout(db.timer);
     this.debounces.clear();
   }
@@ -64,28 +86,51 @@ export class Scheduler {
     const firstAt = prev?.firstAt ?? now;
     const remainingMax = firstAt + this.cfg.debounceMaxWaitMs - now;
     const delay = Math.max(0, Math.min(this.cfg.debounceMs, remainingMax));
-    const db: Debounce = { timer: null, firstAt, count: (prev?.count ?? 0) + 1, reason: prev?.reason ?? reason };
-    db.timer = this.d.clock.setTimeout(() => this.fireDebounce(poolId), delay);
+    const db: Debounce = { timer: null, firstAt, dueAt: now + delay, count: (prev?.count ?? 0) + 1, reason: prev?.reason ?? reason };
+    db.timer = this.d.clock.setTimeout(() => { if (this.debounces.get(poolId) === db) this.fireDebounce(poolId, "timer"); }, delay);
     this.debounces.set(poolId, db);
   }
   isDebouncing(poolId: string) { return this.debounces.has(poolId); }
 
-  private fireDebounce(poolId: string) {
+  private fireDebounce(poolId: string, via: "timer" | "watchdog") {
     const db = this.debounces.get(poolId);
     this.debounces.delete(poolId);
     if (!db) return;
-    if (this.d.isPaused()) { this.d.log?.(`paused: skip message wake ${poolId}`); return; }
-    const r = this.d.queue.enqueue(makeWake("message", [poolId], `${db.reason}（合并${db.count}条）`, [], this.d.clock.now()));
-    this.d.log?.(`message wake ${poolId} ${r}`);
+    this.d.clock.clearTimeout(db.timer);
+    try {
+      if (this.d.isPaused()) { this.d.log?.(`paused: skip message wake ${poolId}`); return; }
+      const now = this.d.clock.now();
+      const r = this.d.queue.enqueue(makeWake("message", [poolId], `${db.reason}（合并${db.count}条）`, [], now));
+      const late = now - db.dueAt;
+      this.d.log?.(`message wake ${poolId} ${r}${via === "watchdog" || late > (this.cfg.overdueGraceMs ?? 2000) ? `（看门狗补触发，迟到 ${Math.round(late / 1000)}s）` : ""}`);
+    } catch (e) {
+      this.d.warn?.(`message wake ${poolId} 入队失败：${(e as Error).message}（下次 tick 兜底）`);
+    }
   }
 
   private scheduleTick() {
     if (this.tickTimer) this.d.clock.clearTimeout(this.tickTimer);
-    this.tickTimer = this.d.clock.setTimeout(() => { this.tick(); if (this.running) this.scheduleTick(); }, this.currentTickMs());
+    const ms = this.currentTickMs();
+    this.tickDueAt = this.d.clock.now() + ms;
+    const handle = this.d.clock.setTimeout(() => { if (this.tickTimer === handle) this.runTick("timer"); }, ms);
+    this.tickTimer = handle;
+  }
+  /** 定时 tick：无论 tick 本身是否出错，都保证排下一次 */
+  private runTick(via: "timer" | "watchdog") {
+    this.tickTimer = null;
+    try {
+      if (via === "watchdog") this.d.log?.(`tick 逾期 ${Math.round((this.d.clock.now() - (this.tickDueAt ?? 0)) / 1000)}s，看门狗补触发`);
+      this.tick();
+    } catch (e) {
+      this.d.warn?.(`tick 出错：${(e as Error).message}`);
+    } finally {
+      if (this.running) this.scheduleTick();
+    }
   }
 
   /** 一次 tick（公开以便测试/手动触发）。返回是否入队。 */
   tick(): boolean {
+    this.lastTickAt = this.d.clock.now();
     if (this.d.isPaused()) return false;
     const now = this.d.clock.now();
     let enqueued = false;
@@ -101,5 +146,45 @@ export class Scheduler {
       enqueued = true;
     }
     return enqueued;
+  }
+
+  // ---------- 看门狗 ----------
+  private scheduleWatchdog() {
+    this.wdTimer = this.d.clock.setTimeout(() => {
+      try { this.watchdog(); } catch (e) { this.d.warn?.(`看门狗出错：${(e as Error).message}`); }
+      if (this.running) this.scheduleWatchdog();
+    }, this.cfg.watchdogMs!);
+  }
+  /** 公开以便测试 */
+  watchdog() {
+    const c = this.d.clock;
+    const wall = c.now();
+    const mono = c.mono ? c.mono() : wall;
+    if (this.wdLast) {
+      const gap = (wall - this.wdLast.wall) - (mono - this.wdLast.mono);
+      if (Math.abs(gap) > 2000) {
+        this.pausesDetected++;
+        this.d.warn?.(`检测到时钟跳变/进程被冻结：墙上时间比单调时间多走了 ${Math.round(gap / 1000)}s（VM 暂停或系统对时），检查逾期定时器`);
+      }
+    }
+    this.wdLast = { wall, mono };
+    const grace = this.cfg.overdueGraceMs ?? 2000;
+    // 先补 tick（它会跳过仍在去抖的池），再补去抖，避免同一池被唤醒两次
+    if (this.running && this.tickDueAt !== null && wall - this.tickDueAt > grace) {
+      this.recovered++;
+      if (this.tickTimer) c.clearTimeout(this.tickTimer);
+      this.runTick("watchdog");
+    }
+    for (const [pool, db] of [...this.debounces]) {
+      if (wall - db.dueAt > grace) { this.recovered++; this.fireDebounce(pool, "watchdog"); }
+    }
+  }
+
+  stats(): SchedulerStats {
+    return {
+      lastTickAt: this.lastTickAt, nextTickAt: this.tickDueAt,
+      debouncing: [...this.debounces].map(([pool, d]) => ({ pool, dueAt: d.dueAt, count: d.count })),
+      recovered: this.recovered, pausesDetected: this.pausesDetected,
+    };
   }
 }

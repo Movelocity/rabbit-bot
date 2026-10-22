@@ -37,7 +37,10 @@ export class Hub {
   /** 入池；返回入库后的消息（重复则 null） */
   ingest(m: InboundMessage): StoredMessage | null {
     const saved = this.store.insertMessage(m);
-    if (!saved) return null;
+    if (!saved) {
+      if (!m.from_self) this.log.info(`重复消息已忽略（平台重投？）${m.platform}:${m.msg_id}`);
+      return null;
+    }
     if (saved.from_self) return saved;
     const pool = this.store.getPool(saved.pool_id)!;
     // 表情回复不立即唤醒，等 tick（省 token）

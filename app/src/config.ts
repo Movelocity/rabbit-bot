@@ -14,7 +14,7 @@ export interface Config {
   timezone: string;
   dataDir: string;
   logDir: string;
-  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number };
+  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number };
   send: { confirmWaitMs: number; confirmViaApi: boolean };
   context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
   handoff: { contextTokenLimit: number };

@@ -18,11 +18,11 @@ export class MockAdapter implements IMAdapter {
   async start(sink: (m: InboundMessage) => void) { this.sink = sink; }
   async stop() { this.sink = null; }
 
-  inject(opts: { chat: string; kind: PoolKind; from: string; name?: string; text: string; mentionMe?: boolean; media?: InboundMessage["media_type"]; ts?: number; title?: string }) {
+  inject(opts: { chat: string; kind: PoolKind; from: string; name?: string; text: string; mentionMe?: boolean; media?: InboundMessage["media_type"]; ts?: number; title?: string; msgId?: string }) {
     if (!this.sink) throw new Error("mock adapter not started");
     const m: InboundMessage = {
       platform: "mock", external_chat_id: opts.chat, pool_kind: opts.kind, pool_title: opts.title ?? opts.chat,
-      msg_id: `in-${++this.n}`, sender_id: opts.from, sender_name: opts.name ?? opts.from, ts: opts.ts ?? Date.now(),
+      msg_id: opts.msgId ?? `in-${++this.n}`, sender_id: opts.from, sender_name: opts.name ?? opts.from, ts: opts.ts ?? Date.now(),
       text: opts.text, reply_to: null, mentions: opts.mentionMe ? [this.selfId] : [], is_mention_me: !!opts.mentionMe,
       media_type: opts.media ?? "text",
     };

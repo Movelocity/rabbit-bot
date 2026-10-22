@@ -124,6 +124,7 @@ export class Store {
   // ---------- 消息 ----------
   /** 入池；重复 msg_id 返回 null。 */
   insertMessage(m: InboundMessage): StoredMessage | null {
+    if (this.hasMessage(m.platform, m.msg_id)) return null; // 重复投递：不产生任何副作用
     const pool = this.upsertPool(m.platform, m.external_chat_id, m.pool_kind, m.pool_title ?? "");
     const user_id = m.from_self ? null : this.resolveUser(m.platform, m.sender_id, m.sender_name);
     const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self)

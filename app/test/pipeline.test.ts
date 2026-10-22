@@ -173,3 +173,22 @@ test("飞书内置表情：[emoji:捂脸] 走富文本（文字+表情合成一�
   assert.equal(t.mock.sent[0].content, "收到：笑死<FACEPALM>🙂");
   await t.done();
 });
+
+test("事故复现（端到端）：入池后 VM 冻结 221s → 恢复后看门狗立即唤醒并经 HTTP 发送；重复投递不产生第二次唤醒、不占 seq", async () => {
+  const t = await setup();
+  const m = t.dm("你会做什么");
+  await t.settle(6_000);
+  t.clock.freeze(221_000);
+  // 平台在重连后重投同一条
+  t.mock.inject({ chat: "dm-alice", kind: "private", from: "alice", text: "你会做什么", ts: t.clock.now(), msgId: m.msg_id });
+  await t.settle(5_000);
+  assert.equal(t.wakes.length, 1);
+  assert.equal(t.wakes[0].outcome, "ok");
+  assert.deepEqual(t.mock.sent.map((s) => s.content), ["收到：你会做什么"]);
+  await t.settle(120_000);
+  assert.equal(t.wakes.filter((w) => w.outcome === "ok").length, 1);
+  const pool = t.app.store.poolsWithUnread().length === 0 ? t.app.store.resolvePool("mock:dm-alice")! : null;
+  const seqs = t.app.store.messagesAfter(pool!.pool_id, 0).map((x) => x.seq);
+  assert.deepEqual(seqs, seqs.map((_, i) => seqs[0] + i), "重复投递不占 seq");
+  await t.done();
+});

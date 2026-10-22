@@ -68,6 +68,11 @@ export class FeishuAdapter implements IMAdapter {
   private chatTitles = new Map<string, string>();
   private chatKinds = new Map<string, "private" | "group">();
   private sink: ((m: InboundMessage) => void) | null = null;
+  /** 最近处理过的 message_id / 事件键（重连后平台会重投未确认的事件） */
+  private seen = new Set<string>();
+  /** 串行处理入站事件：事件回调立即返回（尽快 ack，减少重投），处理按到达顺序进行 */
+  private chain: Promise<void> = Promise.resolve();
+  private disconnectedAt: number | null = null;
 
   constructor(private opts: FeishuOptions, private log: Logger) {
     const domain = opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -84,22 +89,52 @@ export class FeishuAdapter implements IMAdapter {
     this.sink = sink;
     const handlers: Record<string, (data: any) => Promise<void>> = {
       "im.message.receive_v1": async (data) => {
-        try { sink(await this.toInbound(data)); } catch (e) { this.log.error("feishu: 处理消息失败", e); }
+        const id: string = data?.message?.message_id ?? "";
+        if (this.markSeen(id)) return;
+        this.enqueue(async () => sink(await this.toInbound(data)), "处理消息失败");
       },
     };
     if (this.opts.reactions) handlers["im.message.reaction.created_v1"] = async (data) => {
-      try { const m = await this.reactionToInbound(data); if (m) sink(m); } catch (e) { this.log.error("feishu: 处理表情回复失败", e); }
+      const id = `reaction:${data?.message_id}:${data?.user_id?.open_id ?? ""}:${data?.reaction_type?.emoji_type ?? ""}:${data?.action_time ?? ""}`;
+      if (this.markSeen(id)) return;
+      this.enqueue(async () => { const m = await this.reactionToInbound(data); if (m) sink(m); }, "处理表情回复失败");
     };
     const dispatcher = new lark.EventDispatcher({}).register(handlers as any);
     const domain = this.opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
     this.ws = new lark.WSClient({
       appId: this.opts.appId, appSecret: this.opts.appSecret, domain, loggerLevel: lark.LoggerLevel.warn, autoReconnect: true,
       onReady: () => this.log.info("feishu: 长连接已建立"),
-      onReconnecting: () => this.log.warn("feishu: 长连接重连中"),
-      onReconnected: () => this.log.info("feishu: 长连接已恢复"),
+      onReconnecting: () => {
+        this.disconnectedAt ??= Date.now();
+        this.log.warn("feishu: 长连接重连中（不影响定时唤醒与发送，发送走 HTTP）");
+      },
+      onReconnected: () => {
+        const s = this.disconnectedAt ? Math.round((Date.now() - this.disconnectedAt) / 1000) : 0;
+        this.disconnectedAt = null;
+        this.log.info(`feishu: 长连接已恢复（断开约 ${s}s；期间的消息平台会补推，重复的按 message_id 去重）`);
+      },
       onError: (e) => this.log.error("feishu: 长连接失败", e),
     });
     await this.ws.start({ eventDispatcher: dispatcher });
+  }
+
+  /** 返回 true 表示重复（已见过） */
+  private markSeen(id: string): boolean {
+    if (!id) return false;
+    if (this.seen.has(id)) { this.log.info(`feishu: 重复投递已忽略 ${id}`); return true; }
+    this.seen.add(id);
+    if (this.seen.size > 5000) for (const k of [...this.seen].slice(0, 1000)) this.seen.delete(k);
+    return false;
+  }
+  private enqueue(fn: () => Promise<void>, what: string) {
+    this.chain = this.chain.then(fn).catch((e) => this.log.error(`feishu: ${what}`, e));
+  }
+  /** 测试用：直接投递一个原始事件 */
+  async _deliver(event: "im.message.receive_v1", data: any) {
+    const id: string = data?.message?.message_id ?? "";
+    if (this.markSeen(id)) return;
+    this.enqueue(async () => this.sink?.(await this.toInbound(data)), "处理消息失败");
+    await this.chain;
   }
 
   async stop() { try { (this.ws as any)?.close?.(); } catch { /* ignore */ } this.ws = null; }

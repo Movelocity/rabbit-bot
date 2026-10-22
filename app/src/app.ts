@@ -53,7 +53,7 @@ export class App {
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
-      log: (m) => this.log.info(`[sched] ${m}`),
+      log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
     const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now() });
