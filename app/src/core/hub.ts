@@ -5,7 +5,8 @@
 import type { IMAdapter } from "../adapters/types.ts";
 import type { Config } from "../config.ts";
 import type { Store } from "./db.ts";
-import { parseEmoji } from "./emoji.ts";
+import { parseEmoji, type EmojiTable } from "./emoji.ts";
+import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { InboundMessage, StoredMessage } from "../types.ts";
@@ -25,7 +26,7 @@ export class Hub {
   /** 每次 send 的回调（日志/测试） */
   onSent?: (poolId: string, text: string) => void;
 
-  constructor(private store: Store, private cfg: Config, private log: Logger) {}
+  constructor(private store: Store, private cfg: Config, private log: Logger, readonly emoji: EmojiTable) {}
 
   addAdapter(a: IMAdapter) { this.adapters.set(a.platform, a); }
   async startAdapters() {
@@ -39,7 +40,8 @@ export class Hub {
     if (!saved) return null;
     if (saved.from_self) return saved;
     const pool = this.store.getPool(saved.pool_id)!;
-    const urgent = pool.kind === "private" || saved.is_mention_me;
+    // 表情回复不立即唤醒，等 tick（省 token）
+    const urgent = saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
     this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${saved.sender_name}: ${saved.text.slice(0, 60)}${urgent ? " [唤醒]" : ""}`);
     this.scheduler?.onMessage(saved.pool_id, urgent, pool.kind === "private" ? "私聊新消息" : "群聊被@");
     return saved;
@@ -68,17 +70,31 @@ export class Hub {
     if (!content.trim()) return { ok: false, error: "内容为空", sentParts: [], newMessages: [] };
 
     const parts: SendOutcome["sentParts"] = [];
-    try {
-      for (const seg of parseEmoji(content, this.cfg.emoji.map)) {
-        if (seg.type === "emoji" && seg.target.sticker && adapter.sendSticker) {
-          const r = await adapter.sendSticker(pool.external_id, seg.target.sticker);
-          parts.push({ kind: "sticker", content: `[emoji:${seg.id}]`, msgId: r.msgId, confirmed: false });
-        } else {
-          const text = seg.type === "text" ? seg.text : `[emoji:${seg.id}]`;
-          const r = await adapter.sendText(pool.external_id, text);
-          parts.push({ kind: "text", content: text, msgId: r.msgId, confirmed: false });
-        }
+    // 把片段组装成消息：文字+内置表情合成一条（富文本），表情包单独一条
+    let rich: RichPart[] = [];
+    const flush = async () => {
+      if (!rich.length) return;
+      const chunk = rich; rich = [];
+      const asText = chunk.map((p) => (p.type === "text" ? p.text : `[emoji:${p.id}]`)).join("");
+      if (chunk.some((p) => p.type === "emoji") && adapter.sendRich) {
+        const r = await adapter.sendRich(pool.external_id, chunk);
+        parts.push({ kind: "text", content: asText, msgId: r.msgId, confirmed: false });
+      } else {
+        const r = await adapter.sendText(pool.external_id, asText);
+        parts.push({ kind: "text", content: asText, msgId: r.msgId, confirmed: false });
       }
+    };
+    try {
+      for (const seg of parseEmoji(content, this.emoji)) {
+        if (seg.type === "text") rich.push({ type: "text", text: seg.text });
+        else if (seg.entry.sticker && adapter.sendSticker) {
+          await flush();
+          const r = await adapter.sendSticker(pool.external_id, seg.entry.sticker);
+          parts.push({ kind: "sticker", content: `[emoji:${seg.id}]`, msgId: r.msgId, confirmed: false });
+        } else if (seg.entry.feishu) rich.push({ type: "emoji", id: seg.id, key: seg.entry.feishu });
+        else rich.push({ type: "text", text: `[emoji:${seg.id}]` });
+      }
+      await flush();
     } catch (e) {
       this.log.error(`发送失败 ${pool.pool_id}`, e);
       return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: this.takeUnread() };

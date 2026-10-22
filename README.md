@@ -28,7 +28,7 @@ mock 适配器(模拟) ──┘        │
 | `src/core/scheduler.ts` | tick、活跃期短 tick、去抖（含最长等待）、群未@只等 tick |
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
 | `src/core/plans.ts` / `time.ts` | 计划校验（ISO / cron，Asia/Shanghai）、到点匹配、同点只触发一次、停机补发/跳过、过期 |
-| `src/core/emoji.ts` | `[emoji:中文id]` 解析，匹配不上原样输出，普通 `[xxx]` 不处理 |
+| `src/core/emoji.ts` | 表情映射表加载；出站 `[emoji:中文id]` 解析（匹配不上原样输出，普通 `[xxx]` 不处理）；入站 `[名字]` → `[emoji:中文id]` |
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
 | `src/agent/tools.ts` | 工具：`send`（唯一输出）、`list_pools`、`read_pool`、`plan_add/plan_update/plan_list`、`memory_add/memory_search` |
@@ -55,7 +55,10 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `limits.dailyLlmCalls` / `dailyTokens` / `turnTimeoutMs` | 300 / 2000000 / 300000 | 每日上限（按 Asia/Shanghai 日期）与单轮超时 |
 | `plans.missedPolicy` / `missedGraceMs` | catchup / 1 天 | 停机错过的触发：补发一次或跳过 |
 | `llm.provider` / `llm.model` / `thinkingLevel` | deepseek / deepseek-flash / off | 任何 pi 支持的 provider/model（`npm run ctl -- models` 查看） |
-| `emoji.map` | {} | `中文id → {sticker: 飞书file_key}` 或 `{text: "🙂"}` |
+| `emoji.table` | `./config/emoji-feishu.json` | 飞书内置表情映射表（中文id/别名 → emoji_type） |
+| `emoji.map` | {} | 覆盖（优先于映射表）：`中文id → {sticker: 飞书file_key}` 或 `{text: "🙂"}` |
+| `adapters.feishu.reactions` | true | 处理“表情回复”事件（需在后台订阅，见下） |
+| `adapters.feishu.logRawEmoji` | true | 把含表情的入站原始 content 记到 app.log，便于核对 |
 | `context.recentContextMessages` | 8 | 池首次出现在会话中时附带的近期上下文条数 |
 
 ## 环境变量（只从环境变量读取密钥，代码里没有任何密钥）
@@ -105,6 +108,13 @@ npm run ctl -- models [provider]                 # pi 支持的模型、当前�
 - **QQ**：只有接口和空实现（`src/adapters/qq.ts`）。
 - **非文字消息**：只做占位描述（`[图片]`、`[语音]`、`[文件:名字]` 等），没有识别/转写。
 - **表情映射表**：`emoji.map` 默认为空；飞书 sticker 需要 file_key（通常只能用收到过的表情包的 file_key），白名单待定。
+
+## 飞书表情
+
+- 映射表 `app/config/emoji-feishu.json`：覆盖飞书官方《表情文案说明》里全部 182 个 `emoji_type`，每项有微信式中文 id + 别名，`common: true` 的 38 个写进提示词。中文 id 是按官方表情图人工定的，客户端叫法不同时在 `aliases` 里补即可（改完重启）。
+- 出站：Agent 写 `[emoji:捂脸]`；含内置表情的消息以**富文本 post** 发送（`{"tag":"emotion","emoji_type":"FACEPALM"}`，官方文档明确支持），纯文字仍发 text。id/别名都不认识 → 原样文字。
+- 入站：post 里的 emotion、text 里的 `[名字]`（中文 id/别名/emoji_type，英文不分大小写）都转成 `[emoji:中文id]`；表情包 → `[表情包]`；`[文字](链接)` 不动。
+- 表情回复（可选）：后台“事件与回调”订阅 `im.message.reaction.created_v1`，权限 `im:message.reactions:read`（或 `im:message:readonly`）。入池为 `[表情回复] 给你「…」点了 [emoji:强]`，不立即唤醒，等 tick。
 - **潮汐闸门**：v1 不做。
 - **桩 LLM**：`llm.provider = "faux"` 只用于模拟器和测试，正式入口会拒绝。
 - 飞书适配器已按官方 SDK 编写，但因为没有凭据，**未连过真实飞书**。

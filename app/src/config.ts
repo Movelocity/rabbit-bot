@@ -22,8 +22,8 @@ export interface Config {
   limits: { dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
-  adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean }; qq: { enabled: boolean } };
-  emoji: { map: Record<string, EmojiTarget> };
+  adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean }; qq: { enabled: boolean } };
+  emoji: { table: string | null; map: Record<string, EmojiTarget> };
   agent: { name: string; persona: string };
 }
 
@@ -53,6 +53,7 @@ export function loadConfig(overrides?: unknown): Config {
   if (overrides) cfg = deepMerge(cfg, overrides);
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
+  if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);
   return cfg;
 }

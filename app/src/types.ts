@@ -1,6 +1,6 @@
 export type Platform = "feishu" | "qq" | "mock";
 export type PoolKind = "private" | "group";
-export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "other";
+export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 
 /** 统一消息字段（需求 §2） */
 export interface PoolMessage {

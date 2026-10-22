@@ -9,6 +9,7 @@ import { RunQueue } from "./core/queue.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey } from "./core/time.ts";
+import { EmojiTable } from "./core/emoji.ts";
 import { PiEngine, type AgentEngine } from "./agent/engine.ts";
 import { createTools } from "./agent/tools.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
@@ -34,6 +35,7 @@ export class App {
   readonly scheduler: Scheduler;
   readonly plans: PlanEngine;
   readonly engine: AgentEngine;
+  readonly emoji: EmojiTable;
   private clock: Clock;
   /** 每次唤醒结束后的回调（模拟器/测试用） */
   onWakeDone?: (entry: any) => void;
@@ -43,7 +45,8 @@ export class App {
     this.clock = o.clock ?? realClock;
     this.log = o.logger ?? new Logger(cfg.logDir);
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "poolchat.db"));
-    this.hub = new Hub(this.store, cfg, this.log);
+    this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
+    this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone }, this.clock.now());
     this.queue = new RunQueue((w) => this.handleWake(w));
     this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
@@ -54,7 +57,7 @@ export class App {
     });
     this.hub.scheduler = this.scheduler;
     const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now() });
-    this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
+    this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
 
   async start() {

@@ -163,3 +163,13 @@ test("记忆按 user_id 存，来源与可见范围默认按池类型", async ()
   assert.match(row.user_id, /^u_/);
   await t.done();
 });
+
+test("飞书内置表情：[emoji:捂脸] 走富文本（文字+表情合成一条），覆盖表仍优先", async () => {
+  const t = await setup();
+  t.dm("笑死[emoji:捂脸][emoji:微笑]");
+  await t.settle(30_000);
+  assert.equal(t.mock.sent.length, 1);
+  assert.equal(t.mock.sent[0].kind, "rich");
+  assert.equal(t.mock.sent[0].content, "收到：笑死<FACEPALM>🙂");
+  await t.done();
+});

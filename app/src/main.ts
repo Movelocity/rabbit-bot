@@ -20,7 +20,7 @@ async function main() {
 
   const app = new App({ cfg, model: model.model, modelRuntime: model.modelRuntime, logger: log });
   if (cfg.adapters.feishu.enabled)
-    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName }, log));
+    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji }, log));
   if (cfg.adapters.qq.enabled) app.hub.addAdapter(new QQAdapter());
 
   let stopping = false;

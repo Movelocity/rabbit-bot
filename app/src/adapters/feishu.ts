@@ -4,13 +4,16 @@
  * 需在开发者后台开通：机器人能力；事件 im.message.receive_v1（订阅方式选“长连接”）；
  * 权限：im:message（收发消息）、im:message.group_at_msg（群 @）、im:message.group_msg（可选：读群里所有消息）、
  *       im:message.p2p_msg（私聊）、im:chat:readonly（群名，可选）、contact:user.base:readonly（用户名，可选）。
+ * 表情回复（可选）：事件 im.message.reaction.created_v1 + 权限 im:message.reactions:read 或 im:message:readonly。
+ * 表情：出站含内置表情时发富文本 post（emotion 元素）；入站 emotion / 文本 [名字] 统一转成 [emoji:中文id]。
  */
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { IMAdapter, SendResult } from "./types.ts";
+import type { IMAdapter, RichPart, SendResult } from "./types.ts";
+import { inboundEmojiText, type EmojiTable } from "../core/emoji.ts";
 import type { InboundMessage, MediaType } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
 
-export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean }
+export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable }
 
 const PLACEHOLDER: Record<string, [MediaType, string]> = {
   image: ["image", "[图片]"], audio: ["audio", "[语音]"], media: ["video", "[视频]"], file: ["file", "[文件]"],
@@ -18,18 +21,36 @@ const PLACEHOLDER: Record<string, [MediaType, string]> = {
   location: ["other", "[位置]"], video_chat: ["other", "[视频会议]"], merge_forward: ["other", "[合并转发]"],
 };
 
+/** 文字 + 表情片段 → 飞书富文本 post 内容（按换行分段）。导出以便测试。 */
+export function buildFeishuPost(parts: RichPart[]): { zh_cn: { content: object[][] } } {
+  const lines: object[][] = [[]];
+  for (const p of parts) {
+    if (p.type === "emoji") { lines[lines.length - 1].push({ tag: "emotion", emoji_type: p.key }); continue; }
+    p.text.split("\n").forEach((seg, i) => {
+      if (i > 0) lines.push([]);
+      if (seg) lines[lines.length - 1].push({ tag: "text", text: seg });
+    });
+  }
+  return { zh_cn: { content: lines.map((l) => (l.length ? l : [{ tag: "text", text: "" }])) } };
+}
+
 /** 把飞书消息 content 转成纯文本（非文字消息用占位描述）。导出以便测试。 */
-export function feishuContentToText(msgType: string, content: string, mentions: { key: string; name: string }[] = []): { text: string; media: MediaType } {
+export function feishuContentToText(msgType: string, content: string, mentions: { key: string; name: string }[] = [], emoji?: EmojiTable): { text: string; media: MediaType } {
   let obj: any = {};
   try { obj = JSON.parse(content); } catch { /* ignore */ }
   const fixMentions = (s: string) => mentions.reduce((acc, m) => acc.split(m.key).join(`@${m.name}`), s);
-  if (msgType === "text") return { text: fixMentions(String(obj.text ?? "")), media: "text" };
+  const em = (s: string) => (emoji ? inboundEmojiText(s, emoji) : s);
+  const emotion = (key?: string) => {
+    const e = key && emoji ? emoji.byFeishuKey(key) : undefined;
+    return e ? `[emoji:${e.id}]` : `[表情${key ? ":" + key : ""}]`;
+  };
+  if (msgType === "text") return { text: fixMentions(em(String(obj.text ?? ""))), media: "text" };
   if (msgType === "post") {
     const body = obj.content ? obj : (obj.zh_cn ?? obj.en_us ?? Object.values(obj)[0] ?? {});
     const parts: string[] = [];
     if (body.title) parts.push(body.title);
     for (const line of body.content ?? []) {
-      parts.push((line as any[]).map((el) => el.tag === "text" || el.tag === "a" ? el.text ?? "" : el.tag === "at" ? `@${el.user_name ?? ""}` : el.tag === "img" ? "[图片]" : el.tag === "emotion" ? `[${el.emoji_type ?? "表情"}]` : "").join(""));
+      parts.push((line as any[]).map((el) => el.tag === "text" ? em(el.text ?? "") : el.tag === "a" ? el.text ?? "" : el.tag === "at" ? `@${el.user_name ?? ""}` : el.tag === "img" ? "[图片]" : el.tag === "emotion" ? emotion(el.emoji_type) : el.tag === "media" ? "[视频]" : el.tag === "code_block" ? el.text ?? "" : el.tag === "md" ? em(el.text ?? "") : "").join(""));
     }
     return { text: fixMentions(parts.join("\n")), media: "text" };
   }
@@ -45,6 +66,8 @@ export class FeishuAdapter implements IMAdapter {
   private botOpenId = "";
   private names = new Map<string, string>();
   private chatTitles = new Map<string, string>();
+  private chatKinds = new Map<string, "private" | "group">();
+  private sink: ((m: InboundMessage) => void) | null = null;
 
   constructor(private opts: FeishuOptions, private log: Logger) {
     const domain = opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -58,11 +81,16 @@ export class FeishuAdapter implements IMAdapter {
       this.log.info(`feishu bot open_id=${this.botOpenId ? "ok" : "unknown"}`);
     } catch (e) { this.log.warn(`feishu: 获取机器人信息失败（@识别将不可用）：${(e as Error).message}`); }
 
-    const dispatcher = new lark.EventDispatcher({}).register({
+    this.sink = sink;
+    const handlers: Record<string, (data: any) => Promise<void>> = {
       "im.message.receive_v1": async (data) => {
         try { sink(await this.toInbound(data)); } catch (e) { this.log.error("feishu: 处理消息失败", e); }
       },
-    });
+    };
+    if (this.opts.reactions) handlers["im.message.reaction.created_v1"] = async (data) => {
+      try { const m = await this.reactionToInbound(data); if (m) sink(m); } catch (e) { this.log.error("feishu: 处理表情回复失败", e); }
+    };
+    const dispatcher = new lark.EventDispatcher({}).register(handlers as any);
     const domain = this.opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
     this.ws = new lark.WSClient({
       appId: this.opts.appId, appSecret: this.opts.appSecret, domain, loggerLevel: lark.LoggerLevel.warn, autoReconnect: true,
@@ -81,8 +109,11 @@ export class FeishuAdapter implements IMAdapter {
     const senderOpenId: string = data.sender?.sender_id?.open_id ?? data.sender?.sender_id?.user_id ?? "unknown";
     const mentions: { key: string; name: string; id: string }[] = (msg.mentions ?? []).map((m: any) => ({ key: m.key, name: m.name, id: m.id?.open_id ?? "" }));
     for (const m of mentions) if (m.id && m.name) this.names.set(m.id, m.name);
-    const { text, media } = feishuContentToText(msg.message_type, msg.content, mentions);
+    if (this.opts.logRawEmoji && /emotion|sticker|\[[^\]]{1,24}\]/.test(String(msg.content)))
+      this.log.info(`feishu raw(${msg.message_type}): ${String(msg.content).slice(0, 400)}`);
+    const { text, media } = feishuContentToText(msg.message_type, msg.content, mentions, this.opts.emoji);
     const kind = msg.chat_type === "p2p" ? "private" : "group";
+    this.chatKinds.set(msg.chat_id, kind);
     return {
       platform: "feishu", external_chat_id: msg.chat_id, pool_kind: kind, pool_title: await this.chatTitle(msg.chat_id, kind),
       msg_id: msg.message_id, sender_id: senderOpenId, sender_name: await this.senderName(senderOpenId),
@@ -90,6 +121,34 @@ export class FeishuAdapter implements IMAdapter {
       mentions: mentions.map((m) => m.id).filter(Boolean),
       is_mention_me: !!this.botOpenId && mentions.some((m) => m.id === this.botOpenId),
       media_type: media, from_self: data.sender?.sender_type === "app" && senderOpenId === this.botOpenId,
+    };
+  }
+
+  /** 表情回复 → 一条池消息（不立即唤醒）。只处理真人的回复。 */
+  private async reactionToInbound(data: any): Promise<InboundMessage | null> {
+    if (data.operator_type && data.operator_type !== "user") return null;
+    const key: string = data.reaction_type?.emoji_type ?? "";
+    const userId: string = data.user_id?.open_id ?? data.user_id?.user_id ?? "unknown";
+    const r: any = await this.client.im.v1.message.get({ path: { message_id: data.message_id } });
+    const target = r?.data?.items?.[0];
+    if (!target?.chat_id) return null;
+    const chatId: string = target.chat_id;
+    let kind = this.chatKinds.get(chatId);
+    if (!kind) {
+      try { const c: any = await this.client.im.v1.chat.get({ path: { chat_id: chatId } }); kind = c?.data?.chat_mode === "p2p" ? "private" : "group"; }
+      catch { kind = "group"; }
+      this.chatKinds.set(chatId, kind);
+    }
+    const e = this.opts.emoji?.byFeishuKey(key);
+    const emo = e ? `[emoji:${e.id}]` : `[表情:${key}]`;
+    const quoted = feishuContentToText(target.msg_type, target.body?.content ?? "{}", [], this.opts.emoji).text.replace(/\s+/g, " ").slice(0, 30);
+    const mine = target.sender?.sender_type === "app" && (!this.botOpenId || target.sender?.id === this.botOpenId);
+    return {
+      platform: "feishu", external_chat_id: chatId, pool_kind: kind, pool_title: await this.chatTitle(chatId, kind),
+      msg_id: `reaction:${data.message_id}:${userId}:${key}:${data.action_time ?? Date.now()}`,
+      sender_id: userId, sender_name: await this.senderName(userId), ts: Number(data.action_time) || Date.now(),
+      text: `[表情回复] 给${mine ? "你" : ""}「${quoted}」点了 ${emo}`, reply_to: data.message_id, mentions: [],
+      is_mention_me: false, media_type: "reaction", from_self: false,
     };
   }
 
@@ -129,6 +188,7 @@ export class FeishuAdapter implements IMAdapter {
     return { msgId: r.data.message_id };
   }
   sendText(chatId: string, text: string) { return this.create(chatId, "text", { text }); }
+  sendRich(chatId: string, parts: RichPart[]) { return this.create(chatId, "post", buildFeishuPost(parts)); }
   sendSticker(chatId: string, fileKey: string) { return this.create(chatId, "sticker", { file_key: fileKey }); }
 
   async confirm(msgId: string): Promise<boolean> {

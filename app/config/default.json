@@ -52,11 +52,12 @@
   },
 
   "adapters": {
-    "feishu": { "enabled": true, "domain": "feishu", "fetchSenderName": true },
+    "feishu": { "enabled": true, "domain": "feishu", "fetchSenderName": true, "reactions": true, "logRawEmoji": true },
     "qq": { "enabled": false }
   },
 
   "emoji": {
+    "table": "./config/emoji-feishu.json",
     "map": {}
   },
 

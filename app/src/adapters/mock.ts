@@ -1,8 +1,8 @@
 /** 本地 mock 适配器：模拟器和测试用。inject() 模拟用户发言，sent 记录 Agent 发出的内容。 */
-import type { IMAdapter, SendResult } from "./types.ts";
+import type { IMAdapter, RichPart, SendResult } from "./types.ts";
 import type { InboundMessage, PoolKind } from "../types.ts";
 
-export interface MockSent { chat: string; kind: "text" | "sticker"; content: string; msgId: string; ts: number }
+export interface MockSent { chat: string; kind: "text" | "sticker" | "rich"; parts?: RichPart[]; content: string; msgId: string; ts: number }
 
 export class MockAdapter implements IMAdapter {
   readonly platform = "mock" as const;
@@ -30,8 +30,8 @@ export class MockAdapter implements IMAdapter {
     return m;
   }
 
-  private record(chat: string, kind: "text" | "sticker", content: string): SendResult {
-    const s: MockSent = { chat, kind, content, msgId: `out-${++this.n}`, ts: Date.now() };
+  private record(chat: string, kind: MockSent["kind"], content: string, parts?: RichPart[]): SendResult {
+    const s: MockSent = { chat, kind, content, parts, msgId: `out-${++this.n}`, ts: Date.now() };
     this.sent.push(s);
     if (this.deliveryDelayMs >= 0) setTimeout(() => this.delivered.add(s.msgId), this.deliveryDelayMs);
     this.onSent?.(s);
@@ -39,5 +39,9 @@ export class MockAdapter implements IMAdapter {
   }
   async sendText(chat: string, text: string) { return this.record(chat, "text", text); }
   async sendSticker(chat: string, key: string) { return this.record(chat, "sticker", key); }
+  /** 渲染成 <EMOJI_KEY> 便于观察 */
+  async sendRich(chat: string, parts: RichPart[]) {
+    return this.record(chat, "rich", parts.map((p) => (p.type === "text" ? p.text : `<${p.key}>`)).join(""), parts);
+  }
   async confirm(msgId: string) { return this.delivered.has(msgId); }
 }

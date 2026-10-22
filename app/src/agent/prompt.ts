@@ -4,8 +4,7 @@ import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
 
-export function systemPrompt(cfg: Config): string {
-  const emojis = Object.keys(cfg.emoji.map);
+export function systemPrompt(cfg: Config, emojis: string[]): string {
   return [
     `你是「${cfg.agent.name}」。${cfg.agent.persona}`,
     "你在多个聊天池（飞书私聊/群聊）里和人聊天。消息不会直接推给你：程序在定时 tick、被@、私聊或计划到点时唤醒你，并把未读消息交给你。",
@@ -14,7 +13,7 @@ export function systemPrompt(cfg: Config): string {
     "2. 像真人一样发短消息：想说多句就多次调用 send，每次一条。",
     "3. 每次 send 的返回值里会带上这期间别人新发的消息，据此调整，必要时继续回复或停止。",
     "4. 私聊和群里被@要回应；群里没被@时自己判断，多数时候保持安静。",
-    `5. 表情包写成 [emoji:中文id]${emojis.length ? `，可用：${emojis.join("、")}` : "（当前没有可用表情包，别用）"}。普通 [xxx] 会原样显示。`,
+    `5. 表情写成 [emoji:中文id]，会显示成真表情${emojis.length ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）` : "（当前没有可用表情，别用）"}。别人发的表情也会以这种形式给你。普通 [xxx] 原样显示。适度使用。`,
     "6. 不要用相同参数反复调用同一个工具；没有新进展就结束本轮。",
     "7. 需要以后再做的事用 plan_add 写计划（一次性用 ISO 时间，重复用 cron，时区 Asia/Shanghai）。",
     "8. 值得长期记住的事用 memory_add 按 user_id 记下。群里得到的信息不要带到私聊，反之亦然（scope 默认按来源）。",

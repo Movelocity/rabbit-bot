@@ -1,0 +1,1013 @@
+{
+ "_说明": [
+  "飞书内置表情映射表。id=给 Agent 用的中文 id（尽量沿用微信表情命名），feishu=飞书 emoji_type（来自官方《表情文案说明》，大小写敏感）。",
+  "aliases=别名（入站时 [别名] 也会被识别；出站时 [emoji:别名] 也可用）。common=写进提示词的常用表情。",
+  "出站：含表情的消息按富文本 post 的 emotion 标签发送（官方文档：发送消息内容结构 → 富文本 → emotion）。",
+  "中文 id 与 emoji_type 的对应是按官方表情图片人工核对的语义映射；如飞书客户端显示的中文名不同，直接在 aliases 里补充。"
+ ],
+ "source": "https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce",
+ "emojis": [
+  {
+   "id": "OK",
+   "feishu": "OK",
+   "aliases": [
+    "好的"
+   ],
+   "common": true
+  },
+  {
+   "id": "强",
+   "feishu": "THUMBSUP",
+   "aliases": [
+    "赞",
+    "点赞",
+    "棒",
+    "厉害"
+   ],
+   "common": true
+  },
+  {
+   "id": "合十",
+   "feishu": "THANKS",
+   "aliases": [
+    "谢谢",
+    "感谢",
+    "拜托"
+   ],
+   "common": true
+  },
+  {
+   "id": "加油",
+   "feishu": "MUSCLE",
+   "aliases": [
+    "肌肉"
+   ],
+   "common": true
+  },
+  {
+   "id": "比心",
+   "feishu": "FINGERHEART",
+   "common": true
+  },
+  {
+   "id": "鼓掌",
+   "feishu": "APPLAUSE",
+   "aliases": [
+    "拍手"
+   ],
+   "common": true
+  },
+  {
+   "id": "拳头",
+   "feishu": "FISTBUMP",
+   "aliases": [
+    "碰拳"
+   ]
+  },
+  {
+   "id": "+1",
+   "feishu": "JIAYI",
+   "aliases": [
+    "加一"
+   ]
+  },
+  {
+   "id": "完成",
+   "feishu": "DONE",
+   "aliases": [
+    "搞定"
+   ]
+  },
+  {
+   "id": "微笑",
+   "feishu": "SMILE",
+   "common": true
+  },
+  {
+   "id": "呲牙",
+   "feishu": "BLUSH",
+   "aliases": [
+    "龇牙"
+   ],
+   "common": true
+  },
+  {
+   "id": "大笑",
+   "feishu": "LAUGH",
+   "aliases": [
+    "哈哈"
+   ],
+   "common": true
+  },
+  {
+   "id": "坏笑",
+   "feishu": "SMIRK",
+   "aliases": [
+    "奸笑"
+   ],
+   "common": true
+  },
+  {
+   "id": "笑哭",
+   "feishu": "LOL",
+   "aliases": [
+    "破涕为笑"
+   ],
+   "common": true
+  },
+  {
+   "id": "捂脸",
+   "feishu": "FACEPALM",
+   "common": true
+  },
+  {
+   "id": "爱慕",
+   "feishu": "LOVE",
+   "aliases": [
+    "喜欢",
+    "爱你"
+   ]
+  },
+  {
+   "id": "眨眼",
+   "feishu": "WINK"
+  },
+  {
+   "id": "得意",
+   "feishu": "PROUD",
+   "aliases": [
+    "墨镜"
+   ]
+  },
+  {
+   "id": "机智",
+   "feishu": "WITTY",
+   "common": true
+  },
+  {
+   "id": "聪明",
+   "feishu": "SMART",
+   "aliases": [
+    "智慧"
+   ]
+  },
+  {
+   "id": "发呆",
+   "feishu": "SCOWL",
+   "aliases": [
+    "呆"
+   ]
+  },
+  {
+   "id": "思考",
+   "feishu": "THINKING",
+   "aliases": [
+    "想想"
+   ],
+   "common": true
+  },
+  {
+   "id": "大哭",
+   "feishu": "SOB",
+   "aliases": [
+    "哭"
+   ],
+   "common": true
+  },
+  {
+   "id": "流泪",
+   "feishu": "CRY",
+   "aliases": [
+    "哭泣"
+   ],
+   "common": true
+  },
+  {
+   "id": "不屑",
+   "feishu": "ERROR",
+   "aliases": [
+    "撇嘴",
+    "哼"
+   ]
+  },
+  {
+   "id": "抠鼻",
+   "feishu": "NOSEPICK"
+  },
+  {
+   "id": "傲慢",
+   "feishu": "HAUGHTY"
+  },
+  {
+   "id": "打脸",
+   "feishu": "SLAP"
+  },
+  {
+   "id": "吐血",
+   "feishu": "SPITBLOOD"
+  },
+  {
+   "id": "衰",
+   "feishu": "TOASTED",
+   "aliases": [
+    "黑脸"
+   ]
+  },
+  {
+   "id": "二哈",
+   "feishu": "GLANCE",
+   "aliases": [
+    "哈士奇",
+    "斜眼"
+   ]
+  },
+  {
+   "id": "猫猫",
+   "feishu": "DULL",
+   "aliases": [
+    "呆萌"
+   ]
+  },
+  {
+   "id": "憨笑",
+   "feishu": "INNOCENTSMILE",
+   "aliases": [
+    "傻笑",
+    "无辜"
+   ]
+  },
+  {
+   "id": "愉快",
+   "feishu": "JOYFUL"
+  },
+  {
+   "id": "哇",
+   "feishu": "WOW",
+   "aliases": [
+    "星星眼",
+    "崇拜"
+   ]
+  },
+  {
+   "id": "嘿嘿",
+   "feishu": "TRICK",
+   "aliases": [
+    "鬼脸"
+   ]
+  },
+  {
+   "id": "耶",
+   "feishu": "YEAH",
+   "aliases": [
+    "胜利"
+   ],
+   "common": true
+  },
+  {
+   "id": "够了",
+   "feishu": "ENOUGH"
+  },
+  {
+   "id": "泪奔",
+   "feishu": "TEARS",
+   "aliases": [
+    "感动"
+   ]
+  },
+  {
+   "id": "尴尬",
+   "feishu": "EMBARRASSED",
+   "common": true
+  },
+  {
+   "id": "亲亲",
+   "feishu": "KISS",
+   "common": true
+  },
+  {
+   "id": "飞吻",
+   "feishu": "SMOOCH"
+  },
+  {
+   "id": "色",
+   "feishu": "DROOL",
+   "aliases": [
+    "花痴",
+    "流口水"
+   ],
+   "common": true
+  },
+  {
+   "id": "馋",
+   "feishu": "OBSESSED"
+  },
+  {
+   "id": "发财",
+   "feishu": "MONEY",
+   "aliases": [
+    "钱"
+   ]
+  },
+  {
+   "id": "调皮",
+   "feishu": "TEASE",
+   "aliases": [
+    "吐舌"
+   ]
+  },
+  {
+   "id": "酷",
+   "feishu": "SHOWOFF"
+  },
+  {
+   "id": "摸头",
+   "feishu": "COMFORT",
+   "aliases": [
+    "安慰"
+   ]
+  },
+  {
+   "id": "哎呀",
+   "feishu": "CLAP"
+  },
+  {
+   "id": "好棒",
+   "feishu": "PRAISE",
+   "aliases": [
+    "夸夸"
+   ]
+  },
+  {
+   "id": "奋斗",
+   "feishu": "STRIVE"
+  },
+  {
+   "id": "脸红",
+   "feishu": "XBLUSH"
+  },
+  {
+   "id": "闭嘴",
+   "feishu": "SILENT"
+  },
+  {
+   "id": "再见",
+   "feishu": "WAVE",
+   "aliases": [
+    "拜拜",
+    "挥手"
+   ],
+   "common": true
+  },
+  {
+   "id": "疑问",
+   "feishu": "WHAT",
+   "aliases": [
+    "问号",
+    "啥"
+   ],
+   "common": true
+  },
+  {
+   "id": "难过",
+   "feishu": "FROWN",
+   "aliases": [
+    "伤心"
+   ]
+  },
+  {
+   "id": "害羞",
+   "feishu": "SHY",
+   "common": true
+  },
+  {
+   "id": "晕",
+   "feishu": "DIZZY",
+   "common": true
+  },
+  {
+   "id": "鄙视",
+   "feishu": "LOOKDOWN"
+  },
+  {
+   "id": "偷笑",
+   "feishu": "CHUCKLE",
+   "common": true
+  },
+  {
+   "id": "嚎啕",
+   "feishu": "WAIL"
+  },
+  {
+   "id": "抓狂",
+   "feishu": "CRAZY",
+   "common": true
+  },
+  {
+   "id": "可怜",
+   "feishu": "WHIMPER",
+   "common": true
+  },
+  {
+   "id": "拥抱",
+   "feishu": "HUG",
+   "aliases": [
+    "抱抱"
+   ],
+   "common": true
+  },
+  {
+   "id": "快哭了",
+   "feishu": "BLUBBER"
+  },
+  {
+   "id": "委屈",
+   "feishu": "WRONGED",
+   "common": true
+  },
+  {
+   "id": "白眼",
+   "feishu": "HUSKY",
+   "aliases": [
+    "翻白眼"
+   ]
+  },
+  {
+   "id": "嘘",
+   "feishu": "SHHH"
+  },
+  {
+   "id": "嘚瑟",
+   "feishu": "SMUG",
+   "aliases": [
+    "得瑟"
+   ]
+  },
+  {
+   "id": "发怒",
+   "feishu": "ANGRY",
+   "aliases": [
+    "生气"
+   ],
+   "common": true
+  },
+  {
+   "id": "敲打",
+   "feishu": "HAMMER",
+   "aliases": [
+    "锤"
+   ]
+  },
+  {
+   "id": "惊讶",
+   "feishu": "SHOCKED",
+   "aliases": [
+    "吃惊"
+   ],
+   "common": true
+  },
+  {
+   "id": "惊恐",
+   "feishu": "TERROR",
+   "aliases": [
+    "害怕"
+   ]
+  },
+  {
+   "id": "石化",
+   "feishu": "PETRIFIED"
+  },
+  {
+   "id": "骷髅",
+   "feishu": "SKULL"
+  },
+  {
+   "id": "擦汗",
+   "feishu": "SWEAT",
+   "aliases": [
+    "汗",
+    "流汗"
+   ],
+   "common": true
+  },
+  {
+   "id": "无语",
+   "feishu": "SPEECHLESS",
+   "common": true
+  },
+  {
+   "id": "睡",
+   "feishu": "SLEEP",
+   "aliases": [
+    "睡觉"
+   ]
+  },
+  {
+   "id": "困",
+   "feishu": "DROWSY"
+  },
+  {
+   "id": "哈欠",
+   "feishu": "YAWN",
+   "aliases": [
+    "打哈欠"
+   ]
+  },
+  {
+   "id": "生病",
+   "feishu": "SICK",
+   "aliases": [
+    "口罩"
+   ]
+  },
+  {
+   "id": "吐",
+   "feishu": "PUKE"
+  },
+  {
+   "id": "绿帽",
+   "feishu": "BETRAYED"
+  },
+  {
+   "id": "耳机",
+   "feishu": "HEADSET"
+  },
+  {
+   "id": "吃饭",
+   "feishu": "EatingFood"
+  },
+  {
+   "id": "我我我",
+   "feishu": "MeMeMe",
+   "aliases": [
+    "举手"
+   ]
+  },
+  {
+   "id": "叹气",
+   "feishu": "Sigh"
+  },
+  {
+   "id": "打字",
+   "feishu": "Typing"
+  },
+  {
+   "id": "柠檬",
+   "feishu": "Lemon",
+   "aliases": [
+    "酸"
+   ]
+  },
+  {
+   "id": "收到",
+   "feishu": "Get"
+  },
+  {
+   "id": "LGTM",
+   "feishu": "LGTM"
+  },
+  {
+   "id": "在做了",
+   "feishu": "OnIt"
+  },
+  {
+   "id": "稍等",
+   "feishu": "OneSecond"
+  },
+  {
+   "id": "VR",
+   "feishu": "VRHeadset"
+  },
+  {
+   "id": "你最棒",
+   "feishu": "YouAreTheBest",
+   "aliases": [
+    "送花"
+   ]
+  },
+  {
+   "id": "抱拳",
+   "feishu": "SALUTE",
+   "aliases": [
+    "拱手"
+   ]
+  },
+  {
+   "id": "握手",
+   "feishu": "SHAKE"
+  },
+  {
+   "id": "击掌",
+   "feishu": "HIGHFIVE"
+  },
+  {
+   "id": "看左上",
+   "feishu": "UPPERLEFT"
+  },
+  {
+   "id": "弱",
+   "feishu": "ThumbsDown",
+   "aliases": [
+    "踩"
+   ],
+   "common": true
+  },
+  {
+   "id": "汪",
+   "feishu": "SLIGHT"
+  },
+  {
+   "id": "狗头",
+   "feishu": "TONGUE",
+   "aliases": [
+    "doge"
+   ]
+  },
+  {
+   "id": "捂眼",
+   "feishu": "EYESCLOSED",
+   "aliases": [
+    "非礼勿视"
+   ]
+  },
+  {
+   "id": "老虎",
+   "feishu": "RoarForYou",
+   "aliases": [
+    "打call"
+   ]
+  },
+  {
+   "id": "小牛",
+   "feishu": "CALF"
+  },
+  {
+   "id": "熊",
+   "feishu": "BEAR"
+  },
+  {
+   "id": "牛",
+   "feishu": "BULL",
+   "aliases": [
+    "牛牛"
+   ]
+  },
+  {
+   "id": "彩虹",
+   "feishu": "RAINBOWPUKE",
+   "aliases": [
+    "彩虹屁"
+   ]
+  },
+  {
+   "id": "玫瑰",
+   "feishu": "ROSE",
+   "aliases": [
+    "花"
+   ],
+   "common": true
+  },
+  {
+   "id": "爱心",
+   "feishu": "HEART",
+   "aliases": [
+    "心"
+   ],
+   "common": true
+  },
+  {
+   "id": "庆祝",
+   "feishu": "PARTY",
+   "aliases": [
+    "撒花",
+    "礼花"
+   ],
+   "common": true
+  },
+  {
+   "id": "嘴唇",
+   "feishu": "LIPS"
+  },
+  {
+   "id": "啤酒",
+   "feishu": "BEER",
+   "aliases": [
+    "干杯"
+   ]
+  },
+  {
+   "id": "蛋糕",
+   "feishu": "CAKE",
+   "aliases": [
+    "生日快乐"
+   ]
+  },
+  {
+   "id": "礼物",
+   "feishu": "GIFT"
+  },
+  {
+   "id": "黄瓜",
+   "feishu": "CUCUMBER"
+  },
+  {
+   "id": "鸡腿",
+   "feishu": "Drumstick"
+  },
+  {
+   "id": "辣椒",
+   "feishu": "Pepper"
+  },
+  {
+   "id": "糖葫芦",
+   "feishu": "CANDIEDHAWS"
+  },
+  {
+   "id": "奶茶",
+   "feishu": "BubbleTea"
+  },
+  {
+   "id": "咖啡",
+   "feishu": "Coffee"
+  },
+  {
+   "id": "YES",
+   "feishu": "Yes",
+   "aliases": [
+    "是"
+   ]
+  },
+  {
+   "id": "NO",
+   "feishu": "No"
+  },
+  {
+   "id": "OKR",
+   "feishu": "OKR"
+  },
+  {
+   "id": "对勾",
+   "feishu": "CheckMark",
+   "aliases": [
+    "对"
+   ]
+  },
+  {
+   "id": "叉",
+   "feishu": "CrossMark",
+   "aliases": [
+    "错"
+   ]
+  },
+  {
+   "id": "-1",
+   "feishu": "MinusOne",
+   "aliases": [
+    "减一"
+   ]
+  },
+  {
+   "id": "100分",
+   "feishu": "Hundred",
+   "aliases": [
+    "100"
+   ]
+  },
+  {
+   "id": "666",
+   "feishu": "AWESOMEN",
+   "aliases": [
+    "牛逼",
+    "cool"
+   ]
+  },
+  {
+   "id": "图钉",
+   "feishu": "Pin"
+  },
+  {
+   "id": "闹钟",
+   "feishu": "Alarm"
+  },
+  {
+   "id": "喇叭",
+   "feishu": "Loudspeaker"
+  },
+  {
+   "id": "奖杯",
+   "feishu": "Trophy"
+  },
+  {
+   "id": "火",
+   "feishu": "Fire"
+  },
+  {
+   "id": "炸弹",
+   "feishu": "BOMB"
+  },
+  {
+   "id": "音乐",
+   "feishu": "Music"
+  },
+  {
+   "id": "圣诞树",
+   "feishu": "XmasTree"
+  },
+  {
+   "id": "雪人",
+   "feishu": "Snowman"
+  },
+  {
+   "id": "圣诞帽",
+   "feishu": "XmasHat"
+  },
+  {
+   "id": "烟花",
+   "feishu": "FIREWORKS"
+  },
+  {
+   "id": "2022",
+   "feishu": "2022"
+  },
+  {
+   "id": "红包",
+   "feishu": "REDPACKET"
+  },
+  {
+   "id": "發",
+   "feishu": "FORTUNE",
+   "aliases": [
+    "发",
+    "财神"
+   ]
+  },
+  {
+   "id": "福",
+   "feishu": "LUCK"
+  },
+  {
+   "id": "爆竹",
+   "feishu": "FIRECRACKER",
+   "aliases": [
+    "鞭炮"
+   ]
+  },
+  {
+   "id": "汤圆",
+   "feishu": "StickyRiceBalls"
+  },
+  {
+   "id": "心碎",
+   "feishu": "HEARTBROKEN",
+   "common": true
+  },
+  {
+   "id": "便便",
+   "feishu": "POOP"
+  },
+  {
+   "id": "灵感",
+   "feishu": "StatusFlashOfInspiration",
+   "aliases": [
+    "灯泡"
+   ]
+  },
+  {
+   "id": "18禁",
+   "feishu": "18X"
+  },
+  {
+   "id": "菜刀",
+   "feishu": "CLEAVER"
+  },
+  {
+   "id": "足球",
+   "feishu": "Soccer"
+  },
+  {
+   "id": "篮球",
+   "feishu": "Basketball"
+  },
+  {
+   "id": "勿扰",
+   "feishu": "GeneralDoNotDisturb"
+  },
+  {
+   "id": "私信",
+   "feishu": "Status_PrivateMessage"
+  },
+  {
+   "id": "会议中",
+   "feishu": "GeneralInMeetingBusy"
+  },
+  {
+   "id": "阅读",
+   "feishu": "StatusReading"
+  },
+  {
+   "id": "飞行中",
+   "feishu": "StatusInFlight"
+  },
+  {
+   "id": "出差",
+   "feishu": "GeneralBusinessTrip"
+  },
+  {
+   "id": "居家办公",
+   "feishu": "GeneralWorkFromHome"
+  },
+  {
+   "id": "度假",
+   "feishu": "StatusEnjoyLife"
+  },
+  {
+   "id": "开车",
+   "feishu": "GeneralTravellingCar"
+  },
+  {
+   "id": "公交",
+   "feishu": "StatusBus"
+  },
+  {
+   "id": "太阳",
+   "feishu": "GeneralSun"
+  },
+  {
+   "id": "月亮",
+   "feishu": "GeneralMoonRest",
+   "aliases": [
+    "晚安"
+   ]
+  },
+  {
+   "id": "玉兔",
+   "feishu": "MoonRabbit"
+  },
+  {
+   "id": "月饼",
+   "feishu": "Mooncake"
+  },
+  {
+   "id": "兔兔",
+   "feishu": "JubilantRabbit"
+  },
+  {
+   "id": "电视",
+   "feishu": "TV"
+  },
+  {
+   "id": "电影",
+   "feishu": "Movie"
+  },
+  {
+   "id": "南瓜",
+   "feishu": "Pumpkin"
+  },
+  {
+   "id": "眉开眼笑",
+   "feishu": "BeamingFace"
+  },
+  {
+   "id": "高兴",
+   "feishu": "Delighted"
+  },
+  {
+   "id": "冷汗",
+   "feishu": "ColdSweat"
+  },
+  {
+   "id": "月亮脸",
+   "feishu": "FullMoonFace"
+  },
+  {
+   "id": "派对",
+   "feishu": "Partying"
+  },
+  {
+   "id": "冲",
+   "feishu": "GoGoGo",
+   "aliases": [
+    "冲鸭"
+   ]
+  },
+  {
+   "id": "谢谢脸",
+   "feishu": "ThanksFace"
+  },
+  {
+   "id": "敬礼",
+   "feishu": "SaluteFace"
+  },
+  {
+   "id": "摊手",
+   "feishu": "Shrug"
+  },
+  {
+   "id": "小丑",
+   "feishu": "ClownFace"
+  },
+  {
+   "id": "龙",
+   "feishu": "HappyDragon"
+  }
+ ]
+}
