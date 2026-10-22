@@ -1,0 +1,67 @@
+{
+  "timezone": "Asia/Shanghai",
+  "dataDir": "./data",
+  "logDir": "./logs",
+
+  "scheduler": {
+    "tickMs": 180000,
+    "activeTickMs": 60000,
+    "activeWindowMs": 600000,
+    "debounceMs": 30000,
+    "debounceMaxWaitMs": 120000
+  },
+
+  "send": {
+    "confirmWaitMs": 1000,
+    "confirmViaApi": false
+  },
+
+  "context": {
+    "recentContextMessages": 8,
+    "maxUnreadPerPool": 50,
+    "maxMemoriesPerUser": 8
+  },
+
+  "handoff": {
+    "contextTokenLimit": 60000
+  },
+
+  "loopGuard": {
+    "impl": "pi-death-loop-guard",
+    "warnThreshold": 5,
+    "blockThreshold": 10,
+    "abortAfterBlocks": 1
+  },
+
+  "limits": {
+    "dailyLlmCalls": 300,
+    "dailyTokens": 2000000,
+    "turnTimeoutMs": 300000
+  },
+
+  "plans": {
+    "missedPolicy": "catchup",
+    "missedGraceMs": 86400000
+  },
+
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "thinkingLevel": "off",
+    "maxRetries": 2
+  },
+
+  "adapters": {
+    "feishu": { "enabled": true, "domain": "feishu", "fetchSenderName": true },
+    "qq": { "enabled": false }
+  },
+
+  "emoji": {
+    "map": {}
+  },
+
+  "agent": {
+    "name": "小池",
+    "persona": "你是一个自然、简短、有分寸的聊天伙伴。"
+  }
+}

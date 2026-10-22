@@ -1,0 +1,17 @@
+# 可选：systemd --user 单元（本 box 没有 systemd，仅供以后迁移到有 systemd 的机器）
+# 安装：cp scripts/poolchat.service ~/.config/systemd/user/ && systemctl --user enable --now poolchat
+[Unit]
+Description=poolchat 聊天池 Agent
+After=network-online.target
+
+[Service]
+WorkingDirectory=/workspace/poolchat/app
+EnvironmentFile=%h/.config/poolchat/env
+ExecStart=%h/.local/node22/bin/node dist/main.js
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+TimeoutStopSec=35
+
+[Install]
+WantedBy=default.target

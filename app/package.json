@@ -1,0 +1,36 @@
+{
+  "name": "poolchat",
+  "version": "0.1.0",
+  "description": "聊天池 Agent (pi + 飞书)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "start": "node dist/main.js",
+    "start:dev": "tsx src/main.ts",
+    "sim": "tsx src/sim.ts",
+    "ctl": "tsx src/ctl.ts",
+    "demo": "tsx src/sim.ts --demo"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@larksuiteoapi/node-sdk": "^1.76.0",
+    "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.10.2",
+    "pi-death-loop-guard": "^0.1.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

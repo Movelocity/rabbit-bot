@@ -1,0 +1,215 @@
+/**
+ * pi 引擎封装：一个长期 pi 会话 + 自定义工具；关闭自动压缩；
+ * 达到上下文 token 上限时：让 Agent 写交接文档 → 存档 → 新建会话并带上交接文档继续。
+ */
+import fs from "node:fs";
+import path from "node:path";
+import {
+  createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
+  type AgentSession, type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
+import type { Config } from "../config.ts";
+import type { Store } from "../core/db.ts";
+import type { Logger } from "../core/logger.ts";
+import { applyCommunityLoopGuardEnv, builtinLoopGuardExtension, callKey, communityLoopGuardPath } from "../core/loopguard.ts";
+import { HANDOFF_PROMPT } from "./prompt.ts";
+
+export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
+export interface RunResult {
+  assistantText: string;
+  toolCalls: ToolLog[];
+  llmCalls: number;
+  tokens: number;
+  aborted: boolean;
+  abortReason?: string;
+  error?: string;
+  handoffId?: number;
+  contextTokens?: number | null;
+}
+
+export interface RunLimits { tokensLeft: number; callsLeft: number }
+
+/** 抽象：便于测试替换 */
+export interface AgentEngine {
+  /** 本会话里已经给过上下文的池（新会话时清空） */
+  readonly seenPools: Set<string>;
+  /** 新会话首轮需要带上的交接文档 */
+  takePendingHandoff(): string | null;
+  run(prompt: string, limits: RunLimits): Promise<RunResult>;
+  dispose(): Promise<void>;
+}
+
+export interface PiEngineDeps {
+  cfg: Config;
+  store: Store;
+  log: Logger;
+  tools: ToolDefinition[];
+  systemPrompt: string;
+  model: Model<any>;
+  modelRuntime: ModelRuntime;
+  /** 测试时用内存会话 */
+  inMemorySessions?: boolean;
+}
+
+const preview = (r: any): string => {
+  const t = (r?.content ?? []).map((c: any) => (c.type === "text" ? c.text : `[${c.type}]`)).join("");
+  return t.length > 300 ? t.slice(0, 300) + "…" : t;
+};
+
+export class PiEngine implements AgentEngine {
+  readonly seenPools = new Set<string>();
+  private session: AgentSession | null = null;
+  private pendingHandoff: string | null = null;
+  private loopGuardImpl: "pi-death-loop-guard" | "builtin" = "builtin";
+  private readonly piDir: string;
+  private readonly cwd: string;
+  private readonly sessionDir: string;
+  private freshNext = false;
+
+  constructor(private d: PiEngineDeps) {
+    this.piDir = path.join(d.cfg.dataDir, "pi-agent");
+    this.cwd = path.join(d.cfg.dataDir, "pi-cwd");
+    this.sessionDir = path.join(d.cfg.dataDir, "sessions");
+    for (const p of [this.piDir, this.cwd, this.sessionDir, path.join(d.cfg.dataDir, "handoffs")]) fs.mkdirSync(p, { recursive: true });
+  }
+
+  get loopGuard() { return this.loopGuardImpl; }
+
+  takePendingHandoff() { const h = this.pendingHandoff; this.pendingHandoff = null; return h; }
+
+  private async buildLoader(settingsManager: SettingsManager, useCommunity: boolean) {
+    const lg = this.d.cfg.loopGuard;
+    const communityPath = useCommunity ? communityLoopGuardPath() : null;
+    if (communityPath) applyCommunityLoopGuardEnv(lg);
+    const loader = new DefaultResourceLoader({
+      cwd: this.cwd, agentDir: this.piDir, settingsManager,
+      noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      systemPrompt: this.d.systemPrompt,
+      additionalExtensionPaths: communityPath ? [communityPath] : [],
+      extensionFactories: communityPath ? [] : [{ name: "poolchat-loop-guard", factory: builtinLoopGuardExtension(lg, (e) => this.d.log.warn(e)) as any }],
+    });
+    await loader.reload();
+    return { loader, community: !!communityPath };
+  }
+
+  private async ensureSession(): Promise<AgentSession> {
+    if (this.session) return this.session;
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false }, // 需求 §9：关闭 pi 自带的自动压缩
+      retry: { enabled: true, maxRetries: this.d.cfg.llm.maxRetries },
+    } as any);
+    let { loader, community } = await this.buildLoader(settingsManager, this.d.cfg.loopGuard.impl === "pi-death-loop-guard");
+    if (community && loader.getExtensions().errors.length) {
+      this.d.log.warn(`pi-death-loop-guard 加载失败，回退到内置实现：${JSON.stringify(loader.getExtensions().errors).slice(0, 300)}`);
+      ({ loader, community } = await this.buildLoader(settingsManager, false));
+    }
+    this.loopGuardImpl = community ? "pi-death-loop-guard" : "builtin";
+
+    const sessionManager = this.d.inMemorySessions
+      ? SessionManager.inMemory(this.cwd)
+      : this.freshNext ? SessionManager.create(this.cwd, this.sessionDir) : SessionManager.continueRecent(this.cwd, this.sessionDir);
+    this.freshNext = false;
+    const { session } = await createAgentSession({
+      cwd: this.cwd, agentDir: this.piDir, model: this.d.model, thinkingLevel: this.d.cfg.llm.thinkingLevel,
+      modelRuntime: this.d.modelRuntime, resourceLoader: loader, settingsManager, sessionManager,
+      noTools: "builtin", tools: this.d.tools.map((t) => t.name), customTools: this.d.tools,
+    });
+    this.session = session;
+    this.d.log.info(`pi 会话就绪 model=${this.d.model.provider}/${this.d.model.id} loopGuard=${this.loopGuardImpl} tools=${session.getActiveToolNames().join(",")}`);
+    return session;
+  }
+
+  async run(prompt: string, limits: RunLimits): Promise<RunResult> {
+    const s = await this.ensureSession();
+    const res = await this.runPrompt(s, prompt, limits);
+    // 上下文上限 → 交接
+    const ctxTokens = s.getContextUsage()?.tokens ?? null;
+    res.contextTokens = ctxTokens;
+    if (!res.error && ctxTokens !== null && ctxTokens >= this.d.cfg.handoff.contextTokenLimit) {
+      const h = await this.handoff(s, ctxTokens, { tokensLeft: limits.tokensLeft - res.tokens, callsLeft: limits.callsLeft - res.llmCalls });
+      res.tokens += h.tokens; res.llmCalls += h.llmCalls; res.handoffId = h.id ?? undefined;
+    }
+    return res;
+  }
+
+  private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits): Promise<RunResult> {
+    const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, aborted: false };
+    const pendingArgs = new Map<string, unknown>();
+    const abort = (why: string) => { if (!out.aborted) { out.aborted = true; out.abortReason = why; void s.abort(); } };
+    const unsub = s.subscribe((ev: any) => {
+      if (ev.type === "tool_execution_start") pendingArgs.set(ev.toolCallId, ev.args);
+      else if (ev.type === "tool_execution_end") {
+        const r = preview(ev.result);
+        out.toolCalls.push({ name: ev.toolName, args: pendingArgs.get(ev.toolCallId), result: r, isError: ev.isError });
+      } else if (ev.type === "message_end" && ev.message?.role === "assistant") {
+        out.llmCalls++;
+        const u = ev.message.usage;
+        out.tokens += u?.totalTokens ?? ((u?.input ?? 0) + (u?.output ?? 0) + (u?.cacheRead ?? 0) + (u?.cacheWrite ?? 0));
+        if (out.tokens >= limits.tokensLeft) abort("daily-token-cap");
+        else if (out.llmCalls >= limits.callsLeft) abort("daily-call-cap");
+      }
+    });
+    const timer = setTimeout(() => abort("turn-timeout"), this.d.cfg.limits.turnTimeoutMs);
+    try {
+      await s.prompt(prompt);
+    } catch (e) {
+      out.error = (e as Error).message;
+    } finally {
+      clearTimeout(timer);
+      unsub();
+    }
+    const last: any = s.messages[s.messages.length - 1];
+    if (last?.role === "assistant" && last.stopReason === "error") out.error ??= last.errorMessage ?? "LLM 错误";
+    const lastTool = out.toolCalls[out.toolCalls.length - 1];
+    const n = this.d.cfg.loopGuard.blockThreshold;
+    const tail = out.toolCalls.slice(-n);
+    const guardHit = !!lastTool?.isError && (lastTool.result.includes("loop-guard") ||
+      (tail.length === n && tail.every((c) => callKey(c.name, c.args) === callKey(lastTool.name, lastTool.args))));
+    // 中止（防死循环 / 超时 / 上限）不是 LLM 故障
+    if (out.aborted || guardHit || last?.stopReason === "aborted" || (out.error && /abort/i.test(out.error))) {
+      out.aborted = true;
+      out.abortReason ??= guardHit ? "loop-guard" : "aborted";
+      if (out.error && /abort/i.test(out.error)) out.error = undefined;
+    }
+    out.assistantText = s.getLastAssistantText() ?? "";
+    return out;
+  }
+
+  private async handoff(s: AgentSession, ctxTokens: number, limits: RunLimits): Promise<{ id: number | null; tokens: number; llmCalls: number }> {
+    this.d.log.info(`上下文 ${ctxTokens} tokens ≥ ${this.d.cfg.handoff.contextTokenLimit}，开始交接`);
+    s.setActiveToolsByName([]);
+    const r = await this.runPrompt(s, HANDOFF_PROMPT, { tokensLeft: Math.max(limits.tokensLeft, 1), callsLeft: Math.max(limits.callsLeft, 1) });
+    const content = r.assistantText.trim();
+    let id: number | null = null;
+    if (content) {
+      const file = path.join(this.d.cfg.dataDir, "handoffs", `handoff-${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
+      fs.writeFileSync(file, content + "\n");
+      id = this.d.store.addHandoff(content, ctxTokens, file);
+      this.pendingHandoff = content;
+      this.d.log.info(`交接文档 #${id} 已存档：${file}`);
+    } else {
+      this.d.log.warn(`交接文档为空（${r.error ?? r.abortReason ?? "未知"}），仍然新开会话`);
+      this.pendingHandoff = this.d.store.latestHandoff()?.content ?? null;
+    }
+    s.dispose();
+    this.session = null;
+    this.freshNext = true;
+    this.seenPools.clear();
+    return { id, tokens: r.tokens, llmCalls: r.llmCalls };
+  }
+
+  async dispose() { this.session?.dispose(); this.session = null; }
+}
+
+/** 解析模型：真实 provider 需对应环境变量里的 API key（pi 自己读取）。 */
+export async function resolveModel(cfg: Config): Promise<{ model: Model<any>; modelRuntime: ModelRuntime }> {
+  const piDir = path.join(cfg.dataDir, "pi-agent");
+  fs.mkdirSync(piDir, { recursive: true });
+  const modelRuntime = await ModelRuntime.create({ authPath: path.join(piDir, "auth.json"), modelsPath: path.join(piDir, "models.json") });
+  const model = modelRuntime.getModel(cfg.llm.provider, cfg.llm.model);
+  if (!model) throw new Error(`pi 中找不到模型 ${cfg.llm.provider}/${cfg.llm.model}（可运行 npm run ctl -- models 查看）`);
+  const available = await modelRuntime.getAvailable(cfg.llm.provider);
+  if (!available.some((m) => m.id === model.id)) throw new Error(`模型 ${cfg.llm.provider}/${cfg.llm.model} 没有可用凭据：请设置该 provider 的 API key 环境变量`);
+  return { model, modelRuntime };
+}
