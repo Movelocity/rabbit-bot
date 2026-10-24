@@ -82,5 +82,12 @@
       "maxOutputChars": 8000,
       "network": "bridge"
     }
+  },
+  "tide": {
+    "enabled": true,
+    "dailyCap": {
+      "L1": 2,
+      "L2": 1
+    }
   }
 }

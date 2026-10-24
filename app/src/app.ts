@@ -61,7 +61,7 @@ export class App {
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "poolchat.db"));
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
-    this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone }, this.clock.now());
+    this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
     this.queue = new RunQueue((w) => this.handleWake(w));
     this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
     this.scheduler = new Scheduler(cfg.scheduler, {

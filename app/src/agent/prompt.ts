@@ -3,6 +3,7 @@ import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
+import { localDay } from "../core/tide.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[]): string {
   return [
@@ -81,7 +82,65 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (x.unread.length) lines.push("未读消息：", fmtGrouped(store, x.unread));
   else lines.push("没有未读消息。");
+
+  // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这两行直接决定该不该开口
+  const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
+  const last = store.lastTideFired(primaryPool);
+  const day = localDay(x.now, "Asia/Shanghai");
+  const firedL2 = store.countTideFired(day, primaryPool, "L2");
+  lines.push(
+    last
+      ? `上次主动：${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}`
+      : "上次主动：（这是第一次主动开口）",
+    `今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`,
+  );
+
+  lines.push(...wakeScript(x));
   return lines.join("\n");
+}
+
+function fmtAgo(ms: number): string {
+  const h = Math.floor(ms / 3600_000);
+  if (h < 1) return `${Math.max(1, Math.floor(ms / 60_000))} 分钟前`;
+  if (h < 48) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
+
+/**
+ * 唤醒剧本：这一轮在干什么。
+ * 用户永远看不到这段（LLM 的最终文本不发给用户，只有 send 工具发），
+ * 所以可以写实话——包括「什么都不做是允许的」。
+ */
+function wakeScript(x: WakePromptInput): string[] {
+  const out: string[] = [""];
+  if (x.wake.type === "message") {
+    out.push(
+      "【这一轮】有人刚说了话。先把话读懂，再决定怎么接。",
+      "读懂的标准：你现在能用一句话说出他为什么挑这个时候说这个。说不出来就先想，别急着回。",
+      "话里如果带了「不用回」「晚点说」，就照办。",
+      "出口：正常回（可以连发 2~3 条）。不主动扯跟他无关的话题。",
+    );
+  } else if (x.wake.type === "tick") {
+    out.push(
+      "【这一轮】定时检查，没有人在等你。这一轮的重点是判断，不是说话。",
+      "按顺序回答，答不完就停：",
+      "1. 上次说话是什么时候？隔了多久？",
+      "2. 有没有话要说——具体是哪一件事让你想开口？说不出具体的事，就是没有。",
+      "有话说：写下为什么是现在（一句话），然后 send。",
+      "没有话说：什么都不做，直接结束这一轮。这是正常结果，不是失败；程序不会因为你不说话罚你，对方也不会知道这一轮你醒过。",
+      "不要做的事：不要为了证明自己在线而发消息；不要因为隔了几天没说话就找个由头——沉默不等于欠债。",
+    );
+  } else if (x.wake.type === "plan") {
+    const p = x.plans[0];
+    out.push(
+      `【这一轮】你之前排的计划到点了${p ? `：#${p.id}「${p.title}」` : ""}。`,
+      p?.why ? `当时排它的理由是：${p.why}` : "（当时没写理由——想清楚这次为什么要说，说不出来就作废）",
+      "先判它还算不算数：已经聊过、或者已经没意义了 → plan_update 改成 cancelled，不要为了「排过就要执行」硬说一遍。",
+      "算数 → 说，但别念计划。像刚想起来，不像在还债。",
+      "出口：send（一两条），说完顺手判断还要不要排下一次。",
+    );
+  }
+  return out;
 }
 
 export const HANDOFF_PROMPT =
