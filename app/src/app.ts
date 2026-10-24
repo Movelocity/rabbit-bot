@@ -51,6 +51,8 @@ export class App {
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: { type: string } | null = null;
+  /** 本轮已发送条数，每轮唤醒重置 */
+  private sendsThisWake = 0;
   /** 每次唤醒结束后的回调（模拟器/测试用） */
   onWakeDone?: (entry: any) => void;
 
@@ -70,7 +72,7 @@ export class App {
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
-    const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now(), currentWake: () => this.activeWake });
+    const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now(), currentWake: () => this.activeWake, sendsThisWake: () => this.sendsThisWake, bumpSend: () => { this.sendsThisWake += 1; } });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
 
@@ -91,6 +93,7 @@ export class App {
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
+    this.sendsThisWake = 0;
     try {
       await this.handleWakeInner(w);
     } finally {
