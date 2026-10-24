@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
+  createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
   type AgentSession, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
@@ -30,13 +30,16 @@ export interface RunResult {
 
 export interface RunLimits { tokensLeft: number; callsLeft: number }
 
+/** 与 pi-ai 的 ImageContent 结构一致（不直接依赖内部类型路径）。 */
+export interface ImagePart { type: "image"; data: string; mimeType: string }
+
 /** 抽象：便于测试替换 */
 export interface AgentEngine {
   /** 本会话里已经给过上下文的池（新会话时清空） */
   readonly seenPools: Set<string>;
   /** 新会话首轮需要带上的交接文档 */
   takePendingHandoff(): string | null;
-  run(prompt: string, limits: RunLimits): Promise<RunResult>;
+  run(prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult>;
   dispose(): Promise<void>;
 }
 
@@ -65,7 +68,9 @@ export class PiEngine implements AgentEngine {
   private readonly piDir: string;
   private readonly cwd: string;
   private readonly sessionDir: string;
-  private freshNext = false;
+  // 每次进程启动都新开会话：prompt/工具改动立刻生效，上下文唯一来源是 pool。
+  // （continueRecent 会把上一个进程的 system prompt 一起带回来，改提示词等于白改。）
+  private freshNext = true;
 
   constructor(private d: PiEngineDeps) {
     this.piDir = path.join(d.cfg.dataDir, "pi-agent");
@@ -87,7 +92,12 @@ export class PiEngine implements AgentEngine {
       noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       systemPrompt: this.d.systemPrompt,
       additionalExtensionPaths: communityPath ? [communityPath] : [],
-      extensionFactories: communityPath ? [] : [{ name: "poolchat-loop-guard", factory: builtinLoopGuardExtension(lg, (e) => this.d.log.warn(e)) as any }],
+      // codemode：模型写的 JS 跑在 QuickJS(WASM) 里，唯一能力是调用这些工具。
+      // SDK 不会自动加载内置扩展，必须自己注册；不注册的话 tools 里写 codemode 只是个空名字。
+      extensionFactories: [
+        ...(communityPath ? [] : [{ name: "poolchat-loop-guard", factory: builtinLoopGuardExtension(lg, (e) => this.d.log.warn(e)) as any }]),
+        { name: "codemode", factory: createCodemodeExtension() },
+      ],
     });
     await loader.reload();
     return { loader, community: !!communityPath };
@@ -113,16 +123,16 @@ export class PiEngine implements AgentEngine {
     const { session } = await createAgentSession({
       cwd: this.cwd, agentDir: this.piDir, model: this.d.model, thinkingLevel: this.d.cfg.llm.thinkingLevel,
       modelRuntime: this.d.modelRuntime, resourceLoader: loader, settingsManager, sessionManager,
-      noTools: "builtin", tools: this.d.tools.map((t) => t.name), customTools: this.d.tools,
+      noTools: "builtin", tools: [...this.d.tools.map((t) => t.name), "codemode"], customTools: this.d.tools,
     });
     this.session = session;
     this.d.log.info(`pi 会话就绪 model=${this.d.model.provider}/${this.d.model.id} loopGuard=${this.loopGuardImpl} tools=${session.getActiveToolNames().join(",")}`);
     return session;
   }
 
-  async run(prompt: string, limits: RunLimits): Promise<RunResult> {
+  async run(prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
     const s = await this.ensureSession();
-    const res = await this.runPrompt(s, prompt, limits);
+    const res = await this.runPrompt(s, prompt, limits, images);
     // 上下文上限 → 交接
     const ctxTokens = s.getContextUsage()?.tokens ?? null;
     res.contextTokens = ctxTokens;
@@ -133,7 +143,7 @@ export class PiEngine implements AgentEngine {
     return res;
   }
 
-  private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits): Promise<RunResult> {
+  private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
     const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, aborted: false };
     const pendingArgs = new Map<string, unknown>();
     const abort = (why: string) => { if (!out.aborted) { out.aborted = true; out.abortReason = why; void s.abort(); } };
@@ -152,7 +162,7 @@ export class PiEngine implements AgentEngine {
     });
     const timer = setTimeout(() => abort("turn-timeout"), this.d.cfg.limits.turnTimeoutMs);
     try {
-      await s.prompt(prompt);
+      await s.prompt(prompt, images?.length ? { images } : undefined);
     } catch (e) {
       out.error = (e as Error).message;
     } finally {

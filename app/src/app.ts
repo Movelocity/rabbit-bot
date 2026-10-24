@@ -10,6 +10,10 @@ import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey } from "./core/time.ts";
 import { EmojiTable } from "./core/emoji.ts";
+import { needsPlanNudge } from "./core/nudge.ts";
+import { toImageContent } from "./core/media.ts";
+import type { ImagePart } from "./agent/engine.ts";
+import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine } from "./agent/engine.ts";
 import { createTools } from "./agent/tools.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
@@ -25,6 +29,14 @@ export interface AppOptions {
   dbFile?: string;
   logger?: Logger;
   inMemorySessions?: boolean;
+}
+
+/** 从消息里挑最近的 N 张图，转成 pi 的 image content；文件读不到就跳过。 */
+export function pickImages(msgs: { attachment?: Attachment | null }[], max: number): ImagePart[] {
+  const n = Math.max(1, max);
+  return msgs.filter((m) => m.attachment).slice(-n)
+    .map((m) => toImageContent(m.attachment!))
+    .filter((x): x is ImagePart => !!x);
 }
 
 export class App {
@@ -127,8 +139,44 @@ export class App {
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;
 
-    const res = await this.engine.run(prompt, { tokensLeft: cfg.limits.dailyTokens - usage.tokens, callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls });
+    // 未读里的图 + 之前被 send 顺带消费掉的图，按 seq 去重后取最近 N 张
+    const pending = this.hub.takePendingMedia();
+    const mediaMsgs = [...new Map([...unread, ...pending].map((m) => [m.seq, m])).values()]
+      .sort((a, b) => a.seq - b.seq);
+    const images = pickImages(mediaMsgs, cfg.media.maxImagesInContext);
+    entry.imageMsgs = mediaMsgs.filter((m) => m.attachment).length;
+    entry.imageCount = images.length;
+    if (entry.imageMsgs) this.log.info(`图片：图片消息 ${entry.imageMsgs} 条（未读 ${unread.length} / 待补 ${pending.length}），实际传入 ${entry.imageCount} 张`);
+    const fullPrompt = images.length
+      ? `${prompt}\n\n【附带图片】本轮有 ${images.length} 张图片随消息一起附上，对应上文出现的 [图片]，按出现顺序排列。`
+      : prompt;
+    const res = await this.engine.run(fullPrompt, { tokensLeft: cfg.limits.dailyTokens - usage.tokens, callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls }, images);
     this.store.addUsage(day, res.llmCalls, res.tokens, 1);
+
+    // 主动唤醒兜底：这是它自己排的计划，说完却没给自己排下一次 → 补一次极短的自我决定
+    // 只劝它「要么排、要么明确不排」，不替它做决定，也不用 send 再发一条。
+    if (needsPlanNudge({ wakeType: w.type, error: res.error, aborted: res.aborted, toolCalls: res.toolCalls })) {
+      const left = {
+        tokensLeft: cfg.limits.dailyTokens - usage.tokens - res.tokens,
+        callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls - res.llmCalls,
+      };
+      if (left.callsLeft > 0 && left.tokensLeft > 0) {
+        try {
+          const r2 = await this.engine.run(
+            "你刚才是照自己排的计划开口的，说完了。现在做决定：还想接着聊，就用 plan_add 给自己排下一次（content 写清到点要说什么）；不想，就只回一句「不排」。别用 send，这条不发出去。",
+            left,
+          );
+          this.store.addUsage(day, r2.llmCalls, r2.tokens, 0);
+          res.toolCalls.push(...r2.toolCalls);
+          res.tokens += r2.tokens;
+          res.llmCalls += r2.llmCalls;
+          entry.nudged = true;
+          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => c.name === "plan_add" && !c.isError) ? "排上了" : "它说不排"}）`);
+        } catch (e) {
+          this.log.warn(`补提醒失败：${(e as Error).message}`);
+        }
+      }
+    }
     const sent = res.toolCalls.filter((c) => c.name === "send" && !c.isError).map((c) => c.args);
     // LLM 出错且什么都没发：回滚游标，下次 tick 重试
     if (res.error && !sent.length) for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);

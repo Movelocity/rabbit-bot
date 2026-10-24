@@ -2,7 +2,6 @@
   "timezone": "Asia/Shanghai",
   "dataDir": "./data",
   "logDir": "./logs",
-
   "scheduler": {
     "tickMs": 180000,
     "activeTickMs": 60000,
@@ -12,59 +11,79 @@
     "watchdogMs": 5000,
     "overdueGraceMs": 2000
   },
-
   "send": {
     "confirmWaitMs": 1000,
     "confirmViaApi": false
   },
-
   "context": {
     "recentContextMessages": 8,
     "maxUnreadPerPool": 50,
     "maxMemoriesPerUser": 8
   },
-
   "handoff": {
     "contextTokenLimit": 60000
   },
-
   "loopGuard": {
     "impl": "pi-death-loop-guard",
     "warnThreshold": 5,
     "blockThreshold": 10,
     "abortAfterBlocks": 1
   },
-
   "limits": {
     "dailyLlmCalls": 300,
     "dailyTokens": 2000000,
     "turnTimeoutMs": 300000
   },
-
   "plans": {
     "missedPolicy": "catchup",
     "missedGraceMs": 86400000
   },
-
   "llm": {
     "provider": "deepseek",
     "model": "deepseek-flash",
     "thinkingLevel": "off",
     "maxRetries": 2
   },
-
   "adapters": {
-    "feishu": { "enabled": true, "domain": "feishu", "fetchSenderName": true, "reactions": true, "logRawEmoji": true },
-    "qq": { "enabled": false }
+    "feishu": {
+      "enabled": true,
+      "domain": "feishu",
+      "fetchSenderName": true,
+      "reactions": true,
+      "logRawEmoji": true
+    },
+    "qq": {
+      "enabled": false
+    }
   },
-
   "emoji": {
     "table": "./config/emoji-feishu.json",
     "map": {}
   },
-
+  "media": {
+    "maxEdge": 1024,
+    "maxBytes": 512000,
+    "maxImagesInContext": 4
+  },
+  "inject": {
+    "port": 3737
+  },
   "agent": {
     "name": "小池",
     "persona": "你是一个自然、简短、有分寸的聊天伙伴。"
+  },
+  "sandbox": {
+    "dir": "data/sandbox",
+    "maxFileBytes": 262144,
+    "maxFiles": 200,
+    "maxReadChars": 8000,
+    "shell": {
+      "enabled": true,
+      "container": "poolchat-sbx",
+      "image": "poolchat-sandbox:latest",
+      "timeoutMs": 10000,
+      "maxOutputChars": 8000,
+      "network": "bridge"
+    }
   }
 }

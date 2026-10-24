@@ -2,6 +2,15 @@ export type Platform = "feishu" | "qq" | "mock";
 export type PoolKind = "private" | "group";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 
+/** 落到本地的一张图片（已压缩）。path 是绝对路径，喂模型时读成 base64。 */
+export interface Attachment {
+  path: string;
+  mime: string;
+  width: number;
+  height: number;
+  bytes: number;
+}
+
 /** 统一消息字段（需求 §2） */
 export interface PoolMessage {
   pool_id: string;
@@ -15,6 +24,8 @@ export interface PoolMessage {
   mentions: string[]; // 被 @ 的平台账号 id
   is_mention_me: boolean;
   media_type: MediaType;
+  /** 图片消息落盘后的信息（非图片为空） */
+  attachment?: Attachment | null;
   /** 是否为本 Agent 自己发出的消息 */
   from_self?: boolean;
 }

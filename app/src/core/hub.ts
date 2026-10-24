@@ -25,6 +25,8 @@ export class Hub {
   scheduler: Scheduler | null = null;
   /** 每次 send 的回调（日志/测试） */
   onSent?: (poolId: string, text: string) => void;
+  /** 被 takeUnread 消费掉、但还没喂给模型的图片消息（send 的"期间新消息"会顺带把游标推过图片） */
+  private pendingMedia: StoredMessage[] = [];
 
   constructor(private store: Store, private cfg: Config, private log: Logger, readonly emoji: EmojiTable) {}
 
@@ -58,9 +60,25 @@ export class Hub {
       const msgs = this.store.unread(id, this.cfg.context.maxUnreadPerPool);
       if (!msgs.length) continue;
       out.push(...msgs);
+      // 图片消息额外留一份：send 的"期间新消息"会顺带把游标推过它，那一轮只拿到文字，
+      // 不留档的话这张图永远不会进任何一轮 prompt
+      for (const m of msgs) if (m.attachment) this.rememberPendingMedia(m);
       // 游标推进到池内最新（含被截断的旧消息，避免无限堆积）
       this.store.advanceCursor(id, Math.max(msgs[msgs.length - 1].seq, this.store.maxSeq(id)));
     }
+    return out;
+  }
+
+  private rememberPendingMedia(m: StoredMessage) {
+    if (this.pendingMedia.some((x) => x.seq === m.seq)) return;
+    this.pendingMedia.push(m);
+    if (this.pendingMedia.length > 20) this.pendingMedia.splice(0, this.pendingMedia.length - 20);
+  }
+
+  /** 取出还没给模型看过的图片消息（取完清空） */
+  takePendingMedia(): StoredMessage[] {
+    const out = this.pendingMedia;
+    this.pendingMedia = [];
     return out;
   }
 

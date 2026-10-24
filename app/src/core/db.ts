@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS messages (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, pool_id TEXT NOT NULL, platform TEXT NOT NULL, msg_id TEXT NOT NULL,
   sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, user_id TEXT, ts INTEGER NOT NULL, text TEXT NOT NULL,
   reply_to TEXT, mentions TEXT NOT NULL DEFAULT '[]', is_mention_me INTEGER NOT NULL DEFAULT 0,
-  media_type TEXT NOT NULL DEFAULT 'text', from_self INTEGER NOT NULL DEFAULT 0,
+  media_type TEXT NOT NULL DEFAULT 'text', from_self INTEGER NOT NULL DEFAULT 0, attachment TEXT,
   UNIQUE(platform, msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pool ON messages(pool_id, seq);
@@ -47,6 +47,7 @@ function rowToMsg(r: any): StoredMessage {
     seq: r.seq, pool_id: r.pool_id, platform: r.platform, msg_id: r.msg_id, sender_id: r.sender_id,
     sender_name: r.sender_name, user_id: r.user_id, ts: r.ts, text: r.text, reply_to: r.reply_to,
     mentions: JSON.parse(r.mentions), is_mention_me: !!r.is_mention_me, media_type: r.media_type, from_self: !!r.from_self,
+    attachment: r.attachment ? JSON.parse(r.attachment) : null,
   };
 }
 
@@ -58,6 +59,8 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 3000");
     this.db.exec(SCHEMA);
+    // 老库补列（新库已含在 SCHEMA 里）
+    try { this.db.exec("ALTER TABLE messages ADD COLUMN attachment TEXT"); } catch { /* 已存在 */ }
   }
   close() { this.db.close(); }
 
@@ -127,9 +130,10 @@ export class Store {
     if (this.hasMessage(m.platform, m.msg_id)) return null; // 重复投递：不产生任何副作用
     const pool = this.upsertPool(m.platform, m.external_chat_id, m.pool_kind, m.pool_title ?? "");
     const user_id = m.from_self ? null : this.resolveUser(m.platform, m.sender_id, m.sender_name);
-    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
-      m.reply_to, JSON.stringify(m.mentions), m.is_mention_me ? 1 : 0, m.media_type, m.from_self ? 1 : 0);
+    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self,attachment)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
+      m.reply_to, JSON.stringify(m.mentions), m.is_mention_me ? 1 : 0, m.media_type, m.from_self ? 1 : 0,
+      m.attachment ? JSON.stringify(m.attachment) : null);
     if (r.changes === 0) return null;
     this.db.prepare("UPDATE pools SET last_msg_at=MAX(last_msg_at,?) WHERE pool_id=?").run(m.ts, pool.pool_id);
     return this.getMessageBySeq(Number(r.lastInsertRowid))!;
@@ -150,6 +154,20 @@ export class Store {
   }
   maxSeq(poolId: string): number {
     return (this.db.prepare("SELECT COALESCE(MAX(seq),0) s FROM messages WHERE pool_id=?").get(poolId) as any).s;
+  }
+  /** 池规模：总条数 + 最早一条。给模型翻旧账时定位用。 */
+  poolSpan(poolId: string): { total: number; first: StoredMessage | null; last: StoredMessage | null } {
+    const total = (this.db.prepare("SELECT COUNT(*) c FROM messages WHERE pool_id=?").get(poolId) as any).c;
+    const first = this.db.prepare("SELECT * FROM messages WHERE pool_id=? ORDER BY seq LIMIT 1").get(poolId) as any;
+    const last = this.db.prepare("SELECT * FROM messages WHERE pool_id=? ORDER BY seq DESC LIMIT 1").get(poolId) as any;
+    return { total, first: first ? rowToMsg(first) : null, last: last ? rowToMsg(last) : null };
+  }
+  /** 在池的历史消息里按关键词搜（LIKE，% 和 _ 已转义），新的在前。 */
+  searchMessages(poolId: string, keyword: string, limit = 20, sender?: string): StoredMessage[] {
+    const kw = `%${keyword.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const sql = `SELECT * FROM messages WHERE pool_id=? AND text LIKE ? ESCAPE '\\'${sender ? " AND sender_name=?" : ""} ORDER BY seq DESC LIMIT ?`;
+    const args = sender ? [poolId, kw, sender, limit] : [poolId, kw, limit];
+    return (this.db.prepare(sql).all(...args) as any[]).map(rowToMsg).reverse();
   }
 
   // ---------- 游标 ----------

@@ -32,5 +32,11 @@
   "private": true,
   "engines": {
     "node": ">=22.19.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "fsevents@2.3.3": true
   }
 }
