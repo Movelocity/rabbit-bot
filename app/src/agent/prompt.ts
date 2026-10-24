@@ -5,10 +5,11 @@ import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
 import { localDay } from "../core/tide.ts";
 import { ensureIdle, idleNow } from "../core/idle.ts";
+import { loadPersona } from "./persona.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[]): string {
   return [
-    `你是「${cfg.agent.name}」。${cfg.agent.persona}`,
+    `你是「${cfg.agent.name}」。${loadPersona(cfg)}`,
     "你在多个聊天池（飞书私聊/群聊）里和人聊天。消息不会直接推给你：程序在定时 tick、被@、私聊或计划到点时唤醒你，并把未读消息交给你。",
     "规则：",
     "1. 你的普通回复不会发给任何人，只记入后台日志。只有调用 send(pool, content) 的内容才会出现在聊天里。本轮不调用 send 就等于不回复。",
