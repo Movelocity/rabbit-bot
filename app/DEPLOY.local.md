@@ -2,6 +2,9 @@
 
 上游作者文档是 `README.md` 与 `需求文档.md`；这里只记**这台机器上的实际情况**。
 
+> **文档分工**：这份只记这台机器上的部署事实（路径、端口、容器参数、自启现状）。
+> 日常命令见 [docs/OPERATIONS.md](docs/OPERATIONS.md)，踩过的坑见 [docs/NOTES.md](docs/NOTES.md)，项目概览见 [README.md](README.md)。
+
 ## 位置与运行时
 
 | 项 | 值 |
@@ -29,12 +32,21 @@ pm2 restart poolchat
 - `scripts/run.sh fg` 负责：source env → preflight 校验凭据 → `exec node dist/main.js`。
 - 实测：`kill -9` 后约 4 秒自动回来，长连接重建。
 
-**开机自启还差一步**（需人工执行一次）：
+**开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.weikang.plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是
 
 ```bash
-sudo env PATH=/opt/homebrew/bin:/usr/bin:/bin \
-  /opt/homebrew/lib/node_modules/pm2/bin/pm2 startup launchd -u weikang --hp /Users/weikang
+sudo env PATH=$PATH /opt/homebrew/lib/node_modules/pm2/bin/pm2 startup launchd -u weikang --hp /Users/weikang
 ```
+
+它生成 plist 但**不会自动 bootstrap**（macOS 26 上 `launchctl load` 已移除），所以还要在外部终端跑一次：
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pm2.weikang.plist
+```
+
+跑完 `launchctl list | grep -i pm2` 能看到 `com.PM2`。之后因 `LaunchOnlyOnce` 它会退役，属正常；下次开机 launchd 会重新加载再跑一次 resurrect。改过 pm2 进程列表记得 `pm2 save`。
+
+（历史：`sudo pm2 startup` 那次还在 system 域留了一份同名服务，不影响使用，想清理 `sudo launchctl bootout system/com.PM2`。）
 
 ## 依赖安装的坑
 
@@ -92,13 +104,13 @@ node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # �
 
 ## 运维命令
 
+全表在 [docs/OPERATIONS.md](docs/OPERATIONS.md)。最常用的四条：
+
 ```bash
-cd ~/projects/poolchat/app
-npx tsx src/ctl.ts status      # paused / usage / pools / pendingPlans / handoffs
-npx tsx src/ctl.ts plans
-npx tsx src/ctl.ts handoffs
-npx tsx src/ctl.ts pause|resume
-npm test                       # 58 项，全过
+npm run doctor            # 体检：进程 / 锁 / 注入口 / 容器 / 唤醒分布
+npm run inject -- "..."   # 本地注入
+npm run ctl -- status     # 概况（另有 pause/resume/usage/wakes/plans/handoffs/models）
+npm test                  # 118 项
 ```
 
 ## 本地注入入口（2026-10-23 加）
@@ -121,10 +133,10 @@ curl -s -X POST http://127.0.0.1:3737/inject \
 
 ## 已知问题 / 待办
 
-- **不能同时用两种方式起进程**：`pm2`（跑 `run.sh fg`）和 `run.sh start`（nohup supervisor）/ 手工 `run.sh fg` 会各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」。10-23 就是这么踩的（pm2 一个 + 手工后台一个，并存约 2 小时）。`src/main.ts` 现在有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），但**别再手工起第二份**。
-- 开机自启未安装（见上，需 sudo 一次）。
+- **不能同时用两种方式起进程**：`pm2`（跑 `run.sh fg`）和 `run.sh start`（nohup supervisor）/ 手工 `run.sh fg` 会各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」。10-23 就是这么踩的（pm2 一个 + 手工后台一个，并存约 2 小时）。`src/main.ts` 现在有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），`npm run doctor` 会标出进程数 >1，但**别再手工起第二份**。
 - `config/local.json` 的 agent.name 是「爱马士」，与 `default.json` 的「小池」不同 —— 想改名改这里。
 - 群聊场景未实测（当前只有私聊池）。
+- 沙盒镜像 `poolchat-sandbox:latest` 是本机 build 的（不在 registry），换机器要按 `docker/sandbox.Dockerfile` 重建。
 
 ## codemode 沙盒（2026-10-24 加）
 
