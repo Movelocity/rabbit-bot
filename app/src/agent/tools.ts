@@ -178,7 +178,7 @@ export function createTools(d: ToolDeps) {
     name: "memory_add",
     label: "memory_add",
     executionMode: "sequential",
-    description: "按 user_id 记一条长期记忆/话题。scope：pool 仅来源池 / private 所有私聊 / group 所有群 / all 全部；默认按来源池类型。",
+    description: "按 user_id 记一条长期记忆：只记对方明说过的具体事实（说了什么、发生了什么、答应过什么），不记推断和总结。要细节去 search_messages 翻原话。scope：pool 仅来源池 / private 所有私聊 / group 所有群 / all 全部；默认按来源池类型。",
     parameters: Type.Object({
       user_id: Type.String(),
       content: Type.String(),
