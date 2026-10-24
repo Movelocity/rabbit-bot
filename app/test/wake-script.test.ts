@@ -19,7 +19,9 @@ test("tick 剧本：明确授权沉默，且不许为证明在线而发消息", 
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map(), memories: new Map(), plans: [] });
   assert.match(p, /定时检查，没有人在等你/);
   assert.match(p, /重点.*判断.*不是说话/);
-  assert.match(p, /什么都不做，直接结束这一轮/);
+  assert.match(p, /调 stay_silent/);
+  assert.match(p, /或者什么都不调用直接结束/);
+  assert.match(p, /那句话本身就是打扰/, "不能用 send 发一句「我先不打扰了」");
   assert.match(p, /不是失败/);
   assert.match(p, /沉默不等于欠债/);
   assert.doesNotMatch(p, /有人刚说了话/, "三类剧本不能串味");

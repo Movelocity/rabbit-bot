@@ -22,11 +22,40 @@ export interface ToolDeps {
   now: () => number;
   /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏 */
   currentWake?: () => { type: string } | null;
+  /** 本轮决定不回时的理由（stay_silent）；非空就是已决定不回 */
+  silenceReason?: () => string | null;
+  markSilent?: (reason: string) => void;
+  /** 本轮已经 send 过几条 */
+  alreadySent?: () => boolean;
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
 
 export function createTools(d: ToolDeps) {
+  /**
+   * 这一轮不回。它是 send 的反面，也是唯一能让「不说话」成为一个明确决定的方式——
+   * 没有它，模型只能靠「什么都不调用」来表达沉默，而它倾向于用发一条消息来收尾。
+   */
+  const staySilent = defineTool({
+    name: "stay_silent",
+    label: "stay_silent",
+    executionMode: "sequential",
+    description:
+      "这一轮不回，什么都不发。用在：对方明确说了不用回/晚点说、他只是发了个表情或语气词、到点的计划已经作废、"
+      + "或者定时唤醒时你确实没有具体的事要说。调用后本轮结束，对方收不到任何消息。"
+      + "这不是偷懒的借口：有具体的话要说时仍然要 send。reason 写一句话说明为什么这轮不用回（会记进日志，用来复盘）。",
+    parameters: Type.Object({
+      reason: Type.String({ description: "一句话：为什么这一轮不用回" }),
+    }),
+    async execute(_id, p) {
+      if (d.alreadySent?.()) {
+        return txt("这一轮已经发过消息了，不用再标记沉默——两个决定不能同时成立。", { ok: false });
+      }
+      d.markSilent?.(p.reason);
+      return txt(`已标记：这一轮不回（${p.reason}）。什么都不用再做了，结束这一轮。`, { ok: true, silent: true });
+    },
+  });
+
   const send = defineTool({
     name: "send",
     label: "send",
@@ -37,6 +66,10 @@ export function createTools(d: ToolDeps) {
       content: Type.String({ description: "一条短消息；表情包写 [emoji:中文id]" }),
     }),
     async execute(_id, p) {
+      // 这一轮已经用 stay_silent 决定不回了，别再发——两个决定不能同时成立
+      if (d.silenceReason?.()) {
+        return txt("你这一轮已经决定不回了（stay_silent）。别再发，结束这一轮就好。", { ok: false, blocked: "silent" });
+      }
       // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
       if (d.currentWake?.()?.type === "plan") {
         const why = coerciveHit(p.content);
@@ -499,5 +532,5 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  return [send, listPools, readPool, searchMessages, planAdd, planUpdate, planList, memoryAdd, memorySearch, listImages, viewImage, sandboxList, sandboxRead, sandboxWrite, sandboxRun, webSearch, webFetch];
+  return [send, staySilent, listPools, readPool, searchMessages, planAdd, planUpdate, planList, memoryAdd, memorySearch, listImages, viewImage, sandboxList, sandboxRead, sandboxWrite, sandboxRun, webSearch, webFetch];
 }
