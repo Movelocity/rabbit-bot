@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS plans (
   schedule_kind TEXT NOT NULL, schedule TEXT, status TEXT NOT NULL DEFAULT 'pending', expires_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tide_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, pool_id TEXT, day TEXT NOT NULL, ts INTEGER NOT NULL,
+  kind TEXT NOT NULL, anchor_kind TEXT, anchor_ref TEXT, reason TEXT, why TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fact', content TEXT NOT NULL,
@@ -61,6 +66,10 @@ export class Store {
     this.db.exec(SCHEMA);
     // 老库补列（新库已含在 SCHEMA 里）
     try { this.db.exec("ALTER TABLE messages ADD COLUMN attachment TEXT"); } catch { /* 已存在 */ }
+    // 潮汐锚点（2026-10-24）：计划到点不一定该说，锚点决定能不能发
+    for (const col of ["anchor_kind TEXT", "anchor_ref TEXT", "why TEXT"]) {
+      try { this.db.exec(`ALTER TABLE plans ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
   }
   close() { this.db.close(); }
 
@@ -193,11 +202,36 @@ export class Store {
   }
 
   // ---------- 计划 ----------
-  insertPlan(p: Omit<Plan, "id" | "created_at" | "status"> & { status?: PlanStatus }): Plan {
+  insertPlan(p: Omit<Plan, "id" | "created_at" | "status" | "anchor_kind" | "anchor_ref" | "why">
+    & { status?: PlanStatus; anchor_kind?: string | null; anchor_ref?: string | null; why?: string | null }): Plan {
     const now = Date.now();
-    const r = this.db.prepare(`INSERT INTO plans(title,content,pool_id,schedule_kind,schedule,status,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`)
-      .run(p.title, p.content, p.pool_id, p.schedule_kind, p.schedule, p.status ?? "pending", p.expires_at, now, now);
+    const r = this.db.prepare(`INSERT INTO plans(title,content,pool_id,schedule_kind,schedule,status,expires_at,created_at,updated_at,anchor_kind,anchor_ref,why) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(p.title, p.content, p.pool_id, p.schedule_kind, p.schedule, p.status ?? "pending", p.expires_at, now, now,
+        p.anchor_kind ?? null, p.anchor_ref ?? null, p.why ?? null);
     return this.getPlan(Number(r.lastInsertRowid))!;
+  }
+
+  // ---------- 潮汐 ----------
+  /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）/ landed（对方在窗口内回了） */
+  recordTideEvent(e: { plan_id?: number | null; pool_id?: string | null; day: string; ts: number; kind: string;
+    anchor_kind?: string | null; anchor_ref?: string | null; reason?: string | null; why?: string | null }) {
+    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,anchor_ref,reason,why) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.anchor_ref ?? null, e.reason ?? null, e.why ?? null);
+  }
+  /** 今天某个池、某一档已经真发了几条（L0 不占额度，不会问到这里） */
+  countTideFired(day: string, poolId: string | null, anchorKind: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM tide_events WHERE day=? AND kind='fired' AND anchor_kind=? AND (pool_id IS ? OR pool_id=?)`)
+      .get(day, anchorKind, poolId, poolId) as { n: number };
+    return row.n;
+  }
+  recentTideEvents(limit = 20): any[] {
+    return this.db.prepare(`SELECT * FROM tide_events ORDER BY id DESC LIMIT ?`).all(limit) as any[];
+  }
+  /** 上次真发主动是什么时候（给唤醒剧本用） */
+  lastTideFired(poolId: string | null): { ts: number; why: string | null } | null {
+    const r = this.db.prepare(`SELECT ts, why FROM tide_events WHERE kind='fired' AND (pool_id IS ? OR pool_id=?) ORDER BY ts DESC LIMIT 1`)
+      .get(poolId, poolId) as { ts: number; why: string | null } | undefined;
+    return r ?? null;
   }
   getPlan(id: number): Plan | undefined { return this.db.prepare("SELECT * FROM plans WHERE id=?").get(id) as Plan | undefined; }
   listPlans(status?: PlanStatus): Plan[] {

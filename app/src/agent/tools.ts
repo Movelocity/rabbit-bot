@@ -118,7 +118,10 @@ export function createTools(d: ToolDeps) {
     name: "plan_add",
     label: "plan_add",
     executionMode: "sequential",
-    description: "写一条计划。kind=once 时 when 为 ISO 时间（无时区按 Asia/Shanghai）；kind=cron 时 when 为 cron（分 时 日 月 周）；kind=none 为无时间的备忘。",
+    description:
+      "写一条计划。kind=once 时 when 为 ISO 时间（无时区按 Asia/Shanghai）；kind=cron 时 when 为 cron（分 时 日 月 周）；kind=none 为无时间的备忘。"
+      + "anchor 是这条计划的锚点档位：L0 日期类（谁的生日、约定好的日子，不受每日上限）；L1 跟进到期（等结果的事）；L2 普通关心（想到什么聊什么，每天最多 1 条）。不填按 L2 算。"
+      + "why 写一句话「为什么现在要排这条」——到点唤醒时会念给你听，写不出具体事就别排。",
     parameters: Type.Object({
       title: Type.String(),
       content: Type.Optional(Type.String()),
@@ -126,6 +129,9 @@ export function createTools(d: ToolDeps) {
       kind: Type.Union([Type.Literal("once"), Type.Literal("cron"), Type.Literal("none")]),
       when: Type.Optional(Type.String()),
       expires: Type.Optional(Type.String({ description: "过期时间 ISO，可选" })),
+      anchor: Type.Optional(Type.Union([Type.Literal("L0"), Type.Literal("L1"), Type.Literal("L2")])),
+      ref: Type.Optional(Type.String({ description: "锚点指向：memory:12 / message:187 / date:2026-11-03" })),
+      why: Type.Optional(Type.String({ description: "一句话：为什么现在排这条" })),
     }),
     async execute(_id, p) {
       const now = d.now();
@@ -138,8 +144,13 @@ export function createTools(d: ToolDeps) {
       }
       const pool = p.pool ? d.store.resolvePool(p.pool) : undefined;
       if (p.pool && !pool) return txt(`未知的池 ${p.pool}`, { ok: false });
-      const plan = d.store.insertPlan({ title: p.title, content: p.content ?? "", pool_id: pool?.pool_id ?? null, schedule_kind: v.kind, schedule: v.schedule, expires_at: expires });
-      return txt(`已记下计划#${plan.id}${v.firstFire ? `，下次触发 ${fmtLocal(v.firstFire)}` : ""}`, { ok: true, id: plan.id });
+      const plan = d.store.insertPlan({
+        title: p.title, content: p.content ?? "", pool_id: pool?.pool_id ?? null,
+        schedule_kind: v.kind, schedule: v.schedule, expires_at: expires,
+        anchor_kind: p.anchor ?? null, anchor_ref: p.ref ?? null, why: p.why ?? null,
+      });
+      const tip = p.why ? "" : "（没写 why——到点被叫醒时会不知道当时为什么排它，补一句更好）";
+      return txt(`已记下计划#${plan.id}${v.firstFire ? `，下次触发 ${fmtLocal(v.firstFire)}` : ""}${tip}`, { ok: true, id: plan.id });
     },
   });
 

@@ -21,6 +21,7 @@ export interface Config {
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: { dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
+  tide: { enabled: boolean; dailyCap: { L1: number; L2: number } };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
@@ -77,6 +78,11 @@ export function validateConfig(cfg: Config): void {
   pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
   pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");
+  if (cfg.tide?.enabled) {
+    const { L1, L2 } = cfg.tide.dailyCap;
+    if (!(Number.isInteger(L1) && L1 >= 0)) throw new Error("config: tide.dailyCap.L1 必须是 >=0 的整数");
+    if (!(Number.isInteger(L2) && L2 >= 0)) throw new Error("config: tide.dailyCap.L2 必须是 >=0 的整数");
+  }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");
   if (cfg.timezone !== "Asia/Shanghai") console.warn(`[config] timezone=${cfg.timezone}（需求要求 Asia/Shanghai）`);

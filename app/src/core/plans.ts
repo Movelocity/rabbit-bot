@@ -9,6 +9,7 @@ import { CronExpressionParser } from "cron-parser";
 import { parseIsoInTz } from "./time.ts";
 import type { Store } from "./db.ts";
 import type { Plan, Wake } from "../types.ts";
+import { canFire, localDay, anchorOf, type TideConfig } from "./tide.ts";
 
 export interface ScheduleInput { kind: "once" | "cron" | "none"; value?: string | null }
 export type ValidateResult = { ok: true; kind: Plan["schedule_kind"]; schedule: string | null; firstFire: number | null } | { ok: false; error: string };
@@ -52,7 +53,7 @@ export function cronOccurrences(expr: string, from: number, to: number, tz = "As
   return out.reverse();
 }
 
-export interface PlanEngineConfig { missedPolicy: "catchup" | "skip"; missedGraceMs: number; tz: string }
+export interface PlanEngineConfig { missedPolicy: "catchup" | "skip"; missedGraceMs: number; tz: string; tide?: TideConfig }
 
 export class PlanEngine {
   /** 本进程启动时间：早于它的触发点视为“停机期间错过” */
@@ -91,8 +92,25 @@ export class PlanEngine {
         const inserted = this.store.recordPlanFire(p.id, t);
         if (t === fireTs) fresh = inserted;
       }
-      if (fireTs !== null && fresh) fires.push({ planId: p.id, fireTs });
-      if (p.schedule_kind === "once") this.store.setPlanStatus(p.id, fireTs !== null ? "done" : "expired");
+      // 到点了不代表该说：过潮汐闸门（L0 放行；L1/L2 按池 × 天 × 档数额度）
+      let fired = false;
+      if (fireTs !== null && fresh) {
+        const v = canFire(this.store, p, this.cfg.tide, now, this.cfg.tz);
+        this.store.recordTideEvent({
+          plan_id: p.id,
+          pool_id: p.pool_id,
+          day: localDay(now, this.cfg.tz),
+          ts: now,
+          kind: v.ok ? "fired" : "skip",
+          anchor_kind: anchorOf(p),
+          anchor_ref: p.anchor_ref ?? null,
+          why: p.why ?? null,
+          reason: v.ok ? null : v.detail,
+        });
+        if (v.ok) { fires.push({ planId: p.id, fireTs }); fired = true; }
+      }
+      // 一次性计划被闸门拦下：这个时间点已经过去，标 expired 而不是 done（没执行）
+      if (p.schedule_kind === "once") this.store.setPlanStatus(p.id, fired ? "done" : "expired");
     }
     this.store.setKv("plans.lastCheck", String(now));
     return fires;
