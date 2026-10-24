@@ -10,10 +10,26 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { IMAdapter, RichPart, SendResult } from "./types.ts";
 import { inboundEmojiText, type EmojiTable } from "../core/emoji.ts";
-import type { InboundMessage, MediaType } from "../types.ts";
+import type { InboundMessage, MediaType, Attachment } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
+import { saveImage, type MediaOptions } from "../core/media.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable }
+export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable; media?: MediaOptions }
+
+/** 从 image / post 消息里取第一张图的 image_key；取不到返回 null。 */
+export function imageKeyOf(msgType: string, content: string): string | null {
+  let obj: any = {};
+  try { obj = JSON.parse(content); } catch { return null; }
+  if (msgType === "image") return typeof obj.image_key === "string" ? obj.image_key : null;
+  if (msgType === "post") {
+    const body = obj.content ? obj : (obj.zh_cn ?? obj.en_us ?? Object.values(obj)[0] ?? {});
+    for (const line of (body as any).content ?? []) for (const el of line ?? []) if (el?.tag === "img" && el.image_key) return el.image_key;
+  }
+  return null;
+}
 
 const PLACEHOLDER: Record<string, [MediaType, string]> = {
   image: ["image", "[图片]"], audio: ["audio", "[语音]"], media: ["video", "[视频]"], file: ["file", "[文件]"],
@@ -147,6 +163,19 @@ export class FeishuAdapter implements IMAdapter {
     if (this.opts.logRawEmoji && /emotion|sticker|\[[^\]]{1,24}\]/.test(String(msg.content)))
       this.log.info(`feishu raw(${msg.message_type}): ${String(msg.content).slice(0, 400)}`);
     const { text, media } = feishuContentToText(msg.message_type, msg.content, mentions, this.opts.emoji);
+    // 图片：入池前先落盘（压缩后存 data/media），唤醒时直接读，回复路径零等待
+    let attachment: Attachment | null = null;
+    // 临时探针：任何非文本消息都留一行，确认到底走没走进图片分支
+    if (msg.message_type !== "text") this.log.info(`feishu: 非文本消息 ${msg.message_type} → media=${media} opts.media=${this.opts.media ? "有" : "无"}`);
+    if (media === "image" && this.opts.media) {
+      const key = imageKeyOf(msg.message_type, msg.content);
+      this.log.info(`feishu: 图片消息 ${msg.message_id} key=${key ? key.slice(0, 18) + "…" : "(取不到)"}`);
+      if (key) attachment = await this.downloadImage(msg.message_id, key)
+        .catch((e) => { this.log.warn(`feishu: 图片下载失败（已降级为 [图片]）：${(e as Error).message}`); return null; });
+      this.log.info(`feishu: 图片${attachment ? `已落盘 ${attachment.width}x${attachment.height} ${attachment.bytes}B` : "没拿到"}`);
+    } else if (media === "image") {
+      this.log.warn("feishu: 收到图片但没有配置 media（不会下载）");
+    }
     const kind = msg.chat_type === "p2p" ? "private" : "group";
     this.chatKinds.set(msg.chat_id, kind);
     return {
@@ -156,7 +185,31 @@ export class FeishuAdapter implements IMAdapter {
       mentions: mentions.map((m) => m.id).filter(Boolean),
       is_mention_me: !!this.botOpenId && mentions.some((m) => m.id === this.botOpenId),
       media_type: media, from_self: data.sender?.sender_type === "app" && senderOpenId === this.botOpenId,
+      attachment,
     };
+  }
+
+  /** 拉取消息里的图片 → 压缩落盘。8 秒超时或失败返回 null，消息本身照常入池（文本降级为 [图片]）。 */
+  private async downloadImage(messageId: string, imageKey: string): Promise<Attachment | null> {
+    const work = (async () => {
+      const tmp = path.join(os.tmpdir(), `poolchat-${messageId}.img`);
+      const res: any = await this.client.im.messageResource.get({
+        path: { message_id: messageId, file_key: imageKey },
+        params: { type: "image" },
+      });
+      await res.writeFile(tmp);
+      try { return saveImage(fs.readFileSync(tmp), this.opts.media!, messageId); }
+      finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+    })();
+    let timer: any;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<null>((r) => { timer = setTimeout(() => { this.log.warn(`feishu: 图片下载超时 8s（${messageId}）`); r(null); }, 8000); timer.unref?.(); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** 表情回复 → 一条池消息（不立即唤醒）。只处理真人的回复。 */

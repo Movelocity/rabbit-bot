@@ -24,6 +24,15 @@ export interface Config {
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean }; qq: { enabled: boolean } };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
+  media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
+  sandbox: {
+    dir: string;
+    maxFileBytes: number;
+    maxFiles: number;
+    maxReadChars: number;
+    shell: { enabled: boolean; container: string; image: string; network: "bridge" | "none"; timeoutMs: number; maxOutputChars: number };
+  };
+  inject?: { port: number };
   agent: { name: string; persona: string };
 }
 
@@ -53,6 +62,7 @@ export function loadConfig(overrides?: unknown): Config {
   if (overrides) cfg = deepMerge(cfg, overrides);
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
+  cfg.sandbox.dir = path.resolve(APP_ROOT, cfg.sandbox.dir);
   if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);
   return cfg;
@@ -64,6 +74,8 @@ export function validateConfig(cfg: Config): void {
   };
   pos(cfg.scheduler.tickMs, "scheduler.tickMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");
+  pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
+  pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");
