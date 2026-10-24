@@ -8,15 +8,13 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 
 /** 假 Hub：记下每次 send 的内容，永远成功。 */
-function setup(opts: { wake?: string; sent?: string[] } = {}) {
+function setup(opts: { wake?: string } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-send-"));
   const cfg = { ...loadConfig(), dataDir };
-  const sent: string[] = opts.sent ?? [];
-  let count = 0;
+  const sent: string[] = [];
   const hub = {
     send: async (_pool: string, content: string) => {
       sent.push(content);
-      // 计数只由 bumpSend 递增（真实代码里 hub 不碰这个计数器），这里别重复加
       return { ok: true, sentParts: [{ confirmed: true }], newMessages: [] };
     },
   };
@@ -26,24 +24,18 @@ function setup(opts: { wake?: string; sent?: string[] } = {}) {
     cfg,
     now: () => Date.now(),
     currentWake: () => (opts.wake ? { type: opts.wake } : null),
-    sendsThisWake: () => count,
-    bumpSend: () => { count += 1; },
   });
   const send = (tools as any[]).find((t) => t.name === "send");
   return { send, sent };
 }
 
-test("send：一轮连发 3 条以内正常，第 4 条被拦下", async () => {
+test("send：条数不设代码上限（交给提示词），连发 5 条都放行", async () => {
   const { send, sent } = setup();
-  for (const t of ["一", "二", "三"]) {
+  for (const t of ["一", "二", "三", "四", "五"]) {
     const r = await send.execute("c", { pool: "p1", content: t });
-    assert.equal(r.details.ok, true, `第 ${sent.length} 条该发出去`);
+    assert.equal(r.details.ok, true, `第 ${sent.length} 条不该被代码拦`);
   }
-  const blocked = await send.execute("c", { pool: "p1", content: "四" });
-  assert.equal(blocked.details.ok, false);
-  assert.equal(blocked.details.blocked, "too-many");
-  assert.deepEqual(sent, ["一", "二", "三"], "第 4 条不该到 hub");
-  assert.match(blocked.content[0].text, /刷屏/);
+  assert.equal(sent.length, 5);
 });
 
 test("send：plan 主动消息命中情感绑架时被拦，不调 hub", async () => {
