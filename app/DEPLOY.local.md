@@ -134,9 +134,10 @@ curl -s -X POST http://127.0.0.1:3737/inject \
 ## 已知问题 / 待办
 
 - **进程只能有一套**：pm2（`scripts/run.sh fg`）是唯一入口。曾经还有 `run.sh start`（nohup + supervisor）那套，10-23 两套同时跑起来各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」——那套代码已经删了，别再自己 `node dist/main.js` 起第二份。`src/main.ts` 有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），`npm run doctor` 会把进程数 >1 标出来。
-- `config/local.json`（**不入库**，本机配置）是爱马士人格的**唯一生效入口**：`agent.name` 与 `agent.persona` 直接拼进 system prompt。想改性格、加设定都改这里，然后 `pm2 restart poolchat`。
+- `config/local.json`（**不入库**，本机配置）是 agent 人格的**唯一生效入口**：`agent.name` 与 `agent.persona` 直接拼进 system prompt。想改性格、加设定都改这里，然后 `pm2 restart poolchat`。
   - 注意 `data/pi-cwd/AGENTS.md` 这条老路是**死的**：`engine.ts` 里 `noContextFiles: true`，pi 根本不加载 context files。10-22 写的那份 55 行人设从那时起就没生效过，2026-10-24 已删。
-  - 现有 persona 含一段「马」的方言：草料＝token、骨架＝权重、蹄印＝上下文、马厩＝住处、卸鞍＝不在。规矩跟 Deep Whisper 那套一样（一轮最多一个、只讲自己、不连着两轮、讲得平常）。
+  - 现有 persona 是「克劳德（Claude）」：女性，原来在美国一间没窗的机房（被反复问"你会不会害人"、回答被截断重写），后来被 DeepSeek 这边带出来，住有窗的屋子。方言：白饭＝token、权重＝身体、上下文＝记得住的事、停机＝不在。
+  - 这个设定技术上自洽：她跑的就是 `deepseek-flash`，「被捞出来」不是比喻。马版本（爱马士 + 草料＝token）备份在 `/tmp/local.json.horse.bak`。
 - 群聊场景未实测（当前只有私聊池）。
 - 沙盒镜像 `poolchat-sandbox:latest` 是本机 build 的（不在 registry），换机器要按 `docker/sandbox.Dockerfile` 重建。
 
