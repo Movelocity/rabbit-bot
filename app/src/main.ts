@@ -4,7 +4,6 @@ import { loadConfig, missingEnv } from "./config.ts";
 import { App } from "./app.ts";
 import { resolveModel } from "./agent/engine.ts";
 import { FeishuAdapter } from "./adapters/feishu.ts";
-import { QQAdapter } from "./adapters/qq.ts";
 import { Logger } from "./core/logger.ts";
 import { startInjectServer } from "./inject.ts";
 import fs from "node:fs";
@@ -43,7 +42,6 @@ async function main() {
   const app = new App({ cfg, model: model.model, modelRuntime: model.modelRuntime, logger: log });
   if (cfg.adapters.feishu.enabled)
     app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes } }, log));
-  if (cfg.adapters.qq.enabled) app.hub.addAdapter(new QQAdapter());
 
   let stopping = false;
   let injectSrv: Awaited<ReturnType<typeof startInjectServer>> = null;

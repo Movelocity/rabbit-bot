@@ -36,9 +36,9 @@ npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 
 ```
 src/core/        调度器、消息池、计划、循环守卫、读图、沙盒文件区、容器沙盒
 src/agent/       pi 会话封装（engine）、工具定义（tools）、提示词（prompt）
-src/adapters/    飞书 / QQ / mock
+src/adapters/    飞书 / mock（sim 与测试用）
 src/ctl.ts       运维命令（pause / resume / status / usage / wakes / plans …）
-scripts/         run.sh（启停）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
+scripts/         run.sh（pm2 的前台入口：读 env → 预检 → exec node）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
 docker/          沙盒镜像 Dockerfile
 test/            118 条，node --test
 data/            运行时数据（db / media / sandbox / 会话），.gitignore

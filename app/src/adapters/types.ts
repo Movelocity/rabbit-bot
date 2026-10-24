@@ -1,4 +1,4 @@
-/** IM 适配层插件接口：飞书已实现，QQ 占位，mock 用于本地模拟/测试。 */
+/** IM 适配层插件接口：飞书是实现，mock 用于本地模拟/测试。 */
 import type { InboundMessage, Platform } from "../types.ts";
 
 export interface SendResult { msgId: string }
