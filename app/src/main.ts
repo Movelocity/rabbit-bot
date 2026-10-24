@@ -6,7 +6,7 @@ import { resolveModel } from "./agent/engine.ts";
 import { FeishuAdapter } from "./adapters/feishu.ts";
 import { Logger } from "./core/logger.ts";
 import { startInjectServer } from "./inject.ts";
-import fs from "node:fs";
+import { acquireLock, releaseLock } from "./core/lockfile.ts";
 import path from "node:path";
 
 async function main() {
@@ -21,23 +21,17 @@ async function main() {
   try { model = await resolveModel(cfg); } catch (e) { log.error(`LLM 配置不可用：${(e as Error).message}`); process.exit(2); }
 
   // 单实例锁：两个进程同时连飞书会抢同一条消息、各推各的游标（10-23 踩过：孤儿进程活了 27 小时，
-  // 表现成"图有时能看有时看不到""日志时有时无"）。锁按 data 目录，进程死了自动接锁。
+  // 表现成"图有时能看有时看不到""日志时有时无"）。实现见 core/lockfile.ts ——
+  // 原子占锁（O_EXCL）、确认持有者真的是 poolchat（防 pid 复用误判）、残锁自愈。
   const lockFile = path.join(cfg.dataDir, "run", "main.pid");
-  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-  try {
-    const old = Number(fs.readFileSync(lockFile, "utf8").trim());
-    if (old && old !== process.pid) {
-      try {
-        process.kill(old, 0);
-        log.error(`已有实例在跑（pid ${old}），本次不启动。先 kill ${old}，或删掉 ${lockFile}`);
-        process.exit(3);
-      } catch { /* 旧进程已不在，接锁 */ }
-    }
-  } catch { /* 没有锁文件 */ }
-  fs.writeFileSync(lockFile, String(process.pid));
-  process.on("exit", () => {
-    try { if (Number(fs.readFileSync(lockFile, "utf8").trim()) === process.pid) fs.unlinkSync(lockFile); } catch { /* ignore */ }
-  });
+  const got = acquireLock(lockFile);
+  if (!got.ok) {
+    const since = got.holder.startedAt ? new Date(got.holder.startedAt).toLocaleString("zh-CN") : "未知";
+    log.error(`已有实例在跑（pid ${got.holder.pid}，起于 ${since}），本次不启动。确认真死透了再 kill ${got.holder.pid}`);
+    process.exit(3);
+  }
+  if (got.tookOver) log.warn("接手上一个实例留下的锁（那个进程已经不在了）");
+  process.on("exit", () => releaseLock(lockFile));
 
   const app = new App({ cfg, model: model.model, modelRuntime: model.modelRuntime, logger: log });
   if (cfg.adapters.feishu.enabled)
