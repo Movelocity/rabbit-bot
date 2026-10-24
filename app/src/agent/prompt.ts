@@ -4,6 +4,7 @@ import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
 import { localDay } from "../core/tide.ts";
+import { ensureIdle, idleNow } from "../core/idle.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[]): string {
   return [
@@ -93,6 +94,15 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
       ? `上次主动：${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}`
       : "上次主动：（这是第一次主动开口）",
     `今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`,
+  );
+
+  // 聊天活跃度：只能说明「这个点跟他说他大概会不会接」，不代表他真空着
+  const model = ensureIdle(store, x.now, "Asia/Shanghai");
+  const act = idleNow(model, store, x.now, "Asia/Shanghai");
+  const label = act >= 0.6 ? "这个点他通常会回话" : act >= 0.3 ? "这个点不好说" : "这个点他大概不回话";
+  lines.push(
+    `聊天活跃度 ${act.toFixed(2)}：${label}（样本 ${model.samples} 条 / ${model.days} 天${model.confidence === "low" ? "，置信度低，仅供参考" : ""}）。`
+    + "这只反映他跟你在聊天时活不活跃，不是他此刻有没有空——别拿它当「他现在闲着」用。",
   );
 
   lines.push(...wakeScript(x));

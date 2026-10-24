@@ -211,6 +211,11 @@ export class Store {
     return this.getPlan(Number(r.lastInsertRowid))!;
   }
 
+  /** 聊天活跃度（idle）用：最近窗口内的消息骨架，不带正文 */
+  messagesForIdle(fromTs: number): { seq: number; ts: number; from_self: number }[] {
+    return this.db.prepare("SELECT seq, ts, from_self FROM messages WHERE ts >= ? ORDER BY seq").all(fromTs) as any[];
+  }
+
   // ---------- 潮汐 ----------
   /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）/ landed（对方在窗口内回了） */
   recordTideEvent(e: { plan_id?: number | null; pool_id?: string | null; day: string; ts: number; kind: string;

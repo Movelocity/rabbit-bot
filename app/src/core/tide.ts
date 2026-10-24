@@ -16,11 +16,15 @@ export type AnchorKind = "L0" | "L1" | "L2";
 export interface TideConfig {
   enabled: boolean;
   dailyCap: { L1: number; L2: number };
+  /** idleNow 低于这个值就当他在忙，L2 直接不发（默认 0.3） */
+  busyThreshold?: number;
+  /** idleNow 高于这个值视为高活跃，L2 每日额度翻倍（默认 0.6） */
+  activeThreshold?: number;
 }
 
 export type FireVerdict =
   | { ok: true; anchor: AnchorKind }
-  | { ok: false; reason: "cap" | "disabled"; detail: string };
+  | { ok: false; reason: "cap" | "disabled" | "busy"; detail: string };
 
 /** 本地日历日（Asia/Shanghai 的 YYYY-MM-DD），额度按自然日算 */
 export function localDay(ts: number, tz: string): string {
@@ -32,12 +36,24 @@ export function anchorOf(p: Pick<Plan, "anchor_kind">): AnchorKind {
   return k === "L0" || k === "L1" || k === "L2" ? (k as AnchorKind) : "L2";
 }
 
-export function canFire(store: Store, p: Plan, cfg: TideConfig | undefined, now: number, tz = "Asia/Shanghai"): FireVerdict {
+export function canFire(
+  store: Store, p: Plan, cfg: TideConfig | undefined, now: number, tz = "Asia/Shanghai",
+  ctx: { idleNow?: number } = {},
+): FireVerdict {
   // 没配 tide 就全开：老测试和老调用点不该因为少传参数就炸，闸门缺失也不能拦人
   if (!cfg || !cfg.enabled) return { ok: true, anchor: anchorOf(p) };
   const kind = anchorOf(p);
   if (kind === "L0") return { ok: true, anchor: kind };
-  const cap = cfg.dailyCap[kind] ?? 0;
+
+  const idle = ctx.idleNow;
+  // 他在忙：普通关心（L2）直接不发。L1 是跟进到期的事，比闲聊重要，不拦。
+  if (kind === "L2" && idle !== undefined && idle < (cfg.busyThreshold ?? 0.3)) {
+    return { ok: false, reason: "busy", detail: `现在聊天活跃度 ${idle.toFixed(2)}，低于 ${cfg.busyThreshold ?? 0.3}，不拿闲聊去撞他` };
+  }
+
+  // 高活跃时段把 L2 额度翻倍（只翻 L2：L1 本来就有自己的上限）
+  const base = cfg.dailyCap[kind] ?? 0;
+  const cap = kind === "L2" && idle !== undefined && idle >= (cfg.activeThreshold ?? 0.6) ? base * 2 : base;
   const day = localDay(now, tz);
   const used = store.countTideFired(day, p.pool_id, kind);
   if (used >= cap) {
