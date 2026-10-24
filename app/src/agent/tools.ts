@@ -13,8 +13,16 @@ import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { createSandboxFs } from "../core/sandbox-fs.ts";
 import { runInSandbox } from "../core/sandbox-shell.ts";
+import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 
-export interface ToolDeps { store: Store; hub: Hub; cfg: Config; now: () => number }
+export interface ToolDeps {
+  store: Store;
+  hub: Hub;
+  cfg: Config;
+  now: () => number;
+  /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏 */
+  currentWake?: () => { type: string } | null;
+}
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
 
@@ -29,6 +37,11 @@ export function createTools(d: ToolDeps) {
       content: Type.String({ description: "一条短消息；表情包写 [emoji:中文id]" }),
     }),
     async execute(_id, p) {
+      // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
+      if (d.currentWake?.()?.type === "plan") {
+        const why = coerciveHit(p.content);
+        if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
+      }
       const r = await d.hub.send(p.pool, p.content);
       if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });
       const unconfirmed = r.sentParts.filter((x) => !x.confirmed).length;
