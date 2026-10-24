@@ -79,7 +79,6 @@ export class App {
       currentWake: () => this.activeWake,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
-      alreadySent: () => this.sendsThisTurn > 0,
     });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }

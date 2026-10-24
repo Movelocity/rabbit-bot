@@ -25,8 +25,6 @@ export interface ToolDeps {
   /** 本轮决定不回时的理由（stay_silent）；非空就是已决定不回 */
   silenceReason?: () => string | null;
   markSilent?: (reason: string) => void;
-  /** 本轮已经 send 过几条 */
-  alreadySent?: () => boolean;
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
@@ -48,9 +46,6 @@ export function createTools(d: ToolDeps) {
       reason: Type.String({ description: "一句话：为什么这一轮不用回" }),
     }),
     async execute(_id, p) {
-      if (d.alreadySent?.()) {
-        return txt("这一轮已经发过消息了，不用再标记沉默——两个决定不能同时成立。", { ok: false });
-      }
       d.markSilent?.(p.reason);
       return txt(`已标记：这一轮不回（${p.reason}）。什么都不用再做了，结束这一轮。`, { ok: true, silent: true });
     },
@@ -66,10 +61,6 @@ export function createTools(d: ToolDeps) {
       content: Type.String({ description: "一条短消息；表情包写 [emoji:中文id]" }),
     }),
     async execute(_id, p) {
-      // 这一轮已经用 stay_silent 决定不回了，别再发——两个决定不能同时成立
-      if (d.silenceReason?.()) {
-        return txt("你这一轮已经决定不回了（stay_silent）。别再发，结束这一轮就好。", { ok: false, blocked: "silent" });
-      }
       // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
       if (d.currentWake?.()?.type === "plan") {
         const why = coerciveHit(p.content);
