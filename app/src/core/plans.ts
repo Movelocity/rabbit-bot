@@ -10,6 +10,7 @@ import { parseIsoInTz } from "./time.ts";
 import type { Store } from "./db.ts";
 import type { Plan, Wake } from "../types.ts";
 import { canFire, localDay, anchorOf, type TideConfig } from "./tide.ts";
+import { loadIdle, idleNow } from "./idle.ts";
 
 export interface ScheduleInput { kind: "once" | "cron" | "none"; value?: string | null }
 export type ValidateResult = { ok: true; kind: Plan["schedule_kind"]; schedule: string | null; firstFire: number | null } | { ok: false; error: string };
@@ -95,7 +96,9 @@ export class PlanEngine {
       // 到点了不代表该说：过潮汐闸门（L0 放行；L1/L2 按池 × 天 × 档数额度）
       let fired = false;
       if (fireTs !== null && fresh) {
-        const v = canFire(this.store, p, this.cfg.tide, now, this.cfg.tz);
+        const model = loadIdle(this.store);
+        const idle = model ? idleNow(model, this.store, now, this.cfg.tz) : undefined;
+        const v = canFire(this.store, p, this.cfg.tide, now, this.cfg.tz, { idleNow: idle });
         this.store.recordTideEvent({
           plan_id: p.id,
           pool_id: p.pool_id,

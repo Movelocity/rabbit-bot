@@ -13,7 +13,8 @@
     "start": "node dist/main.js",
     "start:dev": "tsx src/main.ts",
     "test": "node --import tsx --test test/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "idle": "node scripts/idle.mjs"
   },
   "keywords": [],
   "author": "",
