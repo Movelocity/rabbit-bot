@@ -22,9 +22,6 @@ export interface ToolDeps {
   now: () => number;
   /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏 */
   currentWake?: () => { type: string } | null;
-  /** 本轮已经发了几条（硬上限见 send） */
-  sendsThisWake?: () => number;
-  bumpSend?: () => void;
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
@@ -40,17 +37,12 @@ export function createTools(d: ToolDeps) {
       content: Type.String({ description: "一条短消息；表情包写 [emoji:中文id]" }),
     }),
     async execute(_id, p) {
-      // 硬上限 3 条：真人也有一轮说完的时候。提示词会写，但代码不会忘。
-      if ((d.sendsThisWake?.() ?? 0) >= 3) {
-        return txt("这一轮已经连发 3 条了，够了——再多就是在刷屏。剩下的留到下次，或者干脆不说。", { ok: false, blocked: "too-many" });
-      }
       // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
       if (d.currentWake?.()?.type === "plan") {
         const why = coerciveHit(p.content);
         if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
       }
       const r = await d.hub.send(p.pool, p.content);
-      if (r.ok) d.bumpSend?.();
       if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });
       const unconfirmed = r.sentParts.filter((x) => !x.confirmed).length;
       const head = unconfirmed ? `已发送，但有 ${unconfirmed} 段暂未确认出现在聊天里` : "已发送并确认";
