@@ -49,6 +49,8 @@ export class App {
   readonly engine: AgentEngine;
   readonly emoji: EmojiTable;
   private clock: Clock;
+  /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
+  private activeWake: { type: string } | null = null;
   /** 每次唤醒结束后的回调（模拟器/测试用） */
   onWakeDone?: (entry: any) => void;
 
@@ -68,7 +70,7 @@ export class App {
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
-    const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now() });
+    const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now(), currentWake: () => this.activeWake });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
 
@@ -88,6 +90,15 @@ export class App {
 
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
+    this.activeWake = w;
+    try {
+      await this.handleWakeInner(w);
+    } finally {
+      this.activeWake = null;
+    }
+  }
+
+  private async handleWakeInner(w: Wake): Promise<void> {
     const cfg = this.o.cfg;
     const t0 = this.clock.now();
     const entry: any = { ts: new Date(t0).toISOString(), type: w.type, reasons: w.reasons, pools: [...w.pools], plans: w.planFires.map((f) => f.planId) };
