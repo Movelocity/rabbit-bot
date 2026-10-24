@@ -4,13 +4,16 @@
   "description": "聊天池 Agent (pi + 飞书)",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts",
+    "ctl": "tsx src/ctl.ts",
+    "demo": "tsx src/sim.ts --demo",
+    "doctor": "bash scripts/doctor.sh",
+    "inject": "bash scripts/inject.sh",
+    "sbx": "bash scripts/sbx.sh",
+    "sim": "tsx src/sim.ts",
     "start": "node dist/main.js",
     "start:dev": "tsx src/main.ts",
-    "sim": "tsx src/sim.ts",
-    "ctl": "tsx src/ctl.ts",
-    "demo": "tsx src/sim.ts --demo"
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [],
   "author": "",
