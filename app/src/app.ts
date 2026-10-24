@@ -51,6 +51,10 @@ export class App {
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: { type: string } | null = null;
+  /** 本轮是否决定不回（stay_silent）；每轮唤醒重置 */
+  private silenceReason: string | null = null;
+  /** 本轮 send 成功次数 */
+  private sendsThisTurn = 0;
   /** 每次唤醒结束后的回调（模拟器/测试用） */
   onWakeDone?: (entry: any) => void;
 
@@ -70,7 +74,13 @@ export class App {
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
-    const tools = createTools({ store: this.store, hub: this.hub, cfg, now: () => this.clock.now(), currentWake: () => this.activeWake });
+    const tools = createTools({
+      store: this.store, hub: this.hub, cfg, now: () => this.clock.now(),
+      currentWake: () => this.activeWake,
+      silenceReason: () => this.silenceReason,
+      markSilent: (reason: string) => { this.silenceReason = reason; },
+      alreadySent: () => this.sendsThisTurn > 0,
+    });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
 
@@ -91,6 +101,8 @@ export class App {
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
+    this.silenceReason = null;
+    this.sendsThisTurn = 0;
     try {
       await this.handleWakeInner(w);
     } finally {
@@ -189,6 +201,9 @@ export class App {
       }
     }
     const sent = res.toolCalls.filter((c) => c.name === "send" && !c.isError).map((c) => c.args);
+    this.sendsThisTurn = sent.length;
+    if (this.silenceReason) entry.silent = this.silenceReason;
+    entry.sentCount = sent.length;
     // LLM 出错且什么都没发：回滚游标，下次 tick 重试
     if (res.error && !sent.length) for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {
