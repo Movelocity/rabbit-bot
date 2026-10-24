@@ -28,10 +28,10 @@ test("身份映射：同一人跨平台映射到同一 user_id", () => {
   const s = new Store(":memory:");
   const u1 = s.resolveUser("feishu", "ou_a", "A");
   assert.equal(s.resolveUser("feishu", "ou_a"), u1);
-  const u2 = s.resolveUser("qq", "123", "A");
+  const u2 = s.resolveUser("mock", "123", "A");
   assert.notEqual(u1, u2);
-  s.linkIdentity("qq", "123", u1);
-  assert.equal(s.resolveUser("qq", "123"), u1);
+  s.linkIdentity("mock", "123", u1);
+  assert.equal(s.resolveUser("mock", "123"), u1);
 });
 
 test("记忆可见范围：群里的不进私聊，反之亦然", () => {

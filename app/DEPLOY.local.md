@@ -133,7 +133,7 @@ curl -s -X POST http://127.0.0.1:3737/inject \
 
 ## 已知问题 / 待办
 
-- **不能同时用两种方式起进程**：`pm2`（跑 `run.sh fg`）和 `run.sh start`（nohup supervisor）/ 手工 `run.sh fg` 会各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」。10-23 就是这么踩的（pm2 一个 + 手工后台一个，并存约 2 小时）。`src/main.ts` 现在有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），`npm run doctor` 会标出进程数 >1，但**别再手工起第二份**。
+- **进程只能有一套**：pm2（`scripts/run.sh fg`）是唯一入口。曾经还有 `run.sh start`（nohup + supervisor）那套，10-23 两套同时跑起来各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」——那套代码已经删了，别再自己 `node dist/main.js` 起第二份。`src/main.ts` 有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），`npm run doctor` 会把进程数 >1 标出来。
 - `config/local.json` 的 agent.name 是「爱马士」，与 `default.json` 的「小池」不同 —— 想改名改这里。
 - 群聊场景未实测（当前只有私聊池）。
 - 沙盒镜像 `poolchat-sandbox:latest` 是本机 build 的（不在 registry），换机器要按 `docker/sandbox.Dockerfile` 重建。

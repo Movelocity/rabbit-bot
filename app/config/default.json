@@ -51,9 +51,6 @@
       "fetchSenderName": true,
       "reactions": true,
       "logRawEmoji": true
-    },
-    "qq": {
-      "enabled": false
     }
   },
   "emoji": {

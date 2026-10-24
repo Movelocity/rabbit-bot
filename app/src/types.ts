@@ -1,4 +1,4 @@
-export type Platform = "feishu" | "qq" | "mock";
+export type Platform = "feishu" | "mock";
 export type PoolKind = "private" | "group";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 

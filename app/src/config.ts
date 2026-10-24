@@ -22,7 +22,7 @@ export interface Config {
   limits: { dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
-  adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean }; qq: { enabled: boolean } };
+  adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
   sandbox: {
