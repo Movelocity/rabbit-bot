@@ -91,12 +91,15 @@
     },
     "wave": {
       "enabled": true,
-      "delayMin": 30,
-      "peakMin": 45,
+      "delayMin": 10,
+      "peakMin": 20,
       "thr": 0.5,
       "wUser": 0.4,
       "wSelf": 0.25,
-      "horizonH": 24
+      "horizonH": 24,
+      "idleExemptMin": 180,
+      "ratio": 0.5,
+      "maxStages": 3
     }
   }
 }

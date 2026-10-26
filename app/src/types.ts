@@ -55,6 +55,8 @@ export interface Wake {
   type: WakeType;
   pools: Set<string>; // 触发的池
   planFires: { planId: number; fireTs: number }[];
+  /** 水位退潮到档：可以自己找话题开口，也可以不发 */
+  proactive?: { pool: string | null; stage: number; a: number; peak: number; sessionTs: number; detail: string }[];
   reasons: string[];
   enqueuedAt: number;
 }

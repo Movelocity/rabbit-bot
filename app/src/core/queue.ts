@@ -6,8 +6,11 @@ import type { Wake, WakeType } from "../types.ts";
 
 export type WakeHandler = (w: Wake) => Promise<void>;
 
-export function makeWake(type: WakeType, pools: string[] = [], reason = "", planFires: Wake["planFires"] = [], now = Date.now()): Wake {
-  return { type, pools: new Set(pools), planFires: [...planFires], reasons: reason ? [reason] : [], enqueuedAt: now };
+export function makeWake(
+  type: WakeType, pools: string[] = [], reason = "", planFires: Wake["planFires"] = [], now = Date.now(),
+  proactive: NonNullable<Wake["proactive"]> = [],
+): Wake {
+  return { type, pools: new Set(pools), planFires: [...planFires], proactive: proactive.length ? [...proactive] : undefined, reasons: reason ? [reason] : [], enqueuedAt: now };
 }
 
 export class RunQueue {
