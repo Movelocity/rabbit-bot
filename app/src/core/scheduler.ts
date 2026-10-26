@@ -20,6 +20,8 @@ export interface SchedulerDeps {
   poolsWithUnread: () => string[];
   /** 当前到期的计划触发（tick 用），由 PlanEngine 提供 */
   duePlans: (now: number) => Wake["planFires"];
+  /** 水位退潮到档的池（tick 用）：没有未读也可能因为这些池唤醒 agent 自己找话题 */
+  proactivePools?: (now: number) => NonNullable<Wake["proactive"]>;
   log?: (msg: string) => void;
   warn?: (msg: string) => void;
 }
@@ -137,6 +139,13 @@ export class Scheduler {
     const fires = this.d.duePlans(now);
     if (fires.length) {
       this.d.queue.enqueue(makeWake("plan", [], `计划到点 #${fires.map((f) => f.planId).join(",#")}`, fires, now));
+      enqueued = true;
+    }
+    // 水位退潮到档：即使没有未读也要给 agent 一次「要不要自己开口」的机会
+    const pro = this.d.proactivePools?.(now) ?? [];
+    if (pro.length) {
+      const proPools = pro.map((x) => x.pool).filter((x): x is string => !!x);
+      this.d.queue.enqueue(makeWake("tick", proPools, `水位到档：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
       enqueued = true;
     }
     // 正在去抖的池交给去抖处理，tick 不重复唤醒

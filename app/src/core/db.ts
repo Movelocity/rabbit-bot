@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE TABLE IF NOT EXISTS tide_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, pool_id TEXT, day TEXT NOT NULL, ts INTEGER NOT NULL,
   kind TEXT NOT NULL, anchor_kind TEXT, anchor_ref TEXT, -- anchor_ref 已废弃（没有读者），列留着是因为 SQLite 删列要重建表
-  reason TEXT, why TEXT, wave_a REAL -- 判定当时的水位，调参只看这一列
+  reason TEXT, why TEXT, wave_a REAL, -- 判定当时的水位，调参只看这一列
+  stage INTEGER -- 退潮第几档：0 = 首档，1.. = 每退一半一档
 );
 CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
@@ -75,6 +76,7 @@ export class Store {
     }
     // 水位场（2026-10-26）：判定当时的水位，调参只看这一列
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
+    try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
   }
   close() { this.db.close(); }
 
@@ -224,9 +226,17 @@ export class Store {
   // ---------- 潮汐 ----------
   /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）。没有 landed——响应率那套没实现，别在注释里假装有 */
   recordTideEvent(e: { plan_id?: number | null; pool_id?: string | null; day: string; ts: number; kind: string;
-    anchor_kind?: string | null; reason?: string | null; why?: string | null; wave_a?: number | null }) {
-    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,reason,why,wave_a) VALUES(?,?,?,?,?,?,?,?,?)`)
-      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null, e.wave_a ?? null);
+    anchor_kind?: string | null; reason?: string | null; why?: string | null; wave_a?: number | null; stage?: number | null }) {
+    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,reason,why,wave_a,stage) VALUES(?,?,?,?,?,?,?,?,?,?)`)
+      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null, e.wave_a ?? null, e.stage ?? null);
+  }
+
+  /** 这个会话（sinceTs 之后）已经用掉的退潮档位。只看「真的开口过」的记录。 */
+  usedWaveStages(poolId: string | null, sinceTs: number): number[] {
+    const rows = poolId === null
+      ? this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave')`).all(sinceTs)
+      : this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND pool_id = ? AND kind IN ('fired','wave')`).all(sinceTs, poolId);
+    return (rows as { stage: number }[]).map((r) => r.stage);
   }
   /** 水位场用：某池（null=跨池）在 [fromTs, toTs] 内的消息骨架，不含正文 */
   messagesForWave(poolId: string | null, fromTs: number, toTs: number): { ts: number; from_self: number }[] {

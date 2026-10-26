@@ -25,6 +25,10 @@ export interface WaveConfig {
   wSelf: number;      // 自己说出口的消息权重
   horizonH: number;   // 只累加这么久以内的脉冲（6h 后 K 已归零，再长是浪费）
   idleExemptMin: number; // 最后一条消息超过这么久就不拦了：这不是「刚聊完」，是「冷场了该开口」
+  /** 退潮档位比例：水位每落到峰值的这个比例，就给一个候选点（0.5 = 每退一半给一次） */
+  ratio: number;
+  /** 一个会话最多给几个候选点 */
+  maxStages: number;
 }
 
 export const WAVE_DEFAULTS: WaveConfig = {
@@ -36,6 +40,8 @@ export const WAVE_DEFAULTS: WaveConfig = {
   wSelf: 0.25,
   horizonH: 24,
   idleExemptMin: 180,
+  ratio: 0.5,
+  maxStages: 3,
 };
 
 export function waveCfg(c?: Partial<WaveConfig> | null): WaveConfig {
@@ -185,4 +191,61 @@ export function waveSchedule(
     prevA = a;
   }
   return out;
+}
+
+export interface WaveCandidate {
+  ok: boolean;
+  stage: number;      // 0 = 首档（水量刚够），1.. = 退潮第几档
+  a: number;
+  peak: number;
+  sessionTs: number;  // 这一轮对话的第一条消息（drained 之后），当会话 id 用
+  detail: string;
+}
+
+/**
+ * tick 用的「该不该主动找话题」判定：不是一次性的闸门，而是退潮档位。
+ *
+ * 会话 = drained（上次真发）之后的消息。峰值 = 这个会话里水位的最高点。
+ * 水位每从峰值退到 ratio 倍，就是新的一档，每档只给一次机会；
+ * 档位只是「可以开口」的许可，说什么、发不发由 agent 自己决定。
+ */
+export function waveCandidate(
+  store: Pick<Store, "messagesForWave" | "lastTideFired" | "usedWaveStages">,
+  poolId: string | null, now: number, c?: Partial<WaveConfig> | null,
+): WaveCandidate | null {
+  const cfg = waveCfg(c);
+  if (!cfg.enabled) return null;
+  const drained = store.lastTideFired(poolId)?.ts ?? 0;
+  const rows = store.messagesForWave(poolId, now - cfg.horizonH * 3600e3, now);
+  const pulses = rows.map((r) => ({ ts: r.ts, fromSelf: !!r.from_self }));
+
+  // 会话起点：drained 之后的第一条消息
+  const sessionStart = pulses.find((p) => p.ts > drained)?.ts ?? 0;
+  if (!sessionStart) return null;
+  const lastTs = Math.max(...pulses.map((p) => p.ts));
+  if (now - lastTs < cfg.delayMin * 60e3) {
+    return { ok: false, stage: -1, a: 0, peak: 0, sessionTs: sessionStart, detail: `还在不打扰期（最后一条 ${Math.round((now - lastTs) / 60e3)} 分钟前）` };
+  }
+
+  // 峰值：从会话开始扫到现在
+  let peak = 0;
+  for (let t = sessionStart; t <= now; t += 60e3) {
+    peak = Math.max(peak, level(pulses.filter((p) => p.ts <= t), t, cfg).a);
+  }
+  if (peak < cfg.thr) return { ok: false, stage: -1, a: 0, peak, sessionTs: sessionStart, detail: "这个会话的水位峰值都没到阈值" };
+
+  const a = level(pulses, now, cfg).a;
+  const raw = Math.ceil(Math.log(a / peak) / Math.log(cfg.ratio));
+  const stage = a >= cfg.thr && raw <= 0 ? 0 : raw;   // 水位还在峰值附近 = 首档（注意 -0）
+  if (!Number.isFinite(stage) || stage < 0) return { ok: false, stage: -1, a, peak, sessionTs: sessionStart, detail: "水位已退回峰值以上？" };
+  if (stage > cfg.maxStages) return { ok: false, stage, a, peak, sessionTs: sessionStart, detail: `已经退到第 ${stage} 档，超过上限 ${cfg.maxStages}` };
+
+  const used = store.usedWaveStages(poolId, sessionStart);
+  if (used.includes(stage)) {
+    return { ok: false, stage, a, peak, sessionTs: sessionStart, detail: `第 ${stage} 档已经用过（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）` };
+  }
+  return {
+    ok: true, stage, a, peak, sessionTs: sessionStart,
+    detail: `退潮第 ${stage}/${cfg.maxStages} 档（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）`,
+  };
 }

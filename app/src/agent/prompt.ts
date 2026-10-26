@@ -138,6 +138,13 @@ function wakeScript(x: WakePromptInput): string[] {
       "  用了 stay_silent 就一个字都别发——别用 send 发一句「好，那我不回」，那句话本身就是回。",
     );
   } else if (x.wake.type === "tick") {
+    if (x.wake.proactive?.length) {
+      out.push(
+        `【水位】${x.wake.proactive.map((p) => p.detail).join("；")}。这一轮不是有人找你，是水位退到了这一档——给你一次机会。`,
+        "自己找话题：想得到具体的一件事（他今天说的、你记得的、他可能想聊的）→ send；想不出来 → stay_silent。",
+        "不发不算失败，这一档就过去了，过几个小时退到下一档还会有一次机会。别为了「醒了就做点什么」硬凑一句话。",
+      );
+    }
     out.push(
       "【这一轮】定时检查，没有人在等你。这一轮的重点是判断，不是说话。",
       "按顺序回答，答不完就停：",

@@ -92,6 +92,9 @@ export function validateConfig(cfg: Config): void {
     if (!(p > d)) throw new Error("config: tide.wave.peakMin 必须大于 delayMin（峰要落在不打扰期之后）");
     if (!(thr > 0 && thr <= 1)) throw new Error("config: tide.wave.thr 必须在 (0,1]");
     if (!(wu < thr)) throw new Error("config: tide.wave.wUser 必须小于 thr，否则阈值形同虚设");
+    const ratio = wv.ratio ?? 0.5, stages = wv.maxStages ?? 3;
+    if (!(ratio > 0 && ratio < 1)) throw new Error("config: tide.wave.ratio 必须在 (0,1)，每退一半给一档就是 0.5");
+    if (!(Number.isInteger(stages) && stages >= 1)) throw new Error("config: tide.wave.maxStages 必须是 >=1 的整数");
   }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");

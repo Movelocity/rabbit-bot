@@ -5,6 +5,7 @@ import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
 import { PlanEngine } from "./core/plans.ts";
+import { waveCandidate } from "./core/wave.ts";
 import { RunQueue } from "./core/queue.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
@@ -71,6 +72,7 @@ export class App {
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
+      proactivePools: (now) => this.proactivePools(now),
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
@@ -95,6 +97,21 @@ export class App {
     await this.hub.stopAdapters();
     await this.engine.dispose();
     this.store.close();
+  }
+
+  /**
+   * 每个 tick 问一次：哪些池的水位退到了新的一档。
+   * 这里不决定说不说，只决定「给她一次机会」——说什么、发不发交给 agent。
+   */
+  private proactivePools(now: number): NonNullable<Wake["proactive"]> {
+    const cfg = this.o.cfg.tide?.wave;
+    if (!cfg?.enabled) return [];
+    const out: NonNullable<Wake["proactive"]> = [];
+    for (const pool of this.store.listPools()) {
+      const c = waveCandidate(this.store, pool.pool_id, now, cfg);
+      if (c?.ok) out.push({ pool: pool.pool_id, stage: c.stage, a: c.a, peak: c.peak, sessionTs: c.sessionTs, detail: c.detail });
+    }
+    return out;
   }
 
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
@@ -131,9 +148,14 @@ export class App {
     const plans: Plan[] = w.planFires.map((f) => this.store.getPlan(f.planId)).filter((p): p is Plan => !!p);
     const cursorsBefore = new Map(this.store.poolsWithUnread().map((p) => [p, this.store.getCursor(p)]));
     const unread = this.hub.takeUnread();
-    if (!unread.length && !plans.length) return finish("skipped:nothing-new");
+    const proactive = w.proactive ?? [];
+    if (!unread.length && !plans.length && !proactive.length) return finish("skipped:nothing-new");
 
-    const involved = new Set<string>([...unread.map((m) => m.pool_id), ...plans.map((p) => p.pool_id).filter((x): x is string => !!x)]);
+    const involved = new Set<string>([
+      ...unread.map((m) => m.pool_id),
+      ...plans.map((p) => p.pool_id).filter((x): x is string => !!x),
+      ...proactive.map((x) => x.pool).filter((x): x is string => !!x),
+    ]);
     const context = new Map<string, StoredMessage[]>();
     const memories = new Map<string, { user_id: string; items: { id: number; content: string }[] }[]>();
     for (const pid of involved) {
@@ -201,6 +223,15 @@ export class App {
     }
     const sent = res.toolCalls.filter((c) => c.name === "send" && !c.isError).map((c) => c.args);
     this.sendsThisTurn = sent.length;
+    // 水位档位要「真的开口了」才记账：没发就留着，下一个 tick 还有机会
+    if (sent.length && proactive.length) {
+      for (const p of proactive) {
+        this.store.recordTideEvent({
+          pool_id: p.pool, day, ts: this.clock.now(), kind: "wave", anchor_kind: "L2",
+          wave_a: p.a, stage: p.stage, reason: p.detail,
+        });
+      }
+    }
     if (this.silenceReason) entry.silent = this.silenceReason;
     entry.sentCount = sent.length;
     // LLM 出错且什么都没发：回滚游标，下次 tick 重试

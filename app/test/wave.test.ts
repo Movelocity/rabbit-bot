@@ -179,3 +179,52 @@ test("时刻表：聊得越多，序列越长", () => {
   const lots = waveSchedule(many, NOW + 19 * MIN, cfg);
   assert.ok(lots.length >= few.length, `多的该不短于少的：${lots.length} vs ${few.length}`);
 });
+
+// ---------- 退潮档位（tick 用） ----------
+
+const candCfg = () => ({ delayMin: 10, peakMin: 20, thr: 0.5, wUser: 0.4, wSelf: 0.25, ratio: 0.5, maxStages: 3 });
+import { waveCandidate } from "../src/core/wave.ts";
+
+test("退潮档位：三条消息攒够水，首档给机会", () => {
+  const s = new Store(":memory:");
+  const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
+  s.insertMessage(msg({ ts: NOW + 3 * MIN }));
+  s.insertMessage(msg({ ts: NOW + 6 * MIN }));
+  const c = waveCandidate(s, pool, NOW + 20 * MIN, candCfg())!;
+  assert.equal(c.ok, true);
+  assert.equal(c.stage, 0);
+});
+
+test("退潮档位：不打扰期内不给机会", () => {
+  const s = new Store(":memory:");
+  const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
+  s.insertMessage(msg({ ts: NOW + 3 * MIN }));
+  const c = waveCandidate(s, pool, NOW + 5 * MIN, candCfg())!;
+  assert.equal(c.ok, false);
+  assert.match(c.detail, /不打扰期/);
+});
+
+test("退潮档位：同一档只给一次，退到下一档才有第二次", () => {
+  const s = new Store(":memory:");
+  const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
+  s.insertMessage(msg({ ts: NOW + 3 * MIN }));
+  s.insertMessage(msg({ ts: NOW + 6 * MIN }));
+  const now = NOW + 20 * MIN;
+  const c = waveCandidate(s, pool, now, candCfg())!;
+  assert.equal(c.ok, true);
+  // 真开口了 → 记这一档
+  s.recordTideEvent({ pool_id: pool, day: "2026-10-26", ts: now, kind: "wave", anchor_kind: "L2", stage: c.stage, wave_a: c.a });
+  assert.equal(waveCandidate(s, pool, now + 1 * MIN, candCfg())!.ok, false, "同一档不能连着给");
+  // 水位再退一半 → 下一档
+  const later = now + 60 * MIN;
+  const c2 = waveCandidate(s, pool, later, candCfg())!;
+  assert.ok(c2.stage > c.stage, `该退到更后面的档：${c2.stage} vs ${c.stage}`);
+});
+
+test("退潮档位：单个会话水位不够就永远没机会", () => {
+  const s = new Store(":memory:");
+  const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
+  const c = waveCandidate(s, pool, NOW + 30 * MIN, candCfg())!;
+  assert.equal(c.ok, false);
+  assert.equal(c.peak, 0.4);
+});

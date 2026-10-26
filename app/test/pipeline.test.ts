@@ -168,6 +168,31 @@ test("L2 计划到点但刚聊完：被水位拦下，记 skip（带水位），
   await t.done();
 });
 
+test("tick：没有未读，但水位退到档 → 仍然给 agent 一次自己找话题的机会", async () => {
+  const t = await setup();
+  const now = t.clock.now();
+  // 三轮对话，都直接入库（不进未读队列），模拟「聊完了、人没再说话」
+  let lastMsg: any = null;
+  for (const [i, min] of [40, 37, 34].entries()) {
+    lastMsg = t.app.store.insertMessage({
+      platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `w${i}`,
+      sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
+      text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
+      reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+    });
+  }
+  // 这些消息「已经被读过了」：把游标推到最后，留出「没未读但水位还高」的局面
+  t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
+  assert.equal(t.app.store.poolsWithUnread().length, 0, "前提：没有未读");
+  const enqueued = t.app.scheduler.tick();
+  assert.equal(enqueued, true, "水位到档时 tick 必须入队");
+  await t.settle(0);
+  const last = t.wakes[t.wakes.length - 1];
+  assert.equal(last.type, "tick");
+  assert.notEqual(last.outcome, "skipped:nothing-new", "不该被当成「没新东西」跳过");
+  await t.done();
+});
+
 test("记忆按 user_id 存，来源与可见范围默认按池类型", async () => {
   const t = await setup();
   t.dm("记住我喜欢喝茶");
