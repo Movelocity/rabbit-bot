@@ -140,7 +140,8 @@ test("暂停开关：暂停时不唤醒，恢复后 tick 处理积压", async ()
 });
 
 test("计划：Agent 用 plan_add 写计划 → 到点 tick 命中 → 走队列唤醒并提醒", async () => {
-  const t = await setup();
+  // 这条测的是「计划链路」，不是时机：关掉水位判定，否则刚聊完 30 秒的 L2 计划会被拦下
+  const t = await setup({ tide: { wave: { enabled: false } } });
   t.dm("/plan 提醒我");
   await t.settle(30_000);
   const plans = t.app.store.listPlans();
@@ -151,6 +152,19 @@ test("计划：Agent 用 plan_add 写计划 → 到点 tick 命中 → 走队列
   assert.ok(pw, "应有计划唤醒");
   assert.ok(t.mock.sent.some((s) => s.content.startsWith("⏰ 提醒")));
   assert.equal(t.app.store.getPlan(plans[0].id)!.status, "done");
+  await t.done();
+});
+
+test("L2 计划到点但刚聊完：被水位拦下，记 skip（带水位），不弹计划", async () => {
+  const t = await setup();
+  t.dm("/plan 提醒我");
+  await t.settle(30_000);
+  await t.settle(120_000);
+  assert.equal(t.wakes.some((w) => w.type === "plan"), false, "聊完 30 秒就弹计划，正是水位要挡的");
+  const ev = t.app.store.recentTideEvents(5).find((e) => e.kind === "skip");
+  assert.ok(ev, "该记一条 skip");
+  assert.match(String(ev.reason), /水位/);
+  assert.equal(typeof ev.wave_a, "number", "水位要落库，调参只看这列");
   await t.done();
 });
 

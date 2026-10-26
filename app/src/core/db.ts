@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS messages (
   UNIQUE(platform, msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pool ON messages(pool_id, seq);
+CREATE INDEX IF NOT EXISTS idx_messages_pool_ts ON messages(pool_id, ts);
 CREATE TABLE IF NOT EXISTS cursors (pool_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS identities (
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE TABLE IF NOT EXISTS tide_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, pool_id TEXT, day TEXT NOT NULL, ts INTEGER NOT NULL,
   kind TEXT NOT NULL, anchor_kind TEXT, anchor_ref TEXT, -- anchor_ref 已废弃（没有读者），列留着是因为 SQLite 删列要重建表
-  reason TEXT, why TEXT
+  reason TEXT, why TEXT, wave_a REAL -- 判定当时的水位，调参只看这一列
 );
 CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
@@ -72,6 +73,8 @@ export class Store {
     for (const col of ["anchor_kind TEXT", "anchor_ref TEXT", "why TEXT"]) {
       try { this.db.exec(`ALTER TABLE plans ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
+    // 水位场（2026-10-26）：判定当时的水位，调参只看这一列
+    try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
   }
   close() { this.db.close(); }
 
@@ -221,9 +224,18 @@ export class Store {
   // ---------- 潮汐 ----------
   /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）。没有 landed——响应率那套没实现，别在注释里假装有 */
   recordTideEvent(e: { plan_id?: number | null; pool_id?: string | null; day: string; ts: number; kind: string;
-    anchor_kind?: string | null; reason?: string | null; why?: string | null }) {
-    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,reason,why) VALUES(?,?,?,?,?,?,?,?)`)
-      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null);
+    anchor_kind?: string | null; reason?: string | null; why?: string | null; wave_a?: number | null }) {
+    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,reason,why,wave_a) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null, e.wave_a ?? null);
+  }
+  /** 水位场用：某池（null=跨池）在 [fromTs, toTs] 内的消息骨架，不含正文 */
+  messagesForWave(poolId: string | null, fromTs: number, toTs: number): { ts: number; from_self: number }[] {
+    if (poolId === null) {
+      return this.db.prepare("SELECT ts, from_self FROM messages WHERE ts >= ? AND ts <= ? ORDER BY ts")
+        .all(fromTs, toTs) as any[];
+    }
+    return this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id = ? AND ts >= ? AND ts <= ? ORDER BY ts")
+      .all(poolId, fromTs, toTs) as any[];
   }
   /** 今天某个池、某一档已经真发了几条（L0 不占额度，不会问到这里） */
   countTideFired(day: string, poolId: string | null, anchorKind: string): number {

@@ -10,12 +10,15 @@
  */
 import type { Store } from "./db.ts";
 import type { Plan } from "../types.ts";
+import type { WaveConfig } from "./wave.ts";
 
 export type AnchorKind = "L0" | "L1" | "L2";
 
 export interface TideConfig {
   enabled: boolean;
   dailyCap: { L1: number; L2: number };
+  /** 水位场：只作用于 L2（普通关心）的时机。缺省 = 用 WAVE_DEFAULTS；enabled:false = 完全不参与 */
+  wave?: Partial<WaveConfig>;
 }
 
 export type FireVerdict =
