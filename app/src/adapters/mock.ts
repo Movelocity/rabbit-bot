@@ -9,6 +9,8 @@ export class MockAdapter implements IMAdapter {
   sent: MockSent[] = [];
   private sink: ((m: InboundMessage) => void) | null = null;
   private n = 0;
+  /** 进程级随机前缀：重启后自增会从 0 开始，不加前缀会跟库里已有的 msg_id 撞 UNIQUE */
+  private readonly boot = Math.random().toString(36).slice(2, 7);
   onSent?: (s: MockSent) => void;
   /** 发送后延迟“出现在聊天里”的毫秒数；-1 表示永不出现（测试确认失败） */
   deliveryDelayMs = 0;
@@ -22,7 +24,7 @@ export class MockAdapter implements IMAdapter {
     if (!this.sink) throw new Error("mock adapter not started");
     const m: InboundMessage = {
       platform: "mock", external_chat_id: opts.chat, pool_kind: opts.kind, pool_title: opts.title ?? opts.chat,
-      msg_id: opts.msgId ?? `in-${++this.n}`, sender_id: opts.from, sender_name: opts.name ?? opts.from, ts: opts.ts ?? Date.now(),
+      msg_id: opts.msgId ?? `in-${this.boot}-${++this.n}`, sender_id: opts.from, sender_name: opts.name ?? opts.from, ts: opts.ts ?? Date.now(),
       text: opts.text, reply_to: null, mentions: opts.mentionMe ? [this.selfId] : [], is_mention_me: !!opts.mentionMe,
       media_type: opts.media ?? "text",
     };
@@ -31,7 +33,7 @@ export class MockAdapter implements IMAdapter {
   }
 
   private record(chat: string, kind: MockSent["kind"], content: string, parts?: RichPart[]): SendResult {
-    const s: MockSent = { chat, kind, content, parts, msgId: `out-${++this.n}`, ts: Date.now() };
+    const s: MockSent = { chat, kind, content, parts, msgId: `out-${this.boot}-${++this.n}`, ts: Date.now() };
     this.sent.push(s);
     if (this.deliveryDelayMs >= 0) setTimeout(() => this.delivered.add(s.msgId), this.deliveryDelayMs);
     this.onSent?.(s);
