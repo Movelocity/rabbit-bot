@@ -192,7 +192,7 @@ export class FeishuAdapter implements IMAdapter {
   /** 拉取消息里的图片 → 压缩落盘。8 秒超时或失败返回 null，消息本身照常入池（文本降级为 [图片]）。 */
   private async downloadImage(messageId: string, imageKey: string): Promise<Attachment | null> {
     const work = (async () => {
-      const tmp = path.join(os.tmpdir(), `poolchat-${messageId}.img`);
+      const tmp = path.join(os.tmpdir(), `rabbit-bot-${messageId}.img`);
       const res: any = await this.client.im.messageResource.get({
         path: { message_id: messageId, file_key: imageKey },
         params: { type: "image" },

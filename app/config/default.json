@@ -76,8 +76,8 @@
     "maxReadChars": 8000,
     "shell": {
       "enabled": true,
-      "container": "poolchat-sbx",
-      "image": "poolchat-sandbox:latest",
+      "container": "rabbit-bot-sbx",
+      "image": "rabbit-bot-sandbox:latest",
       "timeoutMs": 10000,
       "maxOutputChars": 8000,
       "network": "bridge"

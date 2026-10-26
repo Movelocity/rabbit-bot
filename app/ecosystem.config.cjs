@@ -1,9 +1,9 @@
 // pm2 托管（本机 macOS；launchctl bootstrap 在 Hermes 网关内被拦，用 pm2 做持久化）
 //   pm2 start ecosystem.config.cjs && pm2 save
-// 环境变量由 scripts/run.sh 在 preflight 里 source ~/.config/poolchat/env，本文件不写密钥。
+// 环境变量由 scripts/run.sh 在 preflight 里 source ~/.config/rabbit-bot/env，本文件不写密钥。
 module.exports = {
   apps: [{
-    name: "poolchat",
+    name: "rabbit-bot",
     cwd: __dirname,
     script: "scripts/run.sh",
     args: "fg",

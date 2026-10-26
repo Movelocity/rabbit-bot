@@ -6,7 +6,7 @@ import path from "node:path";
 import { createSandboxFs, SandboxPathError } from "../src/core/sandbox-fs.ts";
 
 function mk(): { fsbox: ReturnType<typeof createSandboxFs>; root: string; outside: string } {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-sbox-"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-sbox-"));
   const root = path.join(base, "sandbox");
   const outside = path.join(base, "outside");
   fs.mkdirSync(root);

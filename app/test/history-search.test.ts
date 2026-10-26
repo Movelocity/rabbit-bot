@@ -16,7 +16,7 @@ const msg = (text: string, sender = "主人") => ({
 });
 
 function setup(lines: string[]) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-hist-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-hist-"));
   const cfg = { ...loadConfig(), dataDir };
   const store = new Store(":memory:");
   for (const l of lines) store.insertMessage(msg(l) as any);

@@ -14,7 +14,7 @@ const PNG_1PX = Buffer.from(
 );
 
 function setup() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-tool-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-tool-"));
   const cfg = { ...loadConfig(), dataDir };
   const store = new Store(":memory:");
   const hub = {} as any; // view_image / list_images 不用 hub

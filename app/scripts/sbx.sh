@@ -8,8 +8,8 @@
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
-NAME="poolchat-sbx"
-IMAGE="poolchat-sandbox:latest"
+NAME="rabbit-bot-sbx"
+IMAGE="rabbit-bot-sandbox:latest"
 
 case "${1:-status}" in
   status)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# poolchat 前台启动。pm2 的 ecosystem.config.cjs 调的就是 `run.sh fg`。
+# rabbit-bot 前台启动。pm2 的 ecosystem.config.cjs 调的就是 `run.sh fg`。
 # 只干三件事：读凭据 → 预检 → exec node。进程托管交给 pm2，
 # 别再手工跑第二份——两个进程会抢同一条飞书消息（见 docs/NOTES.md）。
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ENV_FILE="${POOLCHAT_ENV_FILE:-$HOME/.config/poolchat/env}"
+ENV_FILE="${RABBIT_BOT_ENV_FILE:-$HOME/.config/rabbit-bot/env}"
 
 # pi 要求 Node >= 22.19；本机装在 ~/.local/node22 时优先用它
 [ -x "$HOME/.local/node22/bin/node" ] && export PATH="$HOME/.local/node22/bin:$PATH"

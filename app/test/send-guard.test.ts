@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 
 /** 假 Hub：记下每次 send 的内容，永远成功。 */
 function setup(opts: { wake?: string } = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-send-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-send-"));
   const cfg = { ...loadConfig(), dataDir };
   const sent: string[] = [];
   const hub = {

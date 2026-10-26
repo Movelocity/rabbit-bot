@@ -14,8 +14,8 @@ npm run doctor
 
 ```bash
 npm run build                 # tsc
-pm2 restart poolchat          # 改完代码必须 build + restart，缺一不可
-pm2 logs poolchat --lines 50
+pm2 restart rabbit-bot          # 改完代码必须 build + restart，缺一不可
+pm2 logs rabbit-bot --lines 50
 pm2 list
 ```
 
@@ -28,7 +28,7 @@ npm run inject -- "帮我看下池子里最近聊了什么"          # sender �
 npm run inject -- "..." 某人                          # 指定发送者
 ```
 
-背后是 `POST http://127.0.0.1:3737/inject` + `x-poolchat-token`。服务只监听回环，token 没配或不对一律拒绝（fail-closed）。
+背后是 `POST http://127.0.0.1:3737/inject` + `x-rabbit-bot-token`。服务只监听回环，token 没配或不对一律拒绝（fail-closed）。
 
 ## 沙盒容器
 
@@ -40,7 +40,7 @@ npm run sbx -- image         # 改过 docker/sandbox.Dockerfile 后重建镜像
 npm run sbx -- clean         # 清空 data/sandbox（会二次确认）
 ```
 
-容器 `poolchat-sbx`，边界写在 `src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 里，**改那里就是改安全边界**。
+容器 `rabbit-bot-sbx`，边界写在 `src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 里，**改那里就是改安全边界**。
 
 ## 运维查询（ctl）
 
@@ -66,7 +66,7 @@ npm run typecheck
 
 | 现象 | 先看这个 |
 |---|---|
-| 不回消息 | `npm run doctor` → 进程数是不是 0；`pm2 logs poolchat` |
+| 不回消息 | `npm run doctor` → 进程数是不是 0；`pm2 logs rabbit-bot` |
 | 同一句话回两次 / 图时好时坏 | 进程数 >1。`pgrep -f dist/main.js`，杀多余的那个 |
 | `skipped:nothing-new` 大量出现 | 双进程抢游标的历史痕迹，或 send 期间又来了消息（图会走 pendingMedia） |
 | 容器相关工具报错 | `npm run sbx -- status`；容器不在就 `npm run sbx -- rebuild` 让它自建 |

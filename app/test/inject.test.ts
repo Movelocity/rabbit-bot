@@ -11,7 +11,7 @@ import { loadConfig } from "../src/config.ts";
 const log: any = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, wake: () => {} };
 
 function setup() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-inject-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-inject-"));
   const cfg = { ...loadConfig(), dataDir, inject: { port: 0 } };
   const store = new Store(":memory:");
   const hub = new Hub(store, cfg, log, {} as any);
@@ -28,22 +28,22 @@ const TOKEN = "0123456789abcdef0123456789abcdef";
 
 test("没有 token 就不启动（fail-closed）", async () => {
   const { cfg, store, hub } = setup();
-  const old = process.env.POOLCHAT_INJECT_TOKEN;
-  delete process.env.POOLCHAT_INJECT_TOKEN;
+  const old = process.env.RABBIT_BOT_INJECT_TOKEN;
+  delete process.env.RABBIT_BOT_INJECT_TOKEN;
   const srv = await startInjectServer({ cfg, hub, store, log });
   assert.equal(srv, null);
-  if (old) process.env.POOLCHAT_INJECT_TOKEN = old;
+  if (old) process.env.RABBIT_BOT_INJECT_TOKEN = old;
 });
 
 test("本地入口：鉴权、入池、参数校验", async () => {
   const { cfg, store, hub } = setup();
-  process.env.POOLCHAT_INJECT_TOKEN = TOKEN;
+  process.env.RABBIT_BOT_INJECT_TOKEN = TOKEN;
   const srv = await startInjectServer({ cfg, hub, store, log });
   assert.ok(srv, "应当启动");
   const port = (srv!.address() as any).port;
   const url = `http://127.0.0.1:${port}/inject`;
   const post = (body: any, tok = TOKEN) =>
-    fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-poolchat-token": tok }, body: JSON.stringify(body) });
+    fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-rabbit-bot-token": tok }, body: JSON.stringify(body) });
 
   try {
     // token 不对

@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 const cfg = { ...loadConfig(), agent: { name: "克劳德", persona: "配置里的人设" } } as any;
 
 function tmpFile(name: string): string {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-persona-")), name);
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-persona-")), name);
 }
 
 test("没有 persona.md 时退回 config.agent.persona（文件缺失不该让进程起不来）", () => {

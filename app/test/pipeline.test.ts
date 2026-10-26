@@ -13,7 +13,7 @@ import { FakeClock } from "../src/core/clock.ts";
 import { Logger } from "../src/core/logger.ts";
 
 async function setup(over: any = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-test-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-test-"));
   const cfg = loadConfig({
     dataDir, logDir: path.join(dataDir, "logs"),
     send: { confirmWaitMs: 30 }, llm: { provider: "faux", model: "faux-brain" },

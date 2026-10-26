@@ -9,7 +9,7 @@
  *   --memory 512m --pids-limit 64 --cpus 1（/tmp 是 256m 的 tmpfs，pip 装包落这里）
  *   只把 data/sandbox 挂成 /work，宿主其余路径在容器里根本不存在
  *
- * 所以即使模型在容器里跑 `cat ~/.config/poolchat/env`，它看到的是 No such file。
+ * 所以即使模型在容器里跑 `cat ~/.config/rabbit-bot/env`，它看到的是 No such file。
  */
 import { execFile } from "node:child_process";
 

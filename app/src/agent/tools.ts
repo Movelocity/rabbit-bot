@@ -236,7 +236,7 @@ export function createTools(d: ToolDeps) {
   });
 
   // 读本地图片进上下文。只允许两个沙箱目录：data/media/（聊天里收到的图）和 data/inbox/（手动放的）。
-  // poolchat 收的是任意飞书用户消息，一句提示注入就能让它读走 ~/.ssh 或凭据文件，所以路径必须锁死在这两个根下。
+  // rabbit-bot 收的是任意飞书用户消息，一句提示注入就能让它读走 ~/.ssh 或凭据文件，所以路径必须锁死在这两个根下。
   const mediaDir = path.join(d.cfg.dataDir, "media");
   const inboxDir = path.join(d.cfg.dataDir, "inbox");
   const viewCacheDir = path.join(d.cfg.dataDir, "cache");

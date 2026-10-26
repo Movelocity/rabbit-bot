@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 
 // codemode 沙箱的隔离边界：脚本里除了 tools.*，什么都拿不到。
-// 这条测试是给 poolchat 开 codemode 的安全前提，改动沙箱配置时先看它。
+// 这条测试是给 rabbit-bot 开 codemode 的安全前提，改动沙箱配置时先看它。
 
 function out(result: { output?: Array<{ text?: string }> }): string {
   return (result.output ?? []).map((o) => o.text ?? "").join("");

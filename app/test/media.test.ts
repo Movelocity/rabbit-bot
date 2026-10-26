@@ -14,7 +14,7 @@ const PNG_1PX = Buffer.from(
 );
 
 function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-media-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-media-"));
 }
 
 test("saveImage 不放大图：小图保持原尺寸", () => {
