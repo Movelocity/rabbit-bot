@@ -1,5 +1,6 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
+import type { WaveConfig } from "./core/wave.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +22,7 @@ export interface Config {
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: { dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
-  tide: { enabled: boolean; dailyCap: { L1: number; L2: number } };
+  tide: { enabled: boolean; dailyCap: { L1: number; L2: number }; wave?: Partial<WaveConfig> };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
@@ -82,6 +83,15 @@ export function validateConfig(cfg: Config): void {
     const { L1, L2 } = cfg.tide.dailyCap;
     if (!(Number.isInteger(L1) && L1 >= 0)) throw new Error("config: tide.dailyCap.L1 必须是 >=0 的整数");
     if (!(Number.isInteger(L2) && L2 >= 0)) throw new Error("config: tide.dailyCap.L2 必须是 >=0 的整数");
+  }
+  // 水位场定标：wUser 必须 < thr，否则单条孤立消息就能过阈值，整套机制退化成定时开口
+  const wv = cfg.tide?.wave;
+  if (cfg.tide?.enabled && wv?.enabled) {
+    const d = wv.delayMin ?? 30, p = wv.peakMin ?? 45;
+    const thr = wv.thr ?? 0.5, wu = wv.wUser ?? 0.4;
+    if (!(p > d)) throw new Error("config: tide.wave.peakMin 必须大于 delayMin（峰要落在不打扰期之后）");
+    if (!(thr > 0 && thr <= 1)) throw new Error("config: tide.wave.thr 必须在 (0,1]");
+    if (!(wu < thr)) throw new Error("config: tide.wave.wUser 必须小于 thr，否则阈值形同虚设");
   }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");

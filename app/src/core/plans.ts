@@ -10,6 +10,7 @@ import { parseIsoInTz } from "./time.ts";
 import type { Store } from "./db.ts";
 import type { Plan, Wake } from "../types.ts";
 import { canFire, localDay, anchorOf, type TideConfig } from "./tide.ts";
+import { waveGate } from "./wave.ts";
 
 export interface ScheduleInput { kind: "once" | "cron" | "none"; value?: string | null }
 export type ValidateResult = { ok: true; kind: Plan["schedule_kind"]; schedule: string | null; firstFire: number | null } | { ok: false; error: string };
@@ -92,21 +93,27 @@ export class PlanEngine {
         const inserted = this.store.recordPlanFire(p.id, t);
         if (t === fireTs) fresh = inserted;
       }
-      // 到点了不代表该说：过潮汐闸门（L0 放行；L1/L2 按池 × 天 × 档数额度）
+      // 到点了不代表该说：先过潮汐额度（L0 放行；L1/L2 按池 × 天 × 档数），再过水位。
+      // 水位只作用于 L2（普通关心）——日期档和跟进到期是硬锚点，被「水位不够」拦住是最蠢的失败。
       let fired = false;
       if (fireTs !== null && fresh) {
         const v = canFire(this.store, p, this.cfg.tide, now, this.cfg.tz);
+        const wv = v.ok && anchorOf(p) === "L2"
+          ? waveGate(this.store, p.pool_id, now, this.cfg.tide?.wave)
+          : null;
+        const ok = v.ok && (!wv || wv.ok);
         this.store.recordTideEvent({
           plan_id: p.id,
           pool_id: p.pool_id,
           day: localDay(now, this.cfg.tz),
           ts: now,
-          kind: v.ok ? "fired" : "skip",
+          kind: ok ? "fired" : "skip",
           anchor_kind: anchorOf(p),
           why: p.why ?? null,
-          reason: v.ok ? null : v.detail,
+          wave_a: wv ? wv.a : null,
+          reason: ok ? null : (v.ok ? (wv?.detail ?? null) : v.detail),
         });
-        if (v.ok) { fires.push({ planId: p.id, fireTs }); fired = true; }
+        if (ok) { fires.push({ planId: p.id, fireTs }); fired = true; }
       }
       // 一次性计划被闸门拦下：这个时间点已经过去，标 expired 而不是 done（没执行）
       if (p.schedule_kind === "once") this.store.setPlanStatus(p.id, fired ? "done" : "expired");

@@ -88,6 +88,15 @@
     "dailyCap": {
       "L1": 2,
       "L2": 1
+    },
+    "wave": {
+      "enabled": true,
+      "delayMin": 30,
+      "peakMin": 45,
+      "thr": 0.5,
+      "wUser": 0.4,
+      "wSelf": 0.25,
+      "horizonH": 24
     }
   }
 }
