@@ -20,14 +20,14 @@ const skip = hasDocker ? false : "没有可用的 docker，跳过容器沙盒测
 // 有自建镜像就用它（带 python/git/curl/bash/jq/rg），没有就退回基础镜像
 const image = (() => {
   try {
-    execFileSync("docker", ["image", "inspect", "poolchat-sandbox:latest"], { stdio: "ignore", timeout: 8000 });
-    return "poolchat-sandbox:latest";
+    execFileSync("docker", ["image", "inspect", "rabbit-bot-sandbox:latest"], { stdio: "ignore", timeout: 8000 });
+    return "rabbit-bot-sandbox:latest";
   } catch {
     return "node:22-alpine";
   }
 })();
-const container = "poolchat-sbx-test";
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-sbxsh-"));
+const container = "rabbit-bot-sbx-test";
+const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-sbxsh-"));
 const opts: SandboxShellOptions = {
   container,
   image,

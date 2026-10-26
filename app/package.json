@@ -1,5 +1,5 @@
 {
-  "name": "poolchat",
+  "name": "rabbit-bot",
   "version": "0.1.0",
   "description": "聊天池 Agent (pi + 飞书)",
   "scripts": {

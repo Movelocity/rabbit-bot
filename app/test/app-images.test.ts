@@ -15,7 +15,7 @@ const PNG_1PX = Buffer.from(
 const log: any = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, wake: () => {} };
 
 test("handleWake 会把图片消息的图传给引擎", async () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-wake-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-wake-"));
   const cfg = { ...loadConfig(), dataDir };
   // 引擎会被替换成假的，模型只要占位（不碰真实凭据/网络）
   const app = new App({ cfg, model: { id: "fake/model" } as any, modelRuntime: {} as any, logger: log, dbFile: ":memory:", inMemorySessions: true });

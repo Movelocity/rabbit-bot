@@ -6,7 +6,7 @@
 import { Store } from "../dist/core/db.js";
 import { computeIdle } from "../dist/core/idle.js";
 
-const store = new Store(new URL("../data/poolchat.db", import.meta.url).pathname);
+const store = new Store(new URL("../data/rabbit-bot.db", import.meta.url).pathname);
 const now = Date.now();
 const m = computeIdle(store, now, "Asia/Shanghai");
 

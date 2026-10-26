@@ -1,4 +1,4 @@
-# poolchat
+# rabbit-bot
 
 一个跑在飞书上的聊天 Agent。**池子就是上下文**——它没有会话记忆，每一轮都从池子里读最近的对话和记忆文件，然后决定说不说、说什么。
 
@@ -10,13 +10,13 @@
 npm install
 npm run build
 
-mkdir -p ~/.config/poolchat && cat > ~/.config/poolchat/env <<'EOF'
+mkdir -p ~/.config/rabbit-bot && cat > ~/.config/rabbit-bot/env <<'EOF'
 DEEPSEEK_API_KEY=...
 FEISHU_APP_ID=...
 FEISHU_APP_SECRET=...
-POOLCHAT_INJECT_TOKEN=$(openssl rand -hex 24)   # 本地注入口用，必须设
+RABBIT_BOT_INJECT_TOKEN=$(openssl rand -hex 24)   # 本地注入口用，必须设
 EOF
-chmod 600 ~/.config/poolchat/env
+chmod 600 ~/.config/rabbit-bot/env
 
 pm2 start ecosystem.config.cjs     # 用 pm2，别同时手工 run.sh（会起两个进程抢消息）
 npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 / 唤醒分布

@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 
 /** 最小环境：只验证 stay_silent 自身「不发消息、只记理由」 */
 function setup() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-silent-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-silent-"));
   const cfg = { ...loadConfig(), dataDir };
   const sent: string[] = [];
   let silent: string | null = null;

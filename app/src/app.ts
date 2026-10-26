@@ -62,7 +62,7 @@ export class App {
     const cfg = o.cfg;
     this.clock = o.clock ?? realClock;
     this.log = o.logger ?? new Logger(cfg.logDir);
-    this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "poolchat.db"));
+    this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "rabbit-bot.db"));
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
@@ -86,7 +86,7 @@ export class App {
   async start() {
     await this.hub.startAdapters();
     this.scheduler.start();
-    this.log.info(`poolchat 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms paused=${this.store.isPaused()}`);
+    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms paused=${this.store.isPaused()}`);
   }
 
   async stop() {

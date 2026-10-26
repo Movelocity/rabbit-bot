@@ -24,9 +24,9 @@ const safeEqual = (a: string, b: string): boolean => {
 
 /** 起本地入口；没有 token 就返回 null（fail-closed，不悄悄裸奔） */
 export async function startInjectServer(d: InjectDeps): Promise<http.Server | null> {
-  const token = process.env.POOLCHAT_INJECT_TOKEN;
+  const token = process.env.RABBIT_BOT_INJECT_TOKEN;
   if (!token || token.length < 16) {
-    d.log.warn("inject: 没配 POOLCHAT_INJECT_TOKEN（至少 16 位），本地入口不启动");
+    d.log.warn("inject: 没配 RABBIT_BOT_INJECT_TOKEN（至少 16 位），本地入口不启动");
     return null;
   }
   const port = Number(d.cfg.inject?.port ?? 3737);
@@ -41,7 +41,7 @@ export async function startInjectServer(d: InjectDeps): Promise<http.Server | nu
     if (req.method !== "POST" || (req.url ?? "").split("?")[0] !== "/inject") {
       return reply(404, { error: "只支持 POST /inject" });
     }
-    if (!safeEqual(String(req.headers["x-poolchat-token"] ?? ""), token)) {
+    if (!safeEqual(String(req.headers["x-rabbit-bot-token"] ?? ""), token)) {
       d.log.warn(`inject: 拒绝了一个 token 不对的请求（${req.socket.remoteAddress}）`);
       return reply(401, { error: "token 不对" });
     }
@@ -101,7 +101,7 @@ export async function startInjectServer(d: InjectDeps): Promise<http.Server | nu
   });
 
   if (server.listening) {
-    d.log.info(`inject: 本地入口已开 http://127.0.0.1:${port}/inject（POST + X-Poolchat-Token）`);
+    d.log.info(`inject: 本地入口已开 http://127.0.0.1:${port}/inject（POST + X-RabbitBot-Token）`);
     return server;
   }
   return null;

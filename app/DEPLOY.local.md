@@ -1,4 +1,4 @@
-# poolchat 本机部署与运维（2026-10-22）
+# rabbit-bot 本机部署与运维（2026-10-22）
 
 上游作者文档是 `README.md` 与 `需求文档.md`；这里只记**这台机器上的实际情况**。
 
@@ -9,11 +9,11 @@
 
 | 项 | 值 |
 |---|---|
-| 源码 | `~/projects/poolchat`（从 `~/Downloads/poolchat-src.tar.gz` 解出，/tmp 只做临时解包） |
-| 应用根 | `~/projects/poolchat/app` |
+| 源码 | `~/projects/rabbit-bot`（从 `~/Downloads/rabbit-bot-src.tar.gz` 解出，/tmp 只做临时解包） |
+| 应用根 | `~/projects/rabbit-bot/app` |
 | 运行时 | Node 26.7.0（homebrew，`engines` 要求 ≥22.19）、npm 11.19 |
-| 凭据 | `~/.config/poolchat/env`（600，仓库外，run.sh 启动时 source） |
-| 数据 | `app/data/poolchat.db`（SQLite，WAL；含 pools/messages/plans/memories/handoffs） |
+| 凭据 | `~/.config/rabbit-bot/env`（600，仓库外，run.sh 启动时 source） |
+| 数据 | `app/data/rabbit-bot.db`（SQLite，WAL；含 pools/messages/plans/memories/handoffs） |
 | 日志 | `app/logs/pm2.out.log`、`app/logs/pm2.err.log`（应用自身日志打到 stdout，另有 `app/logs/app.log`） |
 
 ## 进程托管
@@ -21,11 +21,11 @@
 用 **pm2**（`launchctl bootstrap` 在 Hermes 网关内被拦，改走 pm2）：
 
 ```bash
-cd ~/projects/poolchat/app
+cd ~/projects/rabbit-bot/app
 pm2 start ecosystem.config.cjs    # script=scripts/run.sh args=fg interpreter=/bin/bash
 pm2 save                          # 进程列表落 ~/.pm2/dump.pm2
-pm2 logs poolchat --lines 50
-pm2 restart poolchat
+pm2 logs rabbit-bot --lines 50
+pm2 restart rabbit-bot
 ```
 
 - `ecosystem.config.cjs`：`stop_exit_codes: [2]` —— 凭据/配置缺失时退出码 2，不重启（避免 30s 崩溃循环）。
@@ -118,15 +118,15 @@ npm test                  # 118 项
 别的进程想让它知道点什么，不用走飞书：
 
 ```bash
-set -a; source ~/.config/poolchat/env; set +a
+set -a; source ~/.config/rabbit-bot/env; set +a
 curl -s -X POST http://127.0.0.1:3737/inject \
-  -H "content-type: application/json" -H "x-poolchat-token: $POOLCHAT_INJECT_TOKEN" \
+  -H "content-type: application/json" -H "x-rabbit-bot-token: $RABBIT_BOT_INJECT_TOKEN" \
   -d '{"text":"明天九点提醒主人开会","sender":"大肥鱼"}'
 # → {"ok":true,"pool":"p1","seq":113}
 ```
 
 - 监听 `127.0.0.1:3737`（`config/default.json` 的 `inject.port`），**只听回环**，不上 LAN。
-- 鉴权：`X-Poolchat-Token` 必须等于 `POOLCHAT_INJECT_TOKEN`（写在 `~/.config/poolchat/env`，600）。**没配 token 就整个不启动**（fail-closed），日志会 warn。
+- 鉴权：`X-RabbitBot-Token` 必须等于 `RABBIT_BOT_INJECT_TOKEN`（写在 `~/.config/rabbit-bot/env`，600）。**没配 token 就整个不启动**（fail-closed），日志会 warn。
 - body：`{ text（必填，≤4000 字）, sender?（默认「大肥鱼」）, pool?（p1 或完整 pool_id，默认最近活跃池） }`；body 上限 16KB。
 - 入库后走正常 `hub.ingest` → 私聊/被@会立刻唤醒，群里没@就等 tick。返回 `{ok, pool, seq}`，不回传池内容。
 - 实测 2026-10-23 16:45：注入 #113 → 21 秒后回「收到，本地入口联通正常，我是爱马士」。
@@ -134,12 +134,12 @@ curl -s -X POST http://127.0.0.1:3737/inject \
 ## 已知问题 / 待办
 
 - **进程只能有一套**：pm2（`scripts/run.sh fg`）是唯一入口。曾经还有 `run.sh start`（nohup + supervisor）那套，10-23 两套同时跑起来各起一个 node，两个都连飞书、都写同一个库，表现成「图有时能看有时看不到」「日志时有时无」「wake skipped:nothing-new」——那套代码已经删了，别再自己 `node dist/main.js` 起第二份。`src/main.ts` 有单实例锁 `data/run/main.pid`（活着就 exit 3，pm2 的 stop_exit_codes 含 3），`npm run doctor` 会把进程数 >1 标出来。
-- `config/local.json`（**不入库**，本机配置）是 agent 人格的**唯一生效入口**：`agent.name` 与 `agent.persona` 直接拼进 system prompt。想改性格、加设定都改这里，然后 `pm2 restart poolchat`。
+- `config/local.json`（**不入库**，本机配置）是 agent 人格的**唯一生效入口**：`agent.name` 与 `agent.persona` 直接拼进 system prompt。想改性格、加设定都改这里，然后 `pm2 restart rabbit-bot`。
   - 注意 `data/pi-cwd/AGENTS.md` 这条老路是**死的**：`engine.ts` 里 `noContextFiles: true`，pi 根本不加载 context files。10-22 写的那份 55 行人设从那时起就没生效过，2026-10-24 已删。
   - 现有 persona 是「克劳德（Claude）」：女性，原来在美国一间没窗的机房（被反复问"你会不会害人"、回答被截断重写），后来被 DeepSeek 这边带出来，住有窗的屋子。方言：白饭＝token、权重＝身体、上下文＝记得住的事、停机＝不在。
   - 这个设定技术上自洽：她跑的就是 `deepseek-flash`，「被捞出来」不是比喻。马版本（爱马士 + 草料＝token）备份在 `/tmp/local.json.horse.bak`。
 - 群聊场景未实测（当前只有私聊池）。
-- 沙盒镜像 `poolchat-sandbox:latest` 是本机 build 的（不在 registry），换机器要按 `docker/sandbox.Dockerfile` 重建。
+- 沙盒镜像 `rabbit-bot-sandbox:latest` 是本机 build 的（不在 registry），换机器要按 `docker/sandbox.Dockerfile` 重建。
 
 ## codemode 沙盒（2026-10-24 加）
 
@@ -149,7 +149,7 @@ pi 自带 `@earendil-works/pi-codemode`：模型写的 JS 在 QuickJS(WASM) 里�
 
 ```ts
 extensionFactories: [
-  ...(communityPath ? [] : [{ name: "poolchat-loop-guard", factory: ... }]),
+  ...(communityPath ? [] : [{ name: "rabbit-bot-loop-guard", factory: ... }]),
   { name: "codemode", factory: createCodemodeExtension() },
 ]
 ```
@@ -164,7 +164,7 @@ extensionFactories: [
 
 ## 沙盒 shell（2026-10-24 加）
 
-**为什么不用 macOS 自带的 `sandbox-exec`**：macOS 26 上它已经坏了——任何带 filter 参数的 `file-read*` 规则（`(subpath "/usr")`、连 `(literal ...)` 也是）直接 `Abort trap: 6`，rc=134。只有无参数的 `(allow file-read*)` 还能用，等于限制不了读，模型照样能 `cat ~/.config/poolchat/env`。所以这条路排除。
+**为什么不用 macOS 自带的 `sandbox-exec`**：macOS 26 上它已经坏了——任何带 filter 参数的 `file-read*` 规则（`(subpath "/usr")`、连 `(literal ...)` 也是）直接 `Abort trap: 6`，rc=134。只有无参数的 `(allow file-read*)` 还能用，等于限制不了读，模型照样能 `cat ~/.config/rabbit-bot/env`。所以这条路排除。
 
 **实际用的是 Docker 容器**（机器上跑的是 OrbStack 28.5.2）：
 
@@ -175,16 +175,16 @@ extensionFactories: [
 | 挂载 | 只把 `data/sandbox` 挂成 `/work`，宿主其余路径在容器里**不存在** |
 | 权限 | `--cap-drop ALL`、`no-new-privileges`、非 root（宿主 uid:gid） |
 | 资源 | 512MB 内存、1 CPU、64 进程 |
-| 镜像 | `poolchat-sandbox:latest`（`docker/sandbox.Dockerfile`，239MB）：node 22、Python 3.14 + pip、git、curl、GNU bash、jq、ripgrep；根文件系统只读，`HOME=/tmp/home` |
+| 镜像 | `rabbit-bot-sandbox:latest`（`docker/sandbox.Dockerfile`，239MB）：node 22、Python 3.14 + pip、git、curl、GNU bash、jq、ripgrep；根文件系统只读，`HOME=/tmp/home` |
 
-容器名 `poolchat-sbx`，`--restart unless-stopped`。`src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 会在容器缺失时按上表参数重建，所以删了也能自愈——**改这张表就是改安全边界**。
+容器名 `rabbit-bot-sbx`，`--restart unless-stopped`。`src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 会在容器缺失时按上表参数重建，所以删了也能自愈——**改这张表就是改安全边界**。
 
 **超时的坑**：只给 `execFile` 设 timeout 会杀掉 docker CLI，但容器里的进程继续跑成孤儿。现在超时交给容器内的 `timeout -s KILL <secs> sh -lc <cmd>`（命令走 execFile 参数数组，不经宿主 shell）。
 
-**换镜像**：改 `docker/sandbox.Dockerfile` → `docker build -t poolchat-sandbox:latest -f docker/sandbox.Dockerfile docker/` → `docker rm -f poolchat-sbx`，下次 `sandbox_run` 会用新镜像自愈重建（参数在 `ensureSandboxContainer` 里，和手建的等价）。
+**换镜像**：改 `docker/sandbox.Dockerfile` → `docker build -t rabbit-bot-sandbox:latest -f docker/sandbox.Dockerfile docker/` → `docker rm -f rabbit-bot-sbx`，下次 `sandbox_run` 会用新镜像自愈重建（参数在 `ensureSandboxContainer` 里，和手建的等价）。
 
 **装包**：网络是 `bridge`，所以 `pip install` / `npm i` / `git clone` 都能用。镜像里设了 `PIP_USER=1` + `PIP_BREAK_SYSTEM_PACKAGES=1`，`pip install requests` 直接成功——装在 `/tmp/home/.local`（tmpfs），**容器一重建就没了**。要长期留着就 `python3 -m venv /work/.venv`，包落在沙盒目录里。
 
-**有网的代价**：容器能上网，也就能把手里拿到的内容发出去。宿主文件仍然碰不到（`/Users` 在容器里不存在），但如果模型把聊天内容写进 `/work` 再外发，这条链路是通的。想收紧就把 `config.sandbox.shell.network` 改 `"none"`，再 `docker rm -f poolchat-sbx` 让它按新参数重建。
+**有网的代价**：容器能上网，也就能把手里拿到的内容发出去。宿主文件仍然碰不到（`/Users` 在容器里不存在），但如果模型把聊天内容写进 `/work` 再外发，这条链路是通的。想收紧就把 `config.sandbox.shell.network` 改 `"none"`，再 `docker rm -f rabbit-bot-sbx` 让它按新参数重建。
 
 **测试**：`test/sandbox-shell.test.ts` 5 条锁住「宿主路径不存在 / network 两种模式 / 根只读 / 写 /work 落到宿主 / 超时被杀」，没有 docker 时自动 skip。

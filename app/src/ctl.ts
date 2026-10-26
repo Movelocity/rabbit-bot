@@ -18,7 +18,7 @@ async function main() {
     console.log(`\n当前有凭据可用的 provider：${[...new Set(avail.map((m) => m.provider))].join(", ") || "（无）"}`);
     return;
   }
-  const store = new Store(path.join(cfg.dataDir, "poolchat.db"));
+  const store = new Store(path.join(cfg.dataDir, "rabbit-bot.db"));
   const out = (x: unknown) => console.log(typeof x === "string" ? x : JSON.stringify(x, null, 2));
   switch (cmd) {
     case "pause": store.setPaused(true); out("已暂停（消息仍会入池，但不会唤醒 Agent）"); break;

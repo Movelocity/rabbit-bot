@@ -22,7 +22,7 @@ async function main() {
 
   // 单实例锁：两个进程同时连飞书会抢同一条消息、各推各的游标（10-23 踩过：孤儿进程活了 27 小时，
   // 表现成"图有时能看有时看不到""日志时有时无"）。实现见 core/lockfile.ts ——
-  // 原子占锁（O_EXCL）、确认持有者真的是 poolchat（防 pid 复用误判）、残锁自愈。
+  // 原子占锁（O_EXCL）、确认持有者真的是 rabbit-bot（防 pid 复用误判）、残锁自愈。
   const lockFile = path.join(cfg.dataDir, "run", "main.pid");
   const got = acquireLock(lockFile);
   if (!got.ok) {

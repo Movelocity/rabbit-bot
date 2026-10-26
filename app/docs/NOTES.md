@@ -44,7 +44,7 @@
 
 ## macOS 26 上 `sandbox-exec` 已经坏了
 
-**实测**：任何带 filter 参数的 `file-read*` 规则——`(subpath "/usr")`、连 `(literal "/bin/echo")` 都算——直接 `Abort trap: 6`，rc=134。只有无参数的 `(allow file-read*)` 还能用，但那就等于限制不了读，`~/.config/poolchat/env` 照样能读。
+**实测**：任何带 filter 参数的 `file-read*` 规则——`(subpath "/usr")`、连 `(literal "/bin/echo")` 都算——直接 `Abort trap: 6`，rc=134。只有无参数的 `(allow file-read*)` 还能用，但那就等于限制不了读，`~/.config/rabbit-bot/env` 照样能读。
 
 **结论**：macOS 原生沙盒这条路排除，改用 Docker 容器（OrbStack 已经在跑）。
 
@@ -62,7 +62,7 @@
 
 ## 飞书 `99992361 open_id cross app`
 
-poolchat 用的是独立的飞书 app，拿不到 Hermes 那边的 open_id，**不能主动首发**。必须等人先发一条，之后的回复才正常。
+rabbit-bot 用的是独立的飞书 app，拿不到 Hermes 那边的 open_id，**不能主动首发**。必须等人先发一条，之后的回复才正常。
 
 ## 几个决策
 

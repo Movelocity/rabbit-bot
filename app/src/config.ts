@@ -1,4 +1,4 @@
-/** 配置加载：config/default.json ← config/local.json ← $POOLCHAT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
+/** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,7 @@ export function loadConfig(overrides?: unknown): Config {
   let cfg = readJson(path.join(APP_ROOT, "config/default.json")) as Config;
   const local = path.join(APP_ROOT, "config/local.json");
   if (fs.existsSync(local)) cfg = deepMerge(cfg, readJson(local));
-  const extra = process.env.POOLCHAT_CONFIG;
+  const extra = process.env.RABBIT_BOT_CONFIG;
   if (extra) cfg = deepMerge(cfg, readJson(path.resolve(extra)));
   if (overrides) cfg = deepMerge(cfg, overrides);
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);

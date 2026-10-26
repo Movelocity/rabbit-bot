@@ -7,11 +7,11 @@ import { spawn } from "node:child_process";
 import { acquireLock, releaseLock, readLock, stillHolder, procStartTime, processAlive } from "../src/core/lockfile.ts";
 
 function tmpLock(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-lock-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-lock-"));
   return path.join(dir, "run", "main.pid");
 }
 
-/** 起一个真实的 node 子进程当「另一个 poolchat」，故意用跟本体不同的命令行。 */
+/** 起一个真实的 node 子进程当「另一个 rabbit-bot」，故意用跟本体不同的命令行。 */
 function fakeProc(): Promise<{ pid: number; boot: string; kill: () => void }> {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore" });
   return new Promise((resolve) => {
@@ -49,7 +49,7 @@ test("同进程重入：认得自己，不自杀", () => {
   releaseLock(f);
 });
 
-test("持有者是活着的真进程（命令行完全不像 poolchat 也认得出来）：让路", async () => {
+test("持有者是活着的真进程（命令行完全不像 rabbit-bot 也认得出来）：让路", async () => {
   const f = tmpLock();
   const fake = await fakeProc();
   try {

@@ -11,7 +11,7 @@ import { loadConfig } from "../src/config.ts";
 process.env.DEEPSEEK_API_KEY ||= "sk-test-placeholder";
 
 function setup() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "poolchat-wf-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-wf-"));
   const cfg = { ...loadConfig(), dataDir };
   const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() });
   return { tool: (tools as any[]).find((t) => t.name === "web_fetch") };

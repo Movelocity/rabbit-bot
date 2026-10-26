@@ -95,7 +95,7 @@ export class PiEngine implements AgentEngine {
       // codemode：模型写的 JS 跑在 QuickJS(WASM) 里，唯一能力是调用这些工具。
       // SDK 不会自动加载内置扩展，必须自己注册；不注册的话 tools 里写 codemode 只是个空名字。
       extensionFactories: [
-        ...(communityPath ? [] : [{ name: "poolchat-loop-guard", factory: builtinLoopGuardExtension(lg, (e) => this.d.log.warn(e)) as any }]),
+        ...(communityPath ? [] : [{ name: "rabbit-bot-loop-guard", factory: builtinLoopGuardExtension(lg, (e) => this.d.log.warn(e)) as any }]),
         { name: "codemode", factory: createCodemodeExtension() },
       ],
     });
