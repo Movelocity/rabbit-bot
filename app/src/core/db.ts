@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS plans (
 );
 CREATE TABLE IF NOT EXISTS tide_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, pool_id TEXT, day TEXT NOT NULL, ts INTEGER NOT NULL,
-  kind TEXT NOT NULL, anchor_kind TEXT, anchor_ref TEXT, reason TEXT, why TEXT
+  kind TEXT NOT NULL, anchor_kind TEXT, anchor_ref TEXT, -- anchor_ref 已废弃（没有读者），列留着是因为 SQLite 删列要重建表
+  reason TEXT, why TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
@@ -67,6 +68,7 @@ export class Store {
     // 老库补列（新库已含在 SCHEMA 里）
     try { this.db.exec("ALTER TABLE messages ADD COLUMN attachment TEXT"); } catch { /* 已存在 */ }
     // 潮汐锚点（2026-10-24）：计划到点不一定该说，锚点决定能不能发
+    // anchor_ref 保留仅为兼容旧库，代码不再读写
     for (const col of ["anchor_kind TEXT", "anchor_ref TEXT", "why TEXT"]) {
       try { this.db.exec(`ALTER TABLE plans ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
@@ -202,12 +204,12 @@ export class Store {
   }
 
   // ---------- 计划 ----------
-  insertPlan(p: Omit<Plan, "id" | "created_at" | "status" | "anchor_kind" | "anchor_ref" | "why">
-    & { status?: PlanStatus; anchor_kind?: string | null; anchor_ref?: string | null; why?: string | null }): Plan {
+  insertPlan(p: Omit<Plan, "id" | "created_at" | "status" | "anchor_kind" | "why">
+    & { status?: PlanStatus; anchor_kind?: string | null; why?: string | null }): Plan {
     const now = Date.now();
-    const r = this.db.prepare(`INSERT INTO plans(title,content,pool_id,schedule_kind,schedule,status,expires_at,created_at,updated_at,anchor_kind,anchor_ref,why) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const r = this.db.prepare(`INSERT INTO plans(title,content,pool_id,schedule_kind,schedule,status,expires_at,created_at,updated_at,anchor_kind,why) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
       .run(p.title, p.content, p.pool_id, p.schedule_kind, p.schedule, p.status ?? "pending", p.expires_at, now, now,
-        p.anchor_kind ?? null, p.anchor_ref ?? null, p.why ?? null);
+        p.anchor_kind ?? null, p.why ?? null);
     return this.getPlan(Number(r.lastInsertRowid))!;
   }
 
@@ -217,11 +219,11 @@ export class Store {
   }
 
   // ---------- 潮汐 ----------
-  /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）/ landed（对方在窗口内回了） */
+  /** 记一条潮汐事件：fired（真发了）/ skip（被闸门拦下）。没有 landed——响应率那套没实现，别在注释里假装有 */
   recordTideEvent(e: { plan_id?: number | null; pool_id?: string | null; day: string; ts: number; kind: string;
-    anchor_kind?: string | null; anchor_ref?: string | null; reason?: string | null; why?: string | null }) {
-    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,anchor_ref,reason,why) VALUES(?,?,?,?,?,?,?,?,?)`)
-      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.anchor_ref ?? null, e.reason ?? null, e.why ?? null);
+    anchor_kind?: string | null; reason?: string | null; why?: string | null }) {
+    this.db.prepare(`INSERT INTO tide_events(plan_id,pool_id,day,ts,kind,anchor_kind,reason,why) VALUES(?,?,?,?,?,?,?,?)`)
+      .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null);
   }
   /** 今天某个池、某一档已经真发了几条（L0 不占额度，不会问到这里） */
   countTideFired(day: string, poolId: string | null, anchorKind: string): number {
