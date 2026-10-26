@@ -72,8 +72,6 @@ export interface Plan {
   created_at: number;
   /** 锚点档位：L0 日期 / L1 跟进到期 / L2 普通关心；NULL 按 L2 处理 */
   anchor_kind?: AnchorKind | null;
-  /** 锚点指向：memory:12 / message:187 / date:2026-11-03 */
-  anchor_ref?: string | null;
   /** 排这条计划时的理由，唤醒剧本里会用 */
   why?: string | null;
 }

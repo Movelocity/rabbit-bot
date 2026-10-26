@@ -199,31 +199,3 @@ export function computeIdle(store: Store, now: number, tz = "Asia/Shanghai", opt
  * - 样本不足：一律 0.5（不放大、也不拦）
  * - 30 分钟内有互动：直接给 1（当前活跃是最强的证据，不需要样本）
  */
-export function idleNow(model: IdleModel, store: Store, now: number, tz = "Asia/Shanghai"): number {
-  const recent = store.messagesForIdle(now - 30 * 60_000);
-  if (recent.length) return 1;
-  if (model.confidence === "low") return 0.5;
-  const today = localDay(now, tz);
-  // 模型过期（跨天没重算）就退回中性
-  if (model.day !== today) return 0.5;
-  return model.buckets[hourIn(now, tz)]?.score ?? 0.5;
-}
-
-/** 从 kv 读写模型 */
-const KV_KEY = "tide:idle";
-export function loadIdle(store: Store): IdleModel | null {
-  const raw = store.getKv(KV_KEY);
-  if (!raw) return null;
-  try { return JSON.parse(raw) as IdleModel; } catch { return null; }
-}
-export function saveIdle(store: Store, m: IdleModel): void {
-  store.setKv(KV_KEY, JSON.stringify(m));
-}
-/** 今天没算过就算一次 */
-export function ensureIdle(store: Store, now: number, tz = "Asia/Shanghai"): IdleModel {
-  const m = loadIdle(store);
-  if (m && m.day === localDay(now, tz)) return m;
-  const fresh = computeIdle(store, now, tz);
-  saveIdle(store, fresh);
-  return fresh;
-}

@@ -1,9 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
-import { computeIdle, idleNow, loadIdle, saveIdle, ensureIdle } from "../src/core/idle.ts";
-import { canFire } from "../src/core/tide.ts";
+import { computeIdle } from "../src/core/idle.ts";
 
+/**
+ * 只测统计本身。
+ * 2026-10-26 起这个模型不再参与闸门决策（从来触发过 0 次拦截），
+ * 只留 `npm run idle` 用来看分布，所以这里去掉 canFire 相关的用例。
+ */
 const TZ = "Asia/Shanghai";
 const H = 3600_000;
 
@@ -23,36 +27,19 @@ function mkMsg(store: Store, ts: number, self: boolean) {
   } as any);
 }
 
-function mkPlan(store: Store, over: Record<string, unknown> = {}) {
-  return store.insertPlan({
-    title: "t", content: "", pool_id: "p1", schedule_kind: "none", schedule: null, expires_at: null,
-    anchor_kind: "L2", ...over,
-  } as any);
-}
-
-test("样本不足：置信度 low，idleNow 一律 0.5，不拦也不放大", () => {
+test("样本不够就直接标 low", () => {
   const store = new Store(":memory:");
   const now = Date.now();
   mkMsg(store, now - 2 * H, false);
   const m = computeIdle(store, now, TZ);
   assert.equal(m.confidence, "low");
   assert.ok(m.samples < 80);
-  // 让「当前活跃」不生效：拿 2 小时前的时间点判断
-  assert.equal(idleNow(m, store, now - 1 * H, TZ), 0.5);
-});
-
-test("当前 30 分钟内有互动 → 直接给 1.0（不需要样本）", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const m = computeIdle(store, now, TZ);
-  mkMsg(store, now - 5 * 60_000, false);
-  assert.equal(idleNow(m, store, now, TZ), 1);
 });
 
 test("足够样本时：回得快的时段分数高，回得慢的时段分数低", () => {
   const store = new Store(":memory:");
   const now = Date.now();
-  // 造 8 天数据：10 点秒回（她发完 30s 内他就回），16 点拖 40 分钟
+  // 造 8 天数据：10 点秒回，16 点拖 40 分钟
   for (let d = 8; d >= 1; d--) {
     const dayStart = localMidnight(now) - d * 24 * H;
     for (const [hour, delay] of [[10, 30_000], [16, 40 * 60_000]]) {
@@ -95,65 +82,10 @@ test("已读不回会拉低活跃度", () => {
     // 11 点：她发了他马上回
     mkMsg(store, dayStart + 11 * H, true);
     mkMsg(store, dayStart + 11 * H + 60_000, false);
-    // 20 点：她发了，他从没回（不回 = 不活跃的证据）
+    // 20 点：她发了，他从没回
     mkMsg(store, dayStart + 20 * H, true);
   }
   const m = computeIdle(store, now, TZ, { minSamples: 10 });
-  const answered = m.buckets[11];
-  const ignored = m.buckets[20];
-  assert.equal(answered.unansweredRate, 0);
-  assert.ok(ignored.unansweredRate === null || ignored.unansweredRate > 0.5);
-});
-
-test("模型跨天就失效：拿昨天的模型判断今天的时段退回 0.5", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const m = computeIdle(store, now, TZ);
-  const stale = { ...m, day: "2020-01-01", confidence: "mid" as const };
-  assert.equal(idleNow(stale, store, now, TZ), 0.5);
-});
-
-test("ensureIdle：同一天只算一次，读回来是同一份", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const a = ensureIdle(store, now, TZ);
-  const b = ensureIdle(store, now + 1000, TZ);
-  assert.equal(a.computedAt, b.computedAt, "同一天不该重算");
-  assert.ok(loadIdle(store));
-  saveIdle(store, { ...a, samples: 999 });
-  assert.equal(loadIdle(store)!.samples, 999);
-});
-
-test("闸门：忙的时候 L2 被拦，L1 照发", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const cfg = { enabled: true, dailyCap: { L1: 2, L2: 1 }, busyThreshold: 0.3, activeThreshold: 0.6 };
-  const l2 = mkPlan(store, { anchor_kind: "L2" });
-  const l1 = mkPlan(store, { anchor_kind: "L1", title: "跟进" });
-  const busy = canFire(store, l2, cfg, now, TZ, { idleNow: 0.1 });
-  assert.equal(busy.ok, false);
-  assert.equal((busy as any).reason, "busy");
-  assert.equal(canFire(store, l1, cfg, now, TZ, { idleNow: 0.1 }).ok, true, "跟进到期比闲聊重要，不拦");
-});
-
-test("闸门：高活跃时 L2 额度翻倍（1 → 2）", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const cfg = { enabled: true, dailyCap: { L1: 2, L2: 1 }, busyThreshold: 0.3, activeThreshold: 0.6 };
-  const l2 = mkPlan(store, { anchor_kind: "L2" });
-  const { localDay } = { localDay: (ts: number) => new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(new Date(ts)) };
-  const day = localDay(now);
-  store.recordTideEvent({ day, pool_id: "p1", ts: now, kind: "fired", anchor_kind: "L2" });
-  // 中性：已经 1 条，到顶
-  assert.equal(canFire(store, l2, cfg, now, TZ, { idleNow: 0.5 }).ok, false);
-  // 高活跃：额度翻成 2，还能再发一条
-  assert.equal(canFire(store, l2, cfg, now, TZ, { idleNow: 0.8 }).ok, true);
-});
-
-test("闸门：没有 idle 数据时按原样走（不因为算不出来就不发）", () => {
-  const store = new Store(":memory:");
-  const now = Date.now();
-  const cfg = { enabled: true, dailyCap: { L1: 2, L2: 1 } };
-  const l2 = mkPlan(store, { anchor_kind: "L2" });
-  assert.equal(canFire(store, l2, cfg, now, TZ).ok, true);
+  assert.equal(m.buckets[11].unansweredRate, 0);
+  assert.ok(m.buckets[20].unansweredRate === null || m.buckets[20].unansweredRate > 0.5);
 });

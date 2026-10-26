@@ -154,7 +154,6 @@ export function createTools(d: ToolDeps) {
       when: Type.Optional(Type.String()),
       expires: Type.Optional(Type.String({ description: "过期时间 ISO，可选" })),
       anchor: Type.Optional(Type.Union([Type.Literal("L0"), Type.Literal("L1"), Type.Literal("L2")])),
-      ref: Type.Optional(Type.String({ description: "锚点指向：memory:12 / message:187 / date:2026-11-03" })),
       why: Type.Optional(Type.String({ description: "一句话：为什么现在排这条" })),
     }),
     async execute(_id, p) {
@@ -171,7 +170,7 @@ export function createTools(d: ToolDeps) {
       const plan = d.store.insertPlan({
         title: p.title, content: p.content ?? "", pool_id: pool?.pool_id ?? null,
         schedule_kind: v.kind, schedule: v.schedule, expires_at: expires,
-        anchor_kind: p.anchor ?? null, anchor_ref: p.ref ?? null, why: p.why ?? null,
+        anchor_kind: p.anchor ?? null, why: p.why ?? null,
       });
       const tip = p.why ? "" : "（没写 why——到点被叫醒时会不知道当时为什么排它，补一句更好）";
       return txt(`已记下计划#${plan.id}${v.firstFire ? `，下次触发 ${fmtLocal(v.firstFire)}` : ""}${tip}`, { ok: true, id: plan.id });

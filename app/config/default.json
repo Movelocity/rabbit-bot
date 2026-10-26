@@ -88,8 +88,6 @@
     "dailyCap": {
       "L1": 2,
       "L2": 1
-    },
-    "busyThreshold": 0.3,
-    "activeThreshold": 0.6
+    }
   }
 }
