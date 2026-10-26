@@ -1,4 +1,4 @@
-# poolchat —— 聊天池 Agent v1（pi + 飞书）
+# rabbit-bot —— 聊天池 Agent v1（pi + 飞书）
 
 需求见 [需求文档.md](./需求文档.md)（唯一依据）。代码在 `app/`。
 
@@ -41,7 +41,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 ## 配置
 
-`app/config/default.json`（全部阈值都在这里），可用 `app/config/local.json`（已 gitignore）或 `POOLCHAT_CONFIG=/path.json` 覆盖。主要项：
+`app/config/default.json`（全部阈值都在这里），可用 `app/config/local.json`（已 gitignore）或 `RABBIT_BOT_CONFIG=/path.json` 覆盖。主要项：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -67,8 +67,8 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 |---|---|---|
 | `FEISHU_APP_ID`、`FEISHU_APP_SECRET` | 是 | 飞书自建应用凭据 |
 | 所选 LLM 的 key，如 `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MOONSHOT_API_KEY` / `ZAI_API_KEY` / `OPENROUTER_API_KEY` / `XAI_API_KEY` / `GEMINI_API_KEY` … | 是（一个） | pi 自己从环境变量读取，变量名见 pi 文档 providers.md |
-| `POOLCHAT_CONFIG` | 否 | 额外配置文件路径 |
-| `POOLCHAT_ENV_FILE` | 否 | `scripts/run.sh` 启动时 source 的 env 文件，默认 `~/.config/poolchat/env`（放仓库外，chmod 600） |
+| `RABBIT_BOT_CONFIG` | 否 | 额外配置文件路径 |
+| `RABBIT_BOT_ENV_FILE` | 否 | `scripts/run.sh` 启动时 source 的 env 文件，默认 `~/.config/rabbit-bot/env`（放仓库外，chmod 600） |
 | `PI_OFFLINE`、`PI_TELEMETRY` | 否 | 程序默认设为 1 / 0（不自动刷新模型目录、关遥测） |
 
 飞书后台需要：启用机器人；事件订阅方式选“使用长连接接收事件”，订阅 `im.message.receive_v1`；
@@ -81,7 +81,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 ```bash
 export PATH=$HOME/.local/node22/bin:$PATH
-cd /workspace/poolchat/app
+cd /workspace/rabbit-bot/app
 npm install
 npm test               # 单元测试 + 端到端测试（不需要任何凭据）
 npm run demo           # 脚本化演示：mock 适配器 + 桩 LLM 走完整管线（约 40 秒）
@@ -98,10 +98,10 @@ npm run ctl -- link feishu <open_id> <user_id>   # 跨平台身份合并
 npm run ctl -- models [provider]                 # pi 支持的模型、当前有凭据的 provider
 ```
 
-本 box 没有 systemd / pm2，所以默认用 `scripts/run.sh`；另附 `ecosystem.config.cjs`（pm2）和 `scripts/poolchat.service`（systemd --user）供以后使用。
+本 box 没有 systemd / pm2，所以默认用 `scripts/run.sh`；另附 `ecosystem.config.cjs`（pm2）和 `scripts/rabbit-bot.service`（systemd --user）供以后使用。
 注意：box 重启后进程不会自己起来，需要再执行一次 `scripts/run.sh start`。
 
-数据在 `app/data/`：`poolchat.db`、`sessions/`（pi 会话 JSONL，重启后继续最近会话）、`handoffs/*.md`（交接文档存档）、`pi-agent/`（pi 的 auth.json/models.json，可放自定义 OpenAI 兼容端点）。日志在 `app/logs/`。
+数据在 `app/data/`：`rabbit-bot.db`、`sessions/`（pi 会话 JSONL，重启后继续最近会话）、`handoffs/*.md`（交接文档存档）、`pi-agent/`（pi 的 auth.json/models.json，可放自定义 OpenAI 兼容端点）。日志在 `app/logs/`。
 
 ## 桩 / 未实现
 
