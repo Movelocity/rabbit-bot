@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
 import type { InboundMessage } from "../src/types.ts";
-import { level, nextHit, pulseK, waveCfg, waveGate } from "../src/core/wave.ts";
+import { level, nextHit, pulseK, waveCfg, waveGate, waveSchedule } from "../src/core/wave.ts";
 
 const MIN = 60_000;
 const NOW = 1_700_000_000_000;
@@ -14,11 +14,12 @@ const msg = (o: Partial<InboundMessage>): InboundMessage => ({
   is_mention_me: false, media_type: "text", ...o,
 });
 
-test("脉冲形状：延迟期为 0，峰在 peakMin 且峰高 1，六小时后归零", () => {
+test("脉冲形状：延迟期为 0，峰在 peakMin 且峰高 1，六小时后只剩残量", () => {
   const cfg = waveCfg();
   for (const m of [0, 10, 20, 29.9]) assert.equal(pulseK(m * 60, cfg), 0, `${m} 分钟该是 0`);
   assert.equal(pulseK(45 * 60, cfg), 1);
-  assert.ok(pulseK(6 * 3600, cfg) < 1e-4);
+  assert.ok(pulseK(6 * 3600, cfg) < 0.15, "幂律尾不归零，但六小时后只剩峰值的 1/8 上下");
+  assert.ok(pulseK(60 * 60, cfg) > pulseK(6 * 3600, cfg) * 5, "衰减要单调");
 });
 
 test("峰位必须大于不打扰期，否则直接报错", () => {
@@ -41,7 +42,7 @@ test("默认定标：两条相隔 10 分钟才开口，且比单条更晚", () =
   // 单条：把 wUser 抬到 1.0 才能看到窗口（34~70 分钟），证明形状没变
   const wide = waveCfg({ wUser: 1 });
   const firstOne = [...Array(200).keys()].find((m) => level(one, NOW + m * MIN, wide).a >= wide.thr);
-  assert.equal(firstOne, 34);
+  assert.ok(firstOne! >= 30 && firstOne! <= 45, `单条首过阈该在 30~45 分钟，实际 ${firstOne}`);
   const firstTwo = [...Array(200).keys()].find((m) => level(two, NOW + m * MIN, wide).a >= wide.thr);
   assert.ok(firstTwo! > firstOne!, `叠加该推后起爆点：单条 ${firstOne}，两条 ${firstTwo}`);
   // 默认权重下两条才过阈值
@@ -106,7 +107,7 @@ test("waveGate：冷场放行，否则普通关心永远发不出去", () => {
   const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
   // 最后一条在 4 小时前：水位早就落回 0，但这不是「别打扰」，是「冷场了该开口」
   const v = waveGate(s, pool, NOW + 240 * MIN, {})!;
-  assert.equal(v.a, 0);
+  assert.ok(v.a < 0.1, `幂律尾剩一点残量，但早就该低于阈值：${v.a}`);
   assert.equal(v.ok, true);
   // 边界内（3 小时内）仍然拦
   assert.equal(waveGate(s, pool, NOW + 170 * MIN, {})!.ok, false);
@@ -149,4 +150,32 @@ test("waveGate：跨池（poolId=null）看所有池的消息", () => {
   s.insertMessage(msg({ external_chat_id: "oc_b", ts: NOW + 10 * MIN }));
   const v = waveGate(s, null, NOW + 45 * MIN, {})!;
   assert.equal(v.nUser, 2);
+});
+
+// ---------- 候选时刻表（一个会话之后的「想起你」序列） ----------
+
+const fast = () => waveCfg({ delayMin: 8, peakMin: 15, wUser: 0.5, wSelf: 0.3 });
+
+test("时刻表：首档在十几分钟内，之后间隔递增", () => {
+  const cfg = fast();
+  const pulses = [{ ts: NOW, fromSelf: false }, { ts: NOW + 3 * MIN, fromSelf: false }];
+  const pts = waveSchedule(pulses, NOW + 3 * MIN, cfg, { ratio: 0.5, maxStages: 4 });
+  const mins = pts.map((p) => Math.round((p.at - (NOW + 3 * MIN)) / MIN));
+  assert.ok(mins.length >= 3, `该有多个候选点，实际 ${mins.join(",")}`);
+  assert.ok(mins[0] <= 20, `首档该在 20 分钟内，实际 ${mins[0]}`);
+  const gaps = mins.slice(1).map((m, i) => m - mins[i]);
+  for (let i = 1; i < gaps.length; i++) assert.ok(gaps[i] > gaps[i - 1], `间隔该递增：${gaps.join(",")}`);
+});
+
+test("时刻表：单条消息水不够，一个点都没有", () => {
+  const cfg = waveCfg({ delayMin: 8, peakMin: 15 });   // 默认 wUser=0.4 < thr
+  assert.equal(waveSchedule([{ ts: NOW, fromSelf: false }], NOW, cfg).length, 0);
+});
+
+test("时刻表：聊得越多，序列越长", () => {
+  const cfg = fast();
+  const few = waveSchedule([{ ts: NOW, fromSelf: false }, { ts: NOW + 2 * MIN, fromSelf: false }], NOW + 2 * MIN, cfg);
+  const many = Array.from({ length: 20 }, (_, i) => ({ ts: NOW + i * MIN, fromSelf: false }));
+  const lots = waveSchedule(many, NOW + 19 * MIN, cfg);
+  assert.ok(lots.length >= few.length, `多的该不短于少的：${lots.length} vs ${few.length}`);
 });

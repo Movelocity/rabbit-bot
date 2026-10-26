@@ -49,14 +49,18 @@ export function waveCfg(c?: Partial<WaveConfig> | null): WaveConfig {
 export interface Pulse { ts: number; fromSelf: boolean }
 
 /** 平移 Gamma(2)：τ < d 时为 0；峰在 θ 且峰高 1；之后指数长尾。τ 单位秒。 */
-export function pulseK(tauSec: number, cfg: WaveConfig): number {
+export function pulseK(ageSec: number, cfg: WaveConfig): number {
   const d = cfg.delayMin * 60;
   const th = cfg.peakMin * 60;
-  if (th <= d) throw new Error("wave.peakMin 必须大于 wave.delayMin");
-  if (tauSec < d) return 0;
-  const u = (tauSec - d) / (th - d);
-  if (u > 60) return 0;              // exp(1-u) 已到 1e-26
-  return u * Math.exp(1 - u);
+  if (th <= d) throw new Error(`peakMin(${cfg.peakMin}) 必须大于 delayMin(${cfg.delayMin})`);
+  if (ageSec < d) return 0;                       // 不打扰期：一点水都不加
+  if (ageSec < th) {
+    const u = (ageSec - d) / (th - d);
+    return u * u * (3 - 2 * u);                   // smoothstep 上升，峰在 θ 处平滑落顶
+  }
+  // 幂律尾 p=1：τ=θ 时 1，τ=2θ 时 0.5，τ=8θ 时 0.125。
+  // 这是「退潮档位」能给出等比递增间隔的原因：下穿 thr·2^-k 的时刻正好在 θ·2^k。
+  return th / ageSec;
 }
 
 export interface WaveLevel {
@@ -135,4 +139,50 @@ export function waveGate(
     ok, a: lv.a, thr: cfg.thr, nUser: lv.nUser, nSelf: lv.nSelf,
     detail: `${why}（近 ${lv.nUser} 条他的、${lv.nSelf} 条我的）`,
   };
+}
+
+export interface SchedulePoint { at: number; level: number; stage: number }
+
+/**
+ * 一个会话之后「她会想起你」的时刻表。
+ *
+ * 首档：水位上穿 thr（普通一轮十几分钟）。
+ * 之后：每下穿一档「峰值 × ratio^k」再给一个候选时刻。核是幂律尾，
+ * 下穿 P·r^k 的时刻正好在 θ·r^-k，所以间隔天然等比递增（2,4,8,16 倍），
+ * 聊得越多峰值越高、档位越多、序列越长。
+ * 这些只是「可以问一句有没有话说」的候选点，发不发还要过话题和每日额度。
+ */
+export function waveSchedule(
+  pulses: Pulse[], fromTs: number, cfg: WaveConfig,
+  opt: { ratio?: number; maxStages?: number; horizonH?: number; floor?: number } = {},
+): SchedulePoint[] {
+  const ratio = opt.ratio ?? 0.5;
+  const maxStages = Math.max(1, opt.maxStages ?? 4);
+  const floor = opt.floor ?? 0.02;
+  const end = fromTs + (opt.horizonH ?? 6) * 3600e3;
+
+  const aAt = (t: number) => level(pulses.filter((p) => p.ts <= t), t, cfg).a;
+
+  // 先找峰值，档位相对峰值定，不然聊得多反而永远下不去
+  let peak = 0;
+  for (let t = fromTs; t <= end; t += 60e3) peak = Math.max(peak, aAt(t));
+  if (peak < cfg.thr) return [];
+
+  const out: SchedulePoint[] = [];
+  const marks = Array.from({ length: maxStages }, (_, k) => peak * ratio ** (k + 1)).filter((m) => m >= floor);
+
+  let stage = 0;          // 0 = 等首档上穿，1.. = 等第 stage 个下穿
+  let prevA = 0;
+  let first = false;
+  for (let t = fromTs; t <= end; t += 60e3) {
+    const a = aAt(t);
+    if (!first) {
+      if (a >= cfg.thr) { out.push({ at: t, level: a, stage: 0 }); first = true; }
+    } else if (stage < marks.length) {
+      const mark = marks[stage];
+      if (prevA >= mark && a < mark) { out.push({ at: t, level: a, stage: stage + 1 }); stage += 1; }
+    } else break;
+    prevA = a;
+  }
+  return out;
 }
