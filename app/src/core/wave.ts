@@ -29,6 +29,13 @@ export interface WaveConfig {
   ratio: number;
   /** 一个会话最多给几个候选点 */
   maxStages: number;
+  /** 每天最多叫醒她几次（不管她说没说，算了就占一次） */
+  maxWakesPerDay: number;
+  /** 每天花在主动唤醒上的 token 上限，超了就不再叫，但不影响用户消息 */
+  dailyTokens: number;
+  /** 夜间静默：这段时间里不主动叫醒（本地时间，HH:MM） */
+  quietStart: string;
+  quietEnd: string;
 }
 
 export const WAVE_DEFAULTS: WaveConfig = {
@@ -42,6 +49,10 @@ export const WAVE_DEFAULTS: WaveConfig = {
   idleExemptMin: 180,
   ratio: 0.5,
   maxStages: 3,
+  maxWakesPerDay: 8,
+  dailyTokens: 300_000,
+  quietStart: "00:30",
+  quietEnd: "08:00",
 };
 
 export function waveCfg(c?: Partial<WaveConfig> | null): WaveConfig {
@@ -248,4 +259,22 @@ export function waveCandidate(
     ok: true, stage, a, peak, sessionTs: sessionStart,
     detail: `退潮第 ${stage}/${cfg.maxStages} 档（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）`,
   };
+}
+
+/** HH:MM → 当天零点起的分钟数 */
+function hhmm(s: string): number {
+  const [h, m] = s.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** 这个时刻是否在夜间静默段里（支持跨零点，如 23:30→08:00） */
+export function inQuietHours(now: number, cfg: WaveConfig, tz = "Asia/Shanghai"): boolean {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(now));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const cur = get("hour") * 60 + get("minute");
+  const a = hhmm(cfg.quietStart), b = hhmm(cfg.quietEnd);
+  if (a === b) return false;
+  return a < b ? cur >= a && cur < b : cur >= a || cur < b;
 }

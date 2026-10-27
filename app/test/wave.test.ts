@@ -228,3 +228,22 @@ test("退潮档位：单个会话水位不够就永远没机会", () => {
   assert.equal(c.ok, false);
   assert.equal(c.peak, 0.4);
 });
+
+// ---------- 夜间静默 ----------
+
+import { inQuietHours } from "../src/core/wave.ts";
+
+test("夜间静默：凌晨不叫，白天放行，边界不含结束时刻", () => {
+  const cfg = waveCfg({ quietStart: "00:30", quietEnd: "08:00" });
+  assert.equal(inQuietHours(Date.parse("2026-10-27T17:00:00Z"), cfg), true, "北京 01:00 该静默");
+  assert.equal(inQuietHours(Date.parse("2026-10-27T00:00:00Z"), cfg), false, "北京 08:00 该放行");
+  assert.equal(inQuietHours(Date.parse("2026-10-27T02:00:00Z"), cfg), false, "北京 10:00 该放行");
+  assert.equal(inQuietHours(Date.parse("2026-10-26T16:20:00Z"), cfg), false, "北京 00:20 还没到静默");
+});
+
+test("夜间静默：跨零点的段（23:30→08:00）两头都算", () => {
+  const cfg = waveCfg({ quietStart: "23:30", quietEnd: "08:00" });
+  assert.equal(inQuietHours(Date.parse("2026-10-27T15:45:00Z"), cfg), true, "北京 23:45");
+  assert.equal(inQuietHours(Date.parse("2026-10-27T01:00:00Z"), cfg), false, "北京 09:00 该放行");
+  assert.equal(inQuietHours(Date.parse("2026-10-27T14:00:00Z"), cfg), false, "北京 22:00 放行");
+});

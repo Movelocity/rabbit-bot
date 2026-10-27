@@ -193,6 +193,30 @@ test("tick：没有未读，但水位退到档 → 仍然给 agent 一次自己�
   await t.done();
 });
 
+test("tick 主动：问过一档就不再重复问（不发也不该每 3 分钟叫一次）", async () => {
+  const t = await setup();
+  const now = t.clock.now();
+  let lastMsg: any = null;
+  for (const [i, min] of [40, 37, 34].entries()) {
+    lastMsg = t.app.store.insertMessage({
+      platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `r${i}`,
+      sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
+      text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
+      reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+    });
+  }
+  t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
+
+  assert.equal(t.app.scheduler.tick(), true, "第一次该叫醒她");
+  await t.settle(0);
+  // 同一档：无论她发没发，都不该再叫
+  t.clock.advance(3 * 60_000);
+  assert.equal(t.app.scheduler.tick(), false, "同一档不能每 3 分钟重问一次");
+  t.clock.advance(3 * 60_000);
+  assert.equal(t.app.scheduler.tick(), false);
+  await t.done();
+});
+
 test("记忆按 user_id 存，来源与可见范围默认按池类型", async () => {
   const t = await setup();
   t.dm("记住我喜欢喝茶");
