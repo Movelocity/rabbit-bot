@@ -20,7 +20,11 @@ export interface Config {
   context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
   handoff: { contextTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
-  limits: { dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number };
+  limits: {
+    dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
+    /** 额度用尽时给用户发一条提示：不走模型、不进上下文，只为不让对方以为被无视 */
+    capNotice?: { enabled: boolean; text: string; oncePerDay: boolean };
+  };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
   tide: { enabled: boolean; dailyCap: { L1: number; L2: number }; wave?: Partial<WaveConfig> };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };

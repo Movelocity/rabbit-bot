@@ -77,6 +77,7 @@ export class Store {
     // 水位场（2026-10-26）：判定当时的水位，调参只看这一列
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
+    try { this.db.exec("ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
   }
   close() { this.db.close(); }
 
@@ -142,14 +143,14 @@ export class Store {
 
   // ---------- 消息 ----------
   /** 入池；重复 msg_id 返回 null。 */
-  insertMessage(m: InboundMessage): StoredMessage | null {
+  insertMessage(m: InboundMessage & { internal?: boolean }): StoredMessage | null {
     if (this.hasMessage(m.platform, m.msg_id)) return null; // 重复投递：不产生任何副作用
     const pool = this.upsertPool(m.platform, m.external_chat_id, m.pool_kind, m.pool_title ?? "");
     const user_id = m.from_self ? null : this.resolveUser(m.platform, m.sender_id, m.sender_name);
-    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self,attachment)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
+    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self,attachment,internal)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
       m.reply_to, JSON.stringify(m.mentions), m.is_mention_me ? 1 : 0, m.media_type, m.from_self ? 1 : 0,
-      m.attachment ? JSON.stringify(m.attachment) : null);
+      m.attachment ? JSON.stringify(m.attachment) : null, m.internal ? 1 : 0);
     if (r.changes === 0) return null;
     this.db.prepare("UPDATE pools SET last_msg_at=MAX(last_msg_at,?) WHERE pool_id=?").run(m.ts, pool.pool_id);
     return this.getMessageBySeq(Number(r.lastInsertRowid))!;
@@ -165,8 +166,12 @@ export class Store {
     return (this.db.prepare("SELECT * FROM messages WHERE pool_id=? AND seq>? ORDER BY seq LIMIT ?").all(poolId, afterSeq, limit) as any[]).map(rowToMsg);
   }
   /** 最近 n 条（seq<=beforeSeq），按时间正序返回 */
-  recentMessages(poolId: string, n: number, beforeOrAtSeq = Number.MAX_SAFE_INTEGER): StoredMessage[] {
-    return (this.db.prepare("SELECT * FROM messages WHERE pool_id=? AND seq<=? ORDER BY seq DESC LIMIT ?").all(poolId, beforeOrAtSeq, n) as any[]).map(rowToMsg).reverse();
+  /** 上下文用的最近消息：默认排掉 internal 的系统提示（它们不该进模型眼里）。 */
+  recentMessages(poolId: string, n: number, beforeOrAtSeq = Number.MAX_SAFE_INTEGER, includeInternal = false): StoredMessage[] {
+    const sql = includeInternal
+      ? "SELECT * FROM messages WHERE pool_id=? AND seq<=? ORDER BY seq DESC LIMIT ?"
+      : "SELECT * FROM messages WHERE pool_id=? AND seq<=? AND internal=0 ORDER BY seq DESC LIMIT ?";
+    return (this.db.prepare(sql).all(poolId, beforeOrAtSeq, n) as any[]).map(rowToMsg).reverse();
   }
   maxSeq(poolId: string): number {
     return (this.db.prepare("SELECT COALESCE(MAX(seq),0) s FROM messages WHERE pool_id=?").get(poolId) as any).s;

@@ -217,6 +217,25 @@ test("tick 主动：问过一档就不再重复问（不发也不该每 3 分钟
   await t.done();
 });
 
+test("额度用尽：发一条提示给等着的人，不走模型，也不进上下文", async () => {
+  const t = await setup({ limits: { dailyLlmCalls: 0, dailyTokens: 0 } });
+  t.dm("在吗");
+  await t.settle(35_000);
+  const hits = () => t.mock.sent.filter((x: any) => String(x.content).includes("额度用完"));
+  assert.equal(hits().length, 1, `该发一条提示，实际发出：${JSON.stringify(t.mock.sent)}`);
+  assert.match(String(hits()[0].content), /^〔系统〕/, "要带标记，让人看得出不是她说的话");
+  // 不进上下文：任何池的库里都不该有这条
+  for (const pool of t.app.store.listPools()) {
+    const rows = t.app.store.recentMessages(pool.pool_id, 100) as any[];
+    assert.equal(rows.filter((r: any) => String(r.text ?? "").includes("额度用完")).length, 0, "提示不能入库");
+  }
+  // 每天只发一次
+  t.dm("还在吗");
+  await t.settle(35_000);
+  assert.equal(hits().length, 1, "一天只发一次");
+  await t.done();
+});
+
 test("记忆按 user_id 存，来源与可见范围默认按池类型", async () => {
   const t = await setup();
   t.dm("记住我喜欢喝茶");

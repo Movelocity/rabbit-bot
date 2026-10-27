@@ -32,7 +32,12 @@
   "limits": {
     "dailyLlmCalls": 300,
     "dailyTokens": 2000000,
-    "turnTimeoutMs": 300000
+    "turnTimeoutMs": 300000,
+    "capNotice": {
+      "enabled": true,
+      "text": "〔系统〕今天的额度用完了，我先歇一会儿——你说的话我记着，回头接着聊。",
+      "oncePerDay": true
+    }
   },
   "plans": {
     "missedPolicy": "catchup",

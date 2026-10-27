@@ -121,6 +121,34 @@ export class App {
     return out;
   }
 
+  /**
+   * 额度用完时，给还在等回复的人发一条提示。
+   *
+   * 三个约束：不走模型（零成本）、不进上下文（hub.send 直接发，不写库）、每天最多一次。
+   * 只在「有人正等着」的时候发——没人说话时耗尽额度，静悄悄待着就好，不用通知。
+   */
+  private async notifyCap(day: string): Promise<string | null> {
+    const n = this.o.cfg.limits.capNotice;
+    if (!n?.enabled) return null;
+    const key = `capNotice.${day}`;
+    if (n.oncePerDay && this.store.getKv(key)) return null;
+    const waiting = this.store.poolsWithUnread();
+    if (!waiting.length) return null;
+    const sent: string[] = [];
+    for (const pool of waiting) {
+      try {
+        const r = await this.hub.send(pool, n.text, { internal: true });
+        if (r.ok) sent.push(pool);
+      } catch (e) {
+        this.log.warn(`额度提示发送失败 ${pool}：${(e as Error).message}`);
+      }
+    }
+    if (!sent.length) return null;
+    this.store.setKv(key, String(this.clock.now()));
+    this.log.info(`额度用尽，已发提示到 ${sent.length} 个池（不进上下文）：${n.text}`);
+    return n.text;
+  }
+
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
@@ -148,8 +176,10 @@ export class App {
     if (this.store.isPaused()) return finish("skipped:paused");
     const day = dayKey(t0, cfg.timezone);
     const usage = this.store.getUsage(day);
-    if (usage.llm_calls >= cfg.limits.dailyLlmCalls || usage.tokens >= cfg.limits.dailyTokens)
-      return finish("skipped:daily-cap", { usage });
+    if (usage.llm_calls >= cfg.limits.dailyLlmCalls || usage.tokens >= cfg.limits.dailyTokens) {
+      const notice = await this.notifyCap(day);
+      return finish("skipped:daily-cap", notice ? { usage, notice } : { usage });
+    }
 
     // 读池：所有有未读的池（不只是触发的池），一次唤醒合并处理
     const plans: Plan[] = w.planFires.map((f) => this.store.getPlan(f.planId)).filter((p): p is Plan => !!p);
