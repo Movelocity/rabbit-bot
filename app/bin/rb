@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# rabbit-bot CLI：在任何目录都能用，自动定位到项目里的 src/cli.ts
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd)"
+cd "$APP_DIR"
+exec npx tsx src/cli.ts "$@"

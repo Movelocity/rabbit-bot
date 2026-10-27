@@ -45,7 +45,7 @@ test("plan 剧本：带上当时排它的理由，并允许作废", () => {
   const p = wakePrompt(s, { wake: mkWake("plan"), now: Date.now(), unread: [], context: new Map(), memories: new Map(), plans: [plan] });
   assert.match(p, /问他面试结果/);
   assert.match(p, /当时排它的理由是：他周三说今天出结果/);
-  assert.match(p, /已经聊过、或者已经没意义了 → plan_update 改成 cancelled/);
+  assert.match(p, /已经聊过、或者已经没意义了 → `rb plan update <id> --status cancelled`/);
   assert.match(p, /别念计划/);
 });
 

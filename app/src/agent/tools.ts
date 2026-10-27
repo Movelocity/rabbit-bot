@@ -9,6 +9,9 @@ import { parseIsoInTz, fmtLocal } from "../core/time.ts";
 import type { MemoryScope } from "../types.ts";
 import { fmtGrouped, fmtMsg, poolLabel } from "./prompt.ts";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { createSandboxFs } from "../core/sandbox-fs.ts";
@@ -26,6 +29,9 @@ export interface ToolDeps {
   silenceReason?: () => string | null;
   markSilent?: (reason: string) => void;
 }
+
+const execFileAsync = promisify(execFile);
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
 
@@ -75,17 +81,6 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  const listPools = defineTool({
-    name: "list_pools",
-    label: "list_pools",
-    executionMode: "sequential",
-    description: "列出所有聊天池。",
-    parameters: Type.Object({}),
-    async execute() {
-      const ps = d.store.listPools();
-      return txt(ps.map((p) => `${poolLabel(d.store, p)} 最后消息 ${p.last_msg_at ? fmtLocal(p.last_msg_at) : "-"}`).join("\n") || "（没有池）");
-    },
-  });
 
   const readPool = defineTool({
     name: "read_pool",
@@ -138,102 +133,10 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  const planAdd = defineTool({
-    name: "plan_add",
-    label: "plan_add",
-    executionMode: "sequential",
-    description:
-      "写一条计划。kind=once 时 when 为 ISO 时间（无时区按 Asia/Shanghai）；kind=cron 时 when 为 cron（分 时 日 月 周）；kind=none 为无时间的备忘。"
-      + "anchor 是这条计划的锚点档位：L0 日期类（谁的生日、约定好的日子，不受每日上限）；L1 跟进到期（等结果的事）；L2 普通关心（想到什么聊什么，每天最多 1 条）。不填按 L2 算。"
-      + "why 写一句话「为什么现在要排这条」——到点唤醒时会念给你听，写不出具体事就别排。",
-    parameters: Type.Object({
-      title: Type.String(),
-      content: Type.Optional(Type.String()),
-      pool: Type.Optional(Type.String({ description: "相关池别名" })),
-      kind: Type.Union([Type.Literal("once"), Type.Literal("cron"), Type.Literal("none")]),
-      when: Type.Optional(Type.String()),
-      expires: Type.Optional(Type.String({ description: "过期时间 ISO，可选" })),
-      anchor: Type.Optional(Type.Union([Type.Literal("L0"), Type.Literal("L1"), Type.Literal("L2")])),
-      why: Type.Optional(Type.String({ description: "一句话：为什么现在排这条" })),
-    }),
-    async execute(_id, p) {
-      const now = d.now();
-      const v = validateSchedule({ kind: p.kind, value: p.when }, now, d.cfg.timezone);
-      if (!v.ok) return txt(`计划格式错误：${v.error}`, { ok: false });
-      let expires: number | null = null;
-      if (p.expires) {
-        expires = parseIsoInTz(p.expires, d.cfg.timezone);
-        if (expires === null) return txt("expires 不是合法 ISO 时间", { ok: false });
-      }
-      const pool = p.pool ? d.store.resolvePool(p.pool) : undefined;
-      if (p.pool && !pool) return txt(`未知的池 ${p.pool}`, { ok: false });
-      const plan = d.store.insertPlan({
-        title: p.title, content: p.content ?? "", pool_id: pool?.pool_id ?? null,
-        schedule_kind: v.kind, schedule: v.schedule, expires_at: expires,
-        anchor_kind: p.anchor ?? null, why: p.why ?? null,
-      });
-      const tip = p.why ? "" : "（没写 why——到点被叫醒时会不知道当时为什么排它，补一句更好）";
-      return txt(`已记下计划#${plan.id}${v.firstFire ? `，下次触发 ${fmtLocal(v.firstFire)}` : ""}${tip}`, { ok: true, id: plan.id });
-    },
-  });
 
-  const planUpdate = defineTool({
-    name: "plan_update",
-    label: "plan_update",
-    executionMode: "sequential",
-    description: "修改计划状态：done 完成 / cancelled 取消 / pending 待办。",
-    parameters: Type.Object({ id: Type.Integer(), status: Type.Union([Type.Literal("pending"), Type.Literal("done"), Type.Literal("cancelled")]) }),
-    async execute(_id, p) {
-      return txt(d.store.setPlanStatus(p.id, p.status) ? `计划#${p.id} → ${p.status}` : `没有计划#${p.id}`);
-    },
-  });
 
-  const planList = defineTool({
-    name: "plan_list",
-    label: "plan_list",
-    executionMode: "sequential",
-    description: "列出待办计划。",
-    parameters: Type.Object({}),
-    async execute() {
-      const ps = d.store.listPlans("pending");
-      return txt(ps.map((p) => `#${p.id}「${p.title}」${p.schedule_kind}${p.schedule ? ` ${p.schedule}` : ""}${p.pool_id ? ` ${d.store.poolAlias(p.pool_id)}` : ""}`).join("\n") || "（无待办计划）");
-    },
-  });
 
-  const memoryAdd = defineTool({
-    name: "memory_add",
-    label: "memory_add",
-    executionMode: "sequential",
-    description: "按 user_id 记一条长期记忆：只记对方明说过的具体事实（说了什么、发生了什么、答应过什么），不记推断和总结。要细节去 search_messages 翻原话。scope：pool 仅来源池 / private 所有私聊 / group 所有群 / all 全部；默认按来源池类型。",
-    parameters: Type.Object({
-      user_id: Type.String(),
-      content: Type.String(),
-      source_pool: Type.String({ description: "信息来自哪个池" }),
-      kind: Type.Optional(Type.Union([Type.Literal("fact"), Type.Literal("topic")])),
-      scope: Type.Optional(Type.Union([Type.Literal("pool"), Type.Literal("private"), Type.Literal("group"), Type.Literal("all")])),
-    }),
-    async execute(_id, p) {
-      const pool = d.store.resolvePool(p.source_pool);
-      if (!pool) return txt(`未知的池 ${p.source_pool}`, { ok: false });
-      const scope: MemoryScope = p.scope ?? (pool.kind === "private" ? "private" : "group");
-      const id = d.store.addMemory({ user_id: p.user_id, kind: p.kind, content: p.content, source_pool_id: pool.pool_id, source_kind: pool.kind, scope });
-      return txt(`已记住#${id}（${scope}）`, { ok: true });
-    },
-  });
 
-  const memorySearch = defineTool({
-    name: "memory_search",
-    label: "memory_search",
-    executionMode: "sequential",
-    description: "查某个 user_id 在指定池里可见的记忆。",
-    parameters: Type.Object({ user_id: Type.String(), pool: Type.String() }),
-    async execute(_id, p) {
-      const pool = d.store.resolvePool(p.pool);
-      if (!pool) return txt(`未知的池 ${p.pool}`);
-      const ms = d.store.visibleMemories(p.user_id, pool, 20);
-      return txt(ms.map((m: any) => `#${m.id}[${m.kind}] ${m.content}`).join("\n") || "（无）");
-    },
-  });
 
   // 读本地图片进上下文。只允许两个沙箱目录：data/media/（聊天里收到的图）和 data/inbox/（手动放的）。
   // rabbit-bot 收的是任意飞书用户消息，一句提示注入就能让它读走 ~/.ssh 或凭据文件，所以路径必须锁死在这两个根下。
@@ -275,49 +178,6 @@ export function createTools(d: ToolDeps) {
   });
 
   // 列能看的图（分页）。它看不到文件系统，没这个就不知道 view_image 该传什么名字。
-  const listImages = defineTool({
-    name: "list_images",
-    label: "list_images",
-    executionMode: "sequential",
-    description: "列出能看的图片：media/（聊天里收到的，带消息号和尺寸）和 inbox/（手动放的），按时间从新到旧，分页。看下一页加 page。",
-    parameters: Type.Object({
-      source: Type.Optional(Type.String({ description: "media / inbox / all，默认 all" })),
-      page: Type.Optional(Type.Number({ description: "第几页，从 1 开始，默认 1" })),
-      page_size: Type.Optional(Type.Number({ description: "每页条数，默认 20，最多 50" })),
-    }),
-    async execute(_id, p) {
-      const page = Math.max(1, Math.floor(p.page ?? 1));
-      const size = Math.min(50, Math.max(1, Math.floor(p.page_size ?? 20)));
-      const src = String(p.source ?? "all").toLowerCase();
-      const items: { label: string; mtime: number }[] = [];
-      if (src === "media" || src === "all") {
-        // 从 DB 取（view_image 的压缩缓存写在 data/cache/，不会混进来）
-        const rows = d.store.db.prepare("select seq, ts, attachment from messages where attachment is not null order by seq desc limit 500").all() as any[];
-        for (const r of rows) {
-          let a: any;
-          try { a = JSON.parse(r.attachment); } catch { continue; }
-          if (!a?.path) continue;
-          items.push({ label: `media/${path.basename(a.path)} · ${a.width}×${a.height} · ${(a.bytes / 1024).toFixed(0)}KB · 消息#${r.seq} · ${fmtLocal(r.ts)}`, mtime: r.ts });
-        }
-      }
-      if (src === "inbox" || src === "all") {
-        try {
-          for (const e of fs.readdirSync(inboxDir, { withFileTypes: true })) {
-            if (!e.isFile()) continue;
-            const st = fs.statSync(path.join(inboxDir, e.name));
-            items.push({ label: `inbox/${e.name} · ${(st.size / 1024).toFixed(0)}KB · ${fmtLocal(st.mtimeMs)}`, mtime: st.mtimeMs });
-          }
-        } catch { /* 没有 inbox 目录就当空 */ }
-      }
-      items.sort((a, b) => b.mtime - a.mtime);
-      const total = items.length;
-      if (!total) return txt("还没有能看的图片（聊天里发过的图和 data/inbox/ 里放的文件都会出现在这里）", { total: 0 });
-      const pages = Math.ceil(total / size);
-      const slice = items.slice((page - 1) * size, page * size);
-      const more = page < pages ? `\n（还有下一页：page=${page + 1}）` : "";
-      return txt(`共 ${total} 张，第 ${page}/${pages} 页\n${slice.map((i) => i.label).join("\n") || "（本页为空）"}${more}`, { total, page, pages });
-    },
-  });
 
   // 联网搜索：DeepSeek 官方搜索接口（POST /v1/tools/search，自研搜索引擎）。
   // 只返回标题/站点/日期/摘要/链接，正文按需（with_content）——摘要 600-800 字够模型读了。
@@ -437,90 +297,99 @@ export function createTools(d: ToolDeps) {
     });
   const sboxErr = (e: unknown) => txt((e as Error).message, { ok: false });
 
-  const sandboxList = defineTool({
-    name: "sandbox_list",
-    label: "sandbox_list",
-    executionMode: "sequential",
-    description: "列出沙盒目录里的文件和子目录（只看一层）。path 留空看根目录。",
-    parameters: Type.Object({ path: Type.Optional(Type.String({ description: "子目录相对路径，可空" })) }),
-    async execute(_id, p) {
-      try {
-        const items = sbox().list(p.path ?? "");
-        if (!items.length) return txt("（空目录）", { ok: true, count: 0 });
-        const body = items.map((e) => (e.kind === "dir" ? `${e.path}/` : `${e.path} · ${e.bytes}B`)).join("\n");
-        return txt(body, { ok: true, count: items.length });
-      } catch (e) {
-        return sboxErr(e);
-      }
-    },
-  });
 
-  const sandboxRead = defineTool({
-    name: "sandbox_read",
-    label: "sandbox_read",
-    executionMode: "sequential",
-    description: "读沙盒里的一个文本文件（相对路径，一次最多 8000 字）。",
-    parameters: Type.Object({ path: Type.String({ description: "相对路径，如 notes/todo.md" }) }),
-    async execute(_id, p) {
-      try {
-        return txt(sbox().read(p.path), { ok: true });
-      } catch (e) {
-        return sboxErr(e);
-      }
-    },
-  });
 
-  const sandboxWrite = defineTool({
-    name: "sandbox_write",
-    label: "sandbox_write",
-    executionMode: "sequential",
-    description: "在沙盒里写一个文本文件（相对路径，覆盖写）。父目录自动创建，单文件上限 256KB，整个区最多 200 个文件。",
-    parameters: Type.Object({
-      path: Type.String({ description: "相对路径，如 notes/2026-10-24.md" }),
-      content: Type.String({ description: "文件内容（文本）" }),
-    }),
-    async execute(_id, p) {
-      try {
-        const bytes = sbox().write(p.path, p.content);
-        return txt(`已写入 ${p.path}（${bytes} 字节）`, { ok: true, bytes });
-      } catch (e) {
-        return sboxErr(e);
-      }
-    },
-  });
 
   // 沙盒 shell：命令跑在隔离容器里（无网 / 根只读 / 只有 /work 可写），宿主机的路径在容器里不存在。
-  const sandboxRun = defineTool({
-    name: "sandbox_run",
-    label: "sandbox_run",
+
+
+  const listImages = defineTool({
+    name: "list_images",
+    label: "list_images",
     executionMode: "sequential",
-    description:
-      "在一个隔离容器里执行 shell 命令（sh -lc）。容器里：根目录只读、只有 /work 可写（它对应 sandbox 目录，sandbox_write 写的文件就在 /work 下）、256MB 内存、默认 10 秒超时。" +
-      "宿主机的任何路径在容器里都不存在，别试；要存东西写到 /work。",
+    description: "列出能看的图片：media/（聊天里收到的，带消息号和尺寸）和 inbox/（手动放的），按时间从新到旧，分页。看下一页加 page。",
     parameters: Type.Object({
-      cmd: Type.String({ description: "shell 命令，例如 ls -la /work && node -v" }),
-      timeout_s: Type.Optional(Type.Number({ description: "超时秒数，默认 10，最多 30" })),
+      source: Type.Optional(Type.String({ description: "media / inbox / all，默认 all" })),
+      page: Type.Optional(Type.Number({ description: "第几页，从 1 开始，默认 1" })),
+      page_size: Type.Optional(Type.Number({ description: "每页条数，默认 20，最多 50" })),
     }),
     async execute(_id, p) {
-      const sc = d.cfg.sandbox.shell;
-      if (!sc.enabled) return txt("沙盒 shell 没开", { ok: false });
-      const secs = Math.min(30, Math.max(1, Math.floor(p.timeout_s ?? sc.timeoutMs / 1000)));
+      const page = Math.max(1, Math.floor(p.page ?? 1));
+      const size = Math.min(50, Math.max(1, Math.floor(p.page_size ?? 20)));
+      const src = String(p.source ?? "all").toLowerCase();
+      const items: { label: string; mtime: number }[] = [];
+      if (src === "media" || src === "all") {
+        // 从 DB 取（view_image 的压缩缓存写在 data/cache/，不会混进来）
+        const rows = d.store.db.prepare("select seq, ts, attachment from messages where attachment is not null order by seq desc limit 500").all() as any[];
+        for (const r of rows) {
+          let a: any;
+          try { a = JSON.parse(r.attachment); } catch { continue; }
+          if (!a?.path) continue;
+          items.push({ label: `media/${path.basename(a.path)} · ${a.width}×${a.height} · ${(a.bytes / 1024).toFixed(0)}KB · 消息#${r.seq} · ${fmtLocal(r.ts)}`, mtime: r.ts });
+        }
+      }
+      if (src === "inbox" || src === "all") {
+        try {
+          for (const e of fs.readdirSync(inboxDir, { withFileTypes: true })) {
+            if (!e.isFile()) continue;
+            const st = fs.statSync(path.join(inboxDir, e.name));
+            items.push({ label: `inbox/${e.name} · ${(st.size / 1024).toFixed(0)}KB · ${fmtLocal(st.mtimeMs)}`, mtime: st.mtimeMs });
+          }
+        } catch { /* 没有 inbox 目录就当空 */ }
+      }
+      items.sort((a, b) => b.mtime - a.mtime);
+      const total = items.length;
+      if (!total) return txt("还没有能看的图片（聊天里发过的图和 data/inbox/ 里放的文件都会出现在这里）", { total: 0 });
+      const pages = Math.ceil(total / size);
+      const slice = items.slice((page - 1) * size, page * size);
+      const more = page < pages ? `\n（还有下一页：page=${page + 1}）` : "";
+      return txt(`共 ${total} 张，第 ${page}/${pages} 页\n${slice.map((i) => i.label).join("\n") || "（本页为空）"}${more}`, { total, page, pages });
+    },
+  });
+
+  /**
+   * 通用 CLI 通道：低频操作（计划、记忆、沙盒文件、图片列表、联网）走命令行，
+   * 不再各自占一个工具 schema。一个工具替代七八个，prompt 里省下的是每次调用都要付的钱。
+   *
+   * 只认白名单首命令，且不起 shell（execFile 逐参数传），模型没法拼出 `; rm -rf`。
+   */
+  const splitArgs = (line: string): string[] => {
+    const out: string[] = [];
+    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(line))) out.push(m[1] ?? m[2] ?? m[3]);
+    return out;
+  };
+
+  const rb = defineTool({
+    name: "rb",
+    label: "rb",
+    executionMode: "sequential",
+    description:
+      "跑 rabbit-bot 的命令行（JSON 输出）。用于：记/查计划（plan list|add|update）、记/查长期记忆（mem add|search）、"
+      + "沙盒文件（sb list|read|write|run）、列图片（img list|view）、翻旧消息（pool list|read|search）、联网（web search|fetch）。"
+      + "args 传完整参数串，例如 args=\"plan list\"、args=\"mem add --user u1 --content 他周一要交报告 --pool p1\"。不确定就 args=\"--help\"。",
+    parameters: Type.Object({ args: Type.String({ description: "命令行参数串，不含开头的 rb" }) }),
+    async execute(_id, p) {
+      const parts = splitArgs(String(p.args ?? ""));
+      const head = parts[0] ?? "";
+      const allowed = ["pool", "plan", "mem", "img", "sb", "web", "--help"];
+      if (!allowed.includes(head)) {
+        return txt(`不支持的子命令「${head}」。可用：${allowed.join(" / ")}；args="--help" 看全部用法。`, { ok: false });
+      }
       try {
-        const r = await runInSandbox(p.cmd, {
-          container: sc.container,
-          image: sc.image,
-          network: sc.network,
-          workspace: d.cfg.sandbox.dir,
-          timeoutMs: secs * 1000,
-          maxOutputChars: sc.maxOutputChars,
+        // --db 指向本进程用的同一个库：否则 CLI 会去开默认库，测试里写的和读的不是一个地方
+        const { stdout } = await execFileAsync("npx", ["tsx", "src/cli.ts", ...parts, "--db", d.store.file, "--now", String(d.now())], {
+          cwd: APP_ROOT, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: process.env,
         });
-        const head = r.ok ? "" : `退出码 ${r.code}\n`;
-        return txt(`${head}${r.output || "（没有输出）"}`, { ok: r.ok, code: r.code });
+        return txt(stdout.trim() || "（没有输出）", { ok: true });
       } catch (e) {
-        return txt(`沙盒执行失败：${(e as Error).message}`, { ok: false });
+        const err = e as { stdout?: string; stderr?: string; message: string };
+        const body = (err.stdout || "").trim() || err.message;
+        return txt(`命令失败：${body.slice(0, 800)}`, { ok: false });
       }
     },
   });
 
-  return [send, staySilent, listPools, readPool, searchMessages, planAdd, planUpdate, planList, memoryAdd, memorySearch, listImages, viewImage, sandboxList, sandboxRead, sandboxWrite, sandboxRun, webSearch, webFetch];
+  return [send, staySilent, readPool, searchMessages, listImages, viewImage, webSearch, webFetch, rb];
 }

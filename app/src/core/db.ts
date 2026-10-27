@@ -61,7 +61,11 @@ function rowToMsg(r: any): StoredMessage {
 
 export class Store {
   readonly db: Database.Database;
+  /** 库文件路径：CLI 要用它指向同一个库（测试里是临时文件，线上是 data/rabbit-bot.db） */
+  readonly file: string;
+
   constructor(file: string) {
+    this.file = file;
     if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
     this.db = new Database(file);
     this.db.pragma("journal_mode = WAL");
