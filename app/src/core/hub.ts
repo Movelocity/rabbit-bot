@@ -83,7 +83,7 @@ export class Hub {
   }
 
   /** send(pool, content)：表情解析 → 发送 → 等待约 1 秒确认 → 收集期间新消息 */
-  async send(poolRef: string, content: string): Promise<SendOutcome> {
+  async send(poolRef: string, content: string, opts: { internal?: boolean } = {}): Promise<SendOutcome> {
     const pool = this.store.resolvePool(poolRef);
     if (!pool) return { ok: false, error: `未知的池 ${poolRef}`, sentParts: [], newMessages: [] };
     const adapter = this.adapters.get(pool.platform);
@@ -118,21 +118,24 @@ export class Hub {
       await flush();
     } catch (e) {
       this.log.error(`发送失败 ${pool.pool_id}`, e);
-      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: this.takeUnread() };
+      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread() };
     }
 
     await sleep(this.cfg.send.confirmWaitMs);
     for (const p of parts) {
       p.confirmed = adapter.confirm && (this.cfg.send.confirmViaApi || adapter.platform === "mock") ? await adapter.confirm(p.msgId) : true;
-      // 自己发的消息也入池（from_self），保证池里是完整对话
+      // 自己发的消息也入池（from_self），保证池里是完整对话；
+      // internal=true 的是系统提示（额度用尽等）：入库留痕，但 recentMessages 会排掉，不污染上下文
       this.store.insertMessage({
         platform: pool.platform, external_chat_id: pool.external_id, pool_kind: pool.kind, msg_id: p.msgId,
         sender_id: "self", sender_name: this.cfg.agent.name, ts: Date.now(), text: p.content, reply_to: null,
         mentions: [], is_mention_me: false, media_type: p.kind === "sticker" ? "sticker" : "text", from_self: true,
+        internal: opts.internal === true,
       });
     }
     this.scheduler?.markActive();
     this.onSent?.(pool.pool_id, content);
-    return { ok: true, sentParts: parts, newMessages: this.takeUnread() };
+    // internal 的系统提示不能吃掉未读：它只是通知，用户的话还得等下次唤醒去读
+    return { ok: true, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread() };
   }
 }
