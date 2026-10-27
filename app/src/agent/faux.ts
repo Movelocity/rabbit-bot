@@ -69,9 +69,9 @@ function respond(context: any): any {
       if (p.text.includes("/plan") && nowStr) {
         const d = new Date(Date.parse(nowStr.replace(" ", "T") + ":00+08:00") + 60_000);
         const when = new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 16);
-        calls.push(fauxToolCall("rb", { args: `plan add --title 一分钟后提醒 --pool ${pool} --kind once --when ${when}` }));
+        calls.push(fauxToolCall("rb", { args: `plan-add --title 一分钟后提醒 --pool ${pool} --kind once --when ${when}` }));
       }
-      if (p.text.includes("记住")) calls.push(fauxToolCall("rb", { args: `mem add --user ${p.uid} --content "${p.text}" --pool ${pool}` }));
+      if (p.text.includes("记住")) calls.push(fauxToolCall("rb", { args: `mem-add --user ${p.uid} --content "${p.text}" --pool ${pool}` }));
     }
     if (!calls.length) return fauxAssistantMessage(parsed.length ? "群里没人@我，先不说话。" : "无事可做。");
     return fauxAssistantMessage(calls);

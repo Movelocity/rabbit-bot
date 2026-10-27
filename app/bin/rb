@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# rabbit-bot CLI：在任何目录都能用，自动定位到项目里的 src/cli.ts
+# rb <脚本名> [参数…] —— 四行转发器：只把名字翻译成 scripts/<名字>.ts，不含任何逻辑。
+# 新增能力 = 在 scripts/ 下加一个文件，这里和 agent 侧都不用改。
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$APP_DIR"
-exec npx tsx src/cli.ts "$@"
+name="${1:-}"; shift || true
+if [ -z "$name" ] || [ "$name" = "help" ] || [ "$name" = "-h" ] || [ "$name" = "--help" ]; then
+  echo "可用脚本："
+  ls scripts/*.ts | xargs -n1 basename | sed 's/\.ts$//' | sed 's/^/  /'
+  echo
+  echo "用法：rb <脚本名> [参数…]      例：rb pool-list / rb pool-read p1 --limit 5"
+  exit 0
+fi
+exec npx tsx "scripts/$name.ts" "$@"
