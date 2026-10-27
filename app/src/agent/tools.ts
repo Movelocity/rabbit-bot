@@ -348,11 +348,19 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
-   * 通用 CLI 通道：低频操作（计划、记忆、沙盒文件、图片列表、联网）走命令行，
-   * 不再各自占一个工具 schema。一个工具替代七八个，prompt 里省下的是每次调用都要付的钱。
+   * 脚本通道：一个工具顶掉一堆 schema，但**不含任何业务逻辑**——它只是把名字翻译成
+   * scripts/<名字>.ts 然后执行。白名单直接扫 scripts/ 目录，所以加新脚本连这里都不用改。
    *
-   * 只认白名单首命令，且不起 shell（execFile 逐参数传），模型没法拼出 `; rm -rf`。
+   * 不起 shell（execFile 逐参数传），模型拼不出 `; rm -rf`。
    */
+  const scriptNames = (): string[] => {
+    try {
+      return fs.readdirSync(path.join(APP_ROOT, "scripts"))
+        .filter((f) => f.endsWith(".ts"))
+        .map((f) => f.replace(/\.ts$/, ""));
+    } catch { return []; }
+  };
+
   const splitArgs = (line: string): string[] => {
     const out: string[] = [];
     const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -366,27 +374,28 @@ export function createTools(d: ToolDeps) {
     label: "rb",
     executionMode: "sequential",
     description:
-      "跑 rabbit-bot 的命令行（JSON 输出）。用于：记/查计划（plan list|add|update）、记/查长期记忆（mem add|search）、"
-      + "沙盒文件（sb list|read|write|run）、列图片（img list|view）、翻旧消息（pool list|read|search）、联网（web search|fetch）。"
-      + "args 传完整参数串，例如 args=\"plan list\"、args=\"mem add --user u1 --content 他周一要交报告 --pool p1\"。不确定就 args=\"--help\"。",
-    parameters: Type.Object({ args: Type.String({ description: "命令行参数串，不含开头的 rb" }) }),
+      "跑 rabbit-bot 的一个脚本（JSON 输出）。脚本清单：pool-list / pool-read / pool-search / plan-list / plan-add / plan-update / "
+      + "mem-add / mem-search / img-list / img-view / sb / web-search / web-fetch。"
+      + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"。"
+      + "不确定有哪些脚本就 args=\"--help\"。",
+    parameters: Type.Object({ args: Type.String({ description: "脚本名 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
     async execute(_id, p) {
       const parts = splitArgs(String(p.args ?? ""));
-      const head = parts[0] ?? "";
-      const allowed = ["pool", "plan", "mem", "img", "sb", "web", "--help"];
-      if (!allowed.includes(head)) {
-        return txt(`不支持的子命令「${head}」。可用：${allowed.join(" / ")}；args="--help" 看全部用法。`, { ok: false });
+      const name = parts[0] ?? "";
+      const known = scriptNames();
+      if (!name || !known.includes(name)) {
+        return txt(`没有这个脚本「${name}」。可用：${known.filter((n) => !n.startsWith("wave-")).join(" / ")}`, { ok: false });
       }
       try {
-        // --db 指向本进程用的同一个库：否则 CLI 会去开默认库，测试里写的和读的不是一个地方
-        const { stdout } = await execFileAsync("npx", ["tsx", "src/cli.ts", ...parts, "--db", d.store.file, "--now", String(d.now())], {
+        // --db 指向本进程正在用的库；--now 让脚本和这一轮用同一个「现在」（模拟器里时间也是假的）
+        const { stdout } = await execFileAsync("npx", ["tsx", `scripts/${name}.ts`, ...parts.slice(1), "--db", d.store.file, "--now", String(d.now())], {
           cwd: APP_ROOT, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: process.env,
         });
         return txt(stdout.trim() || "（没有输出）", { ok: true });
       } catch (e) {
         const err = e as { stdout?: string; stderr?: string; message: string };
         const body = (err.stdout || "").trim() || err.message;
-        return txt(`命令失败：${body.slice(0, 800)}`, { ok: false });
+        return txt(`脚本失败：${body.slice(0, 800)}`, { ok: false });
       }
     },
   });

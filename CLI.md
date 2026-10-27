@@ -1,56 +1,75 @@
-# rb —— rabbit-bot 的命令行
+# 脚本层 —— rabbit-bot 的能力出口
 
-同一个能力三个入口，行为必须一致：agent 的工具、人手动、别的 agent 走 shell。
-所以所有逻辑都在 `src/core` 里，`src/cli.ts` 只是薄壳（参数解析 + 输出格式），不重新实现规则。
+**一个能力一个文件。** 加新能力 = 在 `scripts/` 下新建一个 `.ts`，不改任何已有文件：
+不用改路由表、不用改 agent 的工具列表（agent 侧的白名单是扫目录得来的）。
+
+`bin/rb` 只是个四行转发器：`rb pool-list` → `npx tsx scripts/pool-list.ts`。它不含逻辑，加脚本也不用改它。
 
 ```bash
-rb --help                 # 全部子命令
-rb pool list --human      # 人读格式；不加 --human 是 JSON
+rb                              # 列出所有脚本
+rb pool-list                    # 任何目录都能用（已软链到 ~/.local/bin/rb）
+npx tsx scripts/pool-list.ts    # 等价的完整写法
 ```
 
-## 命令
+## 清单
 
-| 命令 | 说明 |
-|---|---|
-| `rb pool list` | 所有池：别名、类型、最后消息、条数 |
-| `rb pool read <pool> [--limit 15] [--before-seq N]` | 读历史，不动未读游标 |
-| `rb pool search <关键词> --pool <p> [--limit 15]` | 按关键词翻旧账（比一页页读快） |
-| `rb plan list [--status pending]` | 待办/已办/已取消 |
-| `rb plan add --title X --kind once\|cron\|none [--when V] [--why W]` | 写计划；`--anchor L0\|L1\|L2` 选档位 |
-| `rb plan update <id> --status done` | 改状态 |
-| `rb mem add --user U --content C --pool P [--kind fact\|topic] [--scope ...]` | 记一条长期记忆 |
-| `rb mem search --user U --pool P` | 查这个人在这个池能看到的记忆 |
-| `rb img list [--source media\|inbox\|all] [--page N]` | 列能看的图 |
-| `rb img view <path>` | 给出真实路径和大小（**读图本身**仍由模型侧的 `view_image` 做） |
-| `rb sb list [path]` / `read` / `write` / `run` | 沙盒目录，路径一律相对 |
-| `rb web search <查询> [--count 6] [--content]` | 联网搜索 |
-| `rb web fetch <url>` | 抓正文 |
+| 脚本 | 干什么 | 例子 |
+|---|---|---|
+| `pool-list` | 所有聊天池：别名、类型、最后消息、条数 | `rb pool-list` |
+| `pool-read` | 读历史（不动未读游标） | `rb pool-read p1 --limit 20` |
+| `pool-search` | 按关键词翻旧账（比一页页读快） | `rb pool-search "火锅" --pool p1` |
+| `plan-list` | 列计划 | `rb plan-list --status pending` |
+| `plan-add` | 写计划 | `rb plan-add --title 问他面试结果 --kind once --when 2026-10-27T22:00 --why "他说今天出结果"` |
+| `plan-update` | 改计划状态 | `rb plan-update 12 --status done` |
+| `mem-add` | 记一条长期记忆 | `rb mem-add --user u1 --content "他对花生过敏" --pool p1` |
+| `mem-search` | 查某人在某池可见的记忆 | `rb mem-search --user u1 --pool p1` |
+| `img-list` | 列能看的图 | `rb img-list --source media` |
+| `img-view` | 给出图片真实路径（**读图本身**仍由 agent 的 `view_image` 做） | `rb img-view media/om_xxx.jpg` |
+| `sb` | 沙盒目录：`list / read / write / run` | `rb sb run "ls -la /work"` |
+| `web-search` | 联网搜索 | `rb web-search "DeepSeek v4" --count 5` |
+| `web-fetch` | 抓网页正文 | `rb web-fetch https://example.com` |
 
-## 输出契约
+`wave-*.ts` 是水位场的调参/观测脚本，不接 agent（见 `WAVE.md`）。
+
+## 约定（新脚本照抄）
+
+```ts
+import { run, openStore, mustPool, describe, str, num } from "./lib/kit.ts";
+
+describe("npx tsx scripts/xxx.ts <参数>");     // --help 打这一行
+
+await run(({ pos, flags }) => {
+  const store = openStore(flags);
+  try {
+    // ...只做这一件事
+    return { some: "data" };                  // 可 JSON 序列化
+  } finally { store.close(); }
+});
+```
+
+**输出契约**
 
 ```json
 { "ok": true,  "data": ... }        // 退出码 0
 { "ok": false, "error": "原因" }     // 退出码 1
 ```
 
-默认 JSON 是给程序读的：模型解析 JSON 比解析表格可靠，字段名不会被「猜」。
-`--human` 只是调试方便，**不要在脚本里依赖它的格式**。
+1. 失败一律 `throw`，由 kit 统一转成 `{ok:false,error}` + 退出码 1。不要 `console.log("出错")` 还退 0——调用方分不清「查到了空」和「查挂了」。
+2. `data` 里放结构，不放排版好的中文长文本——排版是调用方的事。
+3. `--db` / `--now` 由 kit 处理：前者指库，后者是「现在」（模拟器里时钟是假的，不伪造会误判「时间已过」）。
+4. 新脚本要能被 agent 用：不用改任何东西，`rb` 工具扫 `scripts/` 拿白名单。
+5. 每个脚本配一条 `test/cli.test.ts` 的用例：能跑通 + 一条失败路径。
 
-## 两个内部参数
+## 为什么不是一个大 CLI
 
-- `--db <路径>`：指向哪个库。agent 侧调用时会自动带上自己正在用的库，否则会去开默认库，读写两处。
-- `--now <毫秒>`：覆盖「现在」。只给测试用，模拟器的时间是假的，拿真实时钟判「这个时间过没过」会误判。
+早先版本是一个 `src/cli.ts`，六组子命令共 500 行，路由表在中间。问题不在行数，在**耦合**：
+加能力要动那个文件，所有人的 schema 都跟着它走。
 
-## 没有做成 CLI 的东西
+拆成脚本后，每个文件只依赖 `scripts/lib/kit.ts` + `src/core`，彼此不知道对方存在。删一个不带走别的，改一个不碰别的。
 
-`send` 和 `stay_silent` 留在工具里，因为它们依赖**正在跑的那个进程**的状态：发送去抖、发送确认、未读游标、`seenPools`。
-拆出去要么把状态机复制一份，要么把状态外置——两种都比多两个 schema 贵。
+## 没有脚本化的东西
 
-`view_image` 同理：它要把图片字节塞进模型上下文，CLI 只能给出路径。
+`send` / `stay_silent` 留在 agent 工具里：它们依赖**正在跑的那个进程**的状态（发送去抖、发送确认、未读游标、`seenPools`）。
+脚本是独立进程，拆出去要么复制状态机，要么把状态外置，两种都比多两个 schema 贵。
 
-## 加新命令的规矩
-
-1. 逻辑写进 `src/core`（纯函数或 Store 方法），CLI 只做参数映射。
-2. 输出必须是 JSON 可序列化的 `{ok, data}`，不要在 `data` 里塞已经格式化好的中文长文本。
-3. 失败一律 `throw`，由 `run()` 统一转成 `{ok:false, error}`；不要 `console.log("出错了")` 然后退出码 0。
-4. 加一条 `test/cli.test.ts` 的用例：命令能跑通，加一条失败路径。
+`view_image` 同理：它要把图片字节塞进模型上下文，脚本只能给出路径。
