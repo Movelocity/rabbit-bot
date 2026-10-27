@@ -5,7 +5,7 @@ import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
 import { PlanEngine } from "./core/plans.ts";
-import { waveCandidate } from "./core/wave.ts";
+import { waveCandidate, inQuietHours, waveCfg as cfgApp } from "./core/wave.ts";
 import { RunQueue } from "./core/queue.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
@@ -106,6 +106,13 @@ export class App {
   private proactivePools(now: number): NonNullable<Wake["proactive"]> {
     const cfg = this.o.cfg.tide?.wave;
     if (!cfg?.enabled) return [];
+    // 夜间不叫：叫醒只是为了让她说句话，凌晨说给谁听
+    if (inQuietHours(now, cfgApp(cfg), this.o.cfg.timezone)) return [];
+    // 每天的次数和 token 都封顶：一个人一天被想起 8 次够了，凌晨连问 60 次那是程序发疯
+    const dayStart = now - ((now + 8 * 3600e3) % 86400e3);
+    const used = this.store.proactiveUsage(dayStart, dayStart + 86400e3);
+    if (used.wakes >= cfgApp(cfg).maxWakesPerDay) return [];
+    if (used.tokens >= cfgApp(cfg).dailyTokens) return [];
     const out: NonNullable<Wake["proactive"]> = [];
     for (const pool of this.store.listPools()) {
       const c = waveCandidate(this.store, pool.pool_id, now, cfg);
@@ -223,12 +230,14 @@ export class App {
     }
     const sent = res.toolCalls.filter((c) => c.name === "send" && !c.isError).map((c) => c.args);
     this.sendsThisTurn = sent.length;
-    // 水位档位要「真的开口了」才记账：没发就留着，下一个 tick 还有机会
-    if (sent.length && proactive.length) {
+    // 问过就算：这一档机会用掉了，不管她说没说。
+    // 之前只在发送后记账，导致不打发就一直重问——凌晨每 3 分钟叫一次，6 小时烧掉 200 万 token。
+    if (proactive.length) {
       for (const p of proactive) {
         this.store.recordTideEvent({
           pool_id: p.pool, day, ts: this.clock.now(), kind: "wave", anchor_kind: "L2",
-          wave_a: p.a, stage: p.stage, reason: p.detail,
+          wave_a: p.a, stage: p.stage,
+          reason: sent.length ? p.detail : `${p.detail}｜没发（${this.silenceReason ?? "no reason"}）`,
         });
       }
     }

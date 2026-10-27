@@ -231,7 +231,28 @@ export class Store {
       .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null, e.wave_a ?? null, e.stage ?? null);
   }
 
-  /** 这个会话（sinceTs 之后）已经用掉的退潮档位。只看「真的开口过」的记录。 */
+  /**
+   * 当天主动唤醒的用量：叫了几次、烧了多少 token。
+   * 只统计带 proactive 的 tick（wake_log 里 reasons 提到水位），不含用户消息那一类。
+   */
+  proactiveUsage(fromTs: number, toTs: number): { wakes: number; tokens: number } {
+    const rows = this.db.prepare("SELECT json FROM wake_log WHERE ts >= ? AND ts < ?").all(
+      new Date(fromTs).toISOString(), new Date(toTs).toISOString(),
+    ) as { json: string }[];
+    let wakes = 0, tokens = 0;
+    for (const r of rows) {
+      try {
+        const e = JSON.parse(r.json);
+        const isProactive = e.type === "tick" && (e.reasons ?? []).some((x: string) => String(x).includes("水位"));
+        if (!isProactive) continue;
+        wakes += 1;
+        tokens += Number(e.tokens ?? 0);
+      } catch { /* 坏行跳过 */ }
+    }
+    return { wakes, tokens };
+  }
+
+  /** 这个会话（sinceTs 之后）已经用掉的退潮档位。问过就算，不管她说没说。 */
   usedWaveStages(poolId: string | null, sinceTs: number): number[] {
     const rows = poolId === null
       ? this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave')`).all(sinceTs)

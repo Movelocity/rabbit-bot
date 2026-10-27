@@ -99,7 +99,11 @@
       "horizonH": 24,
       "idleExemptMin": 180,
       "ratio": 0.5,
-      "maxStages": 3
+      "maxStages": 3,
+      "maxWakesPerDay": 8,
+      "dailyTokens": 300000,
+      "quietStart": "00:30",
+      "quietEnd": "08:00"
     }
   }
 }
