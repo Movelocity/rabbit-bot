@@ -188,3 +188,21 @@ extensionFactories: [
 **有网的代价**：容器能上网，也就能把手里拿到的内容发出去。宿主文件仍然碰不到（`/Users` 在容器里不存在），但如果模型把聊天内容写进 `/work` 再外发，这条链路是通的。想收紧就把 `config.sandbox.shell.network` 改 `"none"`，再 `docker rm -f rabbit-bot-sbx` 让它按新参数重建。
 
 **测试**：`test/sandbox-shell.test.ts` 5 条锁住「宿主路径不存在 / network 两种模式 / 根只读 / 写 /work 落到宿主 / 超时被杀」，没有 docker 时自动 skip。
+
+## 改提示词
+
+提示词的文案在 `app/config/prompt/*.md`，不在代码里。改完**不需要 build**，按表重启与否：
+
+| 文件 | 内容 | 改了要重启吗 |
+|---|---|---|
+| `system.md` | 主提示词：12 条规则、[当前状态] 那段 | **要**（pi 的 system prompt 是会话级固定的，`app.ts` 只在建会话时算一次） |
+| `handoff.md` | 上下文将满时让它写交接文档的要求 | 不要 |
+| `wake.md` | 每轮唤醒的骨架（时间/计划/上下文/未读/潮汐状态） | 不要 |
+| `scene-message.md` `scene-tick.md` `scene-plan.md` | 三种唤醒场景的剧本 | 不要 |
+| `part-*.md` | 被塞进上面几个里的小片段（水位那段、计划理由、潮汐两行） | 不要 |
+
+`persona.md`（人设）同理：它是 `system.md` 里的 `{{persona}}`，改完要重启。
+
+**模板里没有逻辑**：只有 `{{变量}}`，没有 if / for。需要分岔就在代码里选不同模板（`part-plan-why.md` 和 `part-plan-nowhy.md` 就是这么分的），需要列表就由代码拼成整段再注入。写错变量名会**直接抛错并列出缺了哪个**，不会静默少一段——启动后第一条消息就能看出问题。
+
+验证：`npx tsx scripts/wave-check.ts` 之类的都不用，直接 `npm test`（`test/template.test.ts` 5 条锁住替换、报错、热读）。

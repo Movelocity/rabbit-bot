@@ -13,7 +13,7 @@ import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import type { Logger } from "../core/logger.ts";
 import { applyCommunityLoopGuardEnv, builtinLoopGuardExtension, callKey, communityLoopGuardPath } from "../core/loopguard.ts";
-import { HANDOFF_PROMPT } from "./prompt.ts";
+import { handoffPrompt } from "./prompt.ts";
 
 export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
 export interface RunResult {
@@ -189,7 +189,7 @@ export class PiEngine implements AgentEngine {
   private async handoff(s: AgentSession, ctxTokens: number, limits: RunLimits): Promise<{ id: number | null; tokens: number; llmCalls: number }> {
     this.d.log.info(`上下文 ${ctxTokens} tokens ≥ ${this.d.cfg.handoff.contextTokenLimit}，开始交接`);
     s.setActiveToolsByName([]);
-    const r = await this.runPrompt(s, HANDOFF_PROMPT, { tokensLeft: Math.max(limits.tokensLeft, 1), callsLeft: Math.max(limits.callsLeft, 1) });
+    const r = await this.runPrompt(s, handoffPrompt(), { tokensLeft: Math.max(limits.tokensLeft, 1), callsLeft: Math.max(limits.callsLeft, 1) });
     const content = r.assistantText.trim();
     let id: number | null = null;
     if (content) {
