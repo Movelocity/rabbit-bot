@@ -31,14 +31,23 @@ export interface SchedulerConfig {
   watchdogMs?: number;
   /** 逾期多少毫秒算“丢了”，默认 2000 */
   overdueGraceMs?: number;
+  /**
+   * 合并窗：一次唤醒结束后，这段时间内到这个池的消息先攒着，窗口关时合并成一次唤醒。
+   * 0/缺省 = 关闭（每条消息各叫一次）。窗口管的是「同一个 session 内不反复叫醒」，
+   * 不管 tick、不管群里未被 @ 的消息。
+   */
+  sessionWindowMs?: number;
 }
 
 interface Debounce { timer: unknown; firstAt: number; dueAt: number; count: number; reason: string }
+/** 唤醒后的静默窗：窗内来的消息攒在 pending 里，窗口关时一起叫一次 */
+interface SessionWindow { timer: unknown; until: number; pending: number; reason: string }
 
 export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
 
 export class Scheduler {
   private debounces = new Map<string, Debounce>();
+  private windows = new Map<string, SessionWindow>();
   private tickTimer: unknown = null;
   private tickDueAt: number | null = null;
   private lastTickAt: number | null = null;
@@ -65,6 +74,8 @@ export class Scheduler {
     this.wdTimer = null;
     for (const db of this.debounces.values()) this.d.clock.clearTimeout(db.timer);
     this.debounces.clear();
+    for (const w of this.windows.values()) this.d.clock.clearTimeout(w.timer);
+    this.windows.clear();
   }
 
   currentTickMs(): number {
@@ -83,6 +94,14 @@ export class Scheduler {
     this.markActive();
     if (!urgent) return; // 群里未 @：等 tick
     const now = this.d.clock.now();
+    // 刚说过话的 300 秒内：这段对话还在同一个 session 里，攒到窗口关再一起叫一次，
+    // 不然他连发十条就是十次完整唤醒，每条都重新付一遍 system+工具 schema 的底价。
+    const win = this.windows.get(poolId);
+    if (win && now < win.until) {
+      win.pending += 1;
+      if (!win.reason) win.reason = reason;
+      return;
+    }
     const prev = this.debounces.get(poolId);
     if (prev) this.d.clock.clearTimeout(prev.timer);
     const firstAt = prev?.firstAt ?? now;
@@ -93,6 +112,44 @@ export class Scheduler {
     this.debounces.set(poolId, db);
   }
   isDebouncing(poolId: string) { return this.debounces.has(poolId); }
+
+  /**
+   * 一次唤醒结束了：给这些池开合并窗。
+   * 只有 message 唤醒该开——她是刚回过话，接下来五分钟算同一段对话；
+   * tick/计划唤醒不拦消息，否则她自言自语一次就把人晾五分钟。
+   */
+  onWakeDone(poolIds: Iterable<string>) {
+    const ms = this.cfg.sessionWindowMs ?? 0;
+    if (ms <= 0) return;
+    const now = this.d.clock.now();
+    for (const poolId of poolIds) {
+      const prev = this.windows.get(poolId);
+      if (prev) this.d.clock.clearTimeout(prev.timer);
+      const w: SessionWindow = { timer: null, until: now + ms, pending: 0, reason: "" };
+      w.timer = this.d.clock.setTimeout(() => this.closeWindow(poolId, w), ms);
+      this.windows.set(poolId, w);
+    }
+  }
+
+  /** 窗口关了：攒了消息就叫一次，没攒就不叫（他自己不说话，不该白烧一笔） */
+  private closeWindow(poolId: string, w: SessionWindow) {
+    if (this.windows.get(poolId) !== w) return;
+    this.windows.delete(poolId);
+    if (!w.pending) return;
+    try {
+      if (this.d.isPaused()) { this.d.log?.(`paused: skip merged wake ${poolId}`); return; }
+      const r = this.d.queue.enqueue(makeWake("message", [poolId], `${w.reason || "新消息"}（合并${w.pending}条·窗口）`, [], this.d.clock.now()));
+      this.d.log?.(`message wake ${poolId} ${r}（合并窗关闭，${w.pending} 条）`);
+    } catch (e) {
+      this.d.warn?.(`合并窗入队失败：${(e as Error).message}`);
+    }
+  }
+
+  /** 测试/观测用：这个池现在是否在合并窗里 */
+  inSessionWindow(poolId: string): boolean {
+    const w = this.windows.get(poolId);
+    return !!w && this.d.clock.now() < w.until;
+  }
 
   private fireDebounce(poolId: string, via: "timer" | "watchdog") {
     const db = this.debounces.get(poolId);

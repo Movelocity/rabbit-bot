@@ -88,7 +88,7 @@ export class App {
   async start() {
     await this.hub.startAdapters();
     this.scheduler.start();
-    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms paused=${this.store.isPaused()}`);
+    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 合并窗=${this.o.cfg.scheduler.sessionWindowMs}ms 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok paused=${this.store.isPaused()}`);
   }
 
   async stop() {
@@ -214,6 +214,9 @@ export class App {
       this.log.wake(entry);
       this.log.info(`唤醒 ${w.type} → ${outcome}${extra.sent ? ` 发送${(extra.sent as unknown[]).length}条` : ""}`);
       this.onWakeDone?.(entry);
+      // 刚回完话 → 接下来这段对话算同一个 session，窗内的消息攒起来一起处理。
+      // 只对 message 开：tick/计划开口不该把人晾五分钟。
+      if (w.type === "message") this.scheduler.onWakeDone([...w.pools]);
     };
 
     if (this.store.isPaused()) return finish("skipped:paused");
@@ -278,7 +281,17 @@ export class App {
     const fullPrompt = images.length
       ? `${prompt}\n\n【附带图片】本轮有 ${images.length} 张图片随消息一起附上，对应上文出现的 [图片]，按出现顺序排列。`
       : prompt;
-    const res = await this.engine.run(fullPrompt, { tokensLeft: cfg.limits.dailyTokens - usage.tokens, callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls }, images);
+    // 这个 session 已经聊掉多少 token：到顶就换个新会话接着聊，
+    // 不然上下文越滚越大，每轮都按最贵的那档重发一遍。
+    const sessionLimit = cfg.handoff.sessionTokenLimit ?? 0;
+    const sessionTokens = sessionLimit > 0 ? this.store.tokensSince(this.store.lastHandoffAt()) : 0;
+    const forceHandoff = sessionLimit > 0 && sessionTokens >= sessionLimit;
+    if (forceHandoff) entry.sessionTokens = sessionTokens;
+    const res = await this.engine.run(fullPrompt, {
+      tokensLeft: cfg.limits.dailyTokens - usage.tokens,
+      callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls,
+      forceHandoff,
+    }, images);
     this.store.addUsage(day, res.llmCalls, res.tokens, 1);
 
     // 主动唤醒兜底：这是它自己排的计划，说完却没给自己排下一次 → 补一次极短的自我决定
