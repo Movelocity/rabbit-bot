@@ -15,13 +15,15 @@ export interface Config {
   timezone: string;
   dataDir: string;
   logDir: string;
-  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; sessionWindowMs: number };
+  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
   send: { confirmWaitMs: number; confirmViaApi: boolean };
   context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
   handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {
     dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
+    /** 缓存命中的 token 按多少折算进日额度（DeepSeek 前缀缓存 = 0.1 价） */
+    cacheReadRate: number;
     /** 额度用尽时给用户发一条提示：不走模型、不进上下文，只为不让对方以为被无视 */
     capNotice?: { enabled: boolean; text: string; oncePerDay: boolean };
     /** 程序自己出的错（模型报错、异常崩了）：直接发 IM，不过模型、不进上下文 */
@@ -82,9 +84,10 @@ export function validateConfig(cfg: Config): void {
   };
   pos(cfg.scheduler.tickMs, "scheduler.tickMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");
-  // 合并窗可以是 0（关掉），但不能是负数
-  if (typeof cfg.scheduler.sessionWindowMs !== "number" || cfg.scheduler.sessionWindowMs < 0) {
-    throw new Error("config: scheduler.sessionWindowMs 必须是 >=0 的数（0 = 关闭合并窗）");
+  // 缓存折算汇率：0~1 之间（1 = 不打折）
+  const rate = cfg.limits.cacheReadRate;
+  if (typeof rate !== "number" || !(rate >= 0 && rate <= 1)) {
+    throw new Error("config: limits.cacheReadRate 必须是 0~1 之间的数");
   }
   pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
   pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");

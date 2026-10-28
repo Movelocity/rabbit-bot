@@ -19,6 +19,8 @@ async function setup(over: any = {}) {
     send: { confirmWaitMs: 30 }, llm: { provider: "faux", model: "faux-brain" },
     emoji: { map: { 微笑: { text: "🙂" } } }, ...over,
   });
+  // 默认按「每条消息各自去抖唤醒」跑（老链路），要测 tick 批处理的那条自己打开
+  if (over.batchToTick === undefined) cfg.scheduler.batchToTick = false;
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
   const app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true });
@@ -354,5 +356,20 @@ test("谈资：用过进冷却，冷却期内不再推；每天新增有上限",
   assert.deepEqual(s.pickTopics(null, 5, now).map((x: any) => x.id), [b], "用过的进冷却，不该再推");
   assert.deepEqual(s.pickTopics(null, 5, now + 8 * 86400e3).map((x: any) => x.id).sort(), [a, b].sort(), "冷却过了可以再用");
   assert.equal(s.countTopicsAddedSince(now - 1000), 2);
+  await t.done();
+});
+
+test("消息攒给 tick：不单独唤醒，tick 一次把这一分钟的消息全读走", async () => {
+  const t = await setup({ batchToTick: true });
+  t.dm("在吗");
+  await t.settle(30_000);
+  assert.equal(t.wakes.length, 0, "开了 batchToTick 消息不该自己叫醒");
+  // tick 活跃期 60s：到点后 tick 读到未读 → 唤醒
+  await t.settle(30_000);
+  await t.settle(1_000);
+  assert.ok(t.wakes.length >= 1, "tick 应该把未读捡起来");
+  assert.equal(t.wakes[0].type, "tick");
+  const read = t.wakes[0].read ?? [];
+  assert.ok(read.some((m: any) => m.text.includes("在吗")), "tick 唤醒要把消息读进去");
   await t.done();
 });

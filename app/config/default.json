@@ -10,7 +10,7 @@
     "debounceMaxWaitMs": 120000,
     "watchdogMs": 5000,
     "overdueGraceMs": 2000,
-    "sessionWindowMs": 300000
+    "batchToTick": true
   },
   "send": {
     "confirmWaitMs": 1000,
@@ -44,7 +44,8 @@
       "enabled": true,
       "text": "〔系统〕我这边出了点问题（{reason}）。这条不是她说的——你刚才那句话我记着，等恢复了我再回。",
       "dedupeMinutes": 60
-    }
+    },
+    "cacheReadRate": 0.1
   },
   "plans": {
     "missedPolicy": "catchup",
