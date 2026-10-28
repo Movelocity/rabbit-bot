@@ -377,6 +377,26 @@ export class Store {
   addHandoff(content: string, tokens: number | null, file: string | null) {
     return Number(this.db.prepare("INSERT INTO handoffs(created_at,tokens,content,file) VALUES(?,?,?,?)").run(Date.now(), tokens, content, file).lastInsertRowid);
   }
+  /** 上一次交接的时间（ms）。没有交接过就返回 0，表示「这个 session 从头算」。 */
+  lastHandoffAt(): number {
+    const r = this.db.prepare("SELECT created_at FROM handoffs ORDER BY id DESC LIMIT 1").get() as any;
+    return Number(r?.created_at ?? 0);
+  }
+
+  /**
+   * 上次交接之后一共烧了多少 token（含工具循环里每一轮）。
+   * 上下文长度管不住总花费——128k 的窗口里，聊二十轮也能烧掉六十万，
+   * 所以「这个 session 该换了」要用累计值来判断，不能看当前上下文。
+   */
+  tokensSince(ts: number): number {
+    const rows = this.db.prepare("SELECT json FROM wake_log WHERE CAST(ts AS INTEGER) >= ?").all(ts) as { json: string }[];
+    let sum = 0;
+    for (const r of rows) {
+      try { sum += Number(JSON.parse(r.json).tokens ?? 0); } catch { /* 坏行跳过 */ }
+    }
+    return sum;
+  }
+
   latestHandoff(): { id: number; content: string } | undefined {
     return this.db.prepare("SELECT id,content FROM handoffs ORDER BY id DESC LIMIT 1").get() as any;
   }

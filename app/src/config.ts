@@ -15,10 +15,10 @@ export interface Config {
   timezone: string;
   dataDir: string;
   logDir: string;
-  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number };
+  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; sessionWindowMs: number };
   send: { confirmWaitMs: number; confirmViaApi: boolean };
   context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
-  handoff: { contextTokenLimit: number };
+  handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {
     dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
@@ -82,6 +82,10 @@ export function validateConfig(cfg: Config): void {
   };
   pos(cfg.scheduler.tickMs, "scheduler.tickMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");
+  // 合并窗可以是 0（关掉），但不能是负数
+  if (typeof cfg.scheduler.sessionWindowMs !== "number" || cfg.scheduler.sessionWindowMs < 0) {
+    throw new Error("config: scheduler.sessionWindowMs 必须是 >=0 的数（0 = 关闭合并窗）");
+  }
   pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
   pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");

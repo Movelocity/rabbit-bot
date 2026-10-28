@@ -28,7 +28,12 @@ export interface RunResult {
   contextTokens?: number | null;
 }
 
-export interface RunLimits { tokensLeft: number; callsLeft: number }
+export interface RunLimits {
+  tokensLeft: number;
+  callsLeft: number;
+  /** 这个 session 已经聊够了（累计 token 到顶）：这轮说完就交接，换个新会话 */
+  forceHandoff?: boolean;
+}
 
 /** 与 pi-ai 的 ImageContent 结构一致（不直接依赖内部类型路径）。 */
 export interface ImagePart { type: "image"; data: string; mimeType: string }
@@ -133,11 +138,15 @@ export class PiEngine implements AgentEngine {
   async run(prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
     const s = await this.ensureSession();
     const res = await this.runPrompt(s, prompt, limits, images);
-    // 上下文上限 → 交接
+    // 两条交接理由：
+    // 1) 上下文快满了（单轮就会报错，得马上换）
+    // 2) 这个 session 累计烧够了（还没满，但再聊下去每轮都变贵，主动换新）
     const ctxTokens = s.getContextUsage()?.tokens ?? null;
     res.contextTokens = ctxTokens;
-    if (!res.error && ctxTokens !== null && ctxTokens >= this.d.cfg.handoff.contextTokenLimit) {
-      const h = await this.handoff(s, ctxTokens, { tokensLeft: limits.tokensLeft - res.tokens, callsLeft: limits.callsLeft - res.llmCalls });
+    const tooLong = !!limits.forceHandoff;
+    if (!res.error && (tooLong || (ctxTokens !== null && ctxTokens >= this.d.cfg.handoff.contextTokenLimit))) {
+      if (tooLong) this.d.log.info(`这个 session 累计已聊够，主动换新会话（上下文 ${ctxTokens ?? "?"} tokens）`);
+      const h = await this.handoff(s, ctxTokens ?? 0, { tokensLeft: limits.tokensLeft - res.tokens, callsLeft: limits.callsLeft - res.llmCalls });
       res.tokens += h.tokens; res.llmCalls += h.llmCalls; res.handoffId = h.id ?? undefined;
     }
     return res;
