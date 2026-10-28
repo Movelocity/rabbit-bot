@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS memories (
   source_pool_id TEXT NOT NULL, source_kind TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+CREATE TABLE IF NOT EXISTS topics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'topic',
+  pool_id TEXT, source TEXT NOT NULL DEFAULT '', -- 来源池 / 来源一句话（「他自己说的」）
+  used_count INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER, cooldown_until INTEGER NOT NULL DEFAULT 0,
+  retired INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_topics_pick ON topics(retired, cooldown_until, used_count, last_used_at);
 CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT);
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0);
@@ -302,6 +309,56 @@ export class Store {
   /** 同一计划同一时间点只触发一次：插入成功才返回 true */
   recordPlanFire(planId: number, fireTs: number): boolean {
     return this.db.prepare("INSERT OR IGNORE INTO plan_fires(plan_id,fire_ts,fired_at) VALUES(?,?,?)").run(planId, fireTs, Date.now()).changes > 0;
+  }
+
+  // ---------- 谈资（话题库） ----------
+  // 和 memories 分开存：记忆是「对方说过的具体事实」，谈资是「可以拿来聊的东西」。
+  // 混一张表的后果是话题把 maxMemoriesPerUser 的额度吃掉，真正该记住的事被挤出去。
+  addTopic(t: { content: string; kind?: string; pool_id?: string | null; source?: string; now: number }): number {
+    const r = this.db.prepare(
+      "INSERT INTO topics(content,kind,pool_id,source,created_at) VALUES(?,?,?,?,?)",
+    ).run(t.content, t.kind ?? "topic", t.pool_id ?? null, t.source ?? "", t.now);
+    return Number(r.lastInsertRowid);
+  }
+
+  listTopics(o: { kind?: string; includeRetired?: boolean; limit?: number } = {}): any[] {
+    const where = [o.includeRetired ? "1=1" : "retired=0"];
+    const args: any[] = [];
+    if (o.kind) { where.push("kind=?"); args.push(o.kind); }
+    args.push(o.limit ?? 50);
+    return this.db.prepare(
+      `SELECT * FROM topics WHERE ${where.join(" AND ")} ORDER BY used_count ASC, COALESCE(last_used_at,0) ASC, id DESC LIMIT ?`,
+    ).all(...args);
+  }
+
+  /**
+   * 挑几条可以聊的：用得最少的先出，同样少用就用最久没用的。
+   *
+   * 刻意不让模型给话题打分——问它「这条重要吗」，它会把所有都打 5 分。
+   * 行为信号（用过几次 / 多久没用）不会撒谎，也不需要额外问一次。
+   */
+  pickTopics(poolId: string | null, n: number, now: number): any[] {
+    return this.db.prepare(
+      `SELECT * FROM topics
+        WHERE retired=0 AND cooldown_until <= ? AND (pool_id IS NULL OR pool_id = ?)
+        ORDER BY used_count ASC, COALESCE(last_used_at,0) ASC, id DESC LIMIT ?`,
+    ).all(now, poolId, n);
+  }
+
+  /** 用过就记账 + 进冷却，免得同一句话连着一周反复说 */
+  markTopicUsed(id: number, now: number, cooldownDays = 7): boolean {
+    return this.db.prepare(
+      "UPDATE topics SET used_count = used_count + 1, last_used_at = ?, cooldown_until = ? WHERE id = ?",
+    ).run(now, now + cooldownDays * 86400e3, id).changes > 0;
+  }
+
+  /** 每天最多新增几条——不封顶的话她一天能往里塞 50 条没人看的「梗」 */
+  countTopicsAddedSince(sinceTs: number): number {
+    return (this.db.prepare("SELECT COUNT(*) AS c FROM topics WHERE created_at >= ?").get(sinceTs) as { c: number }).c;
+  }
+
+  retireTopic(id: number): boolean {
+    return this.db.prepare("UPDATE topics SET retired=1 WHERE id=?").run(id).changes > 0;
   }
 
   // ---------- 记忆 ----------

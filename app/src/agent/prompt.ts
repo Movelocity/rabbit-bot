@@ -52,6 +52,8 @@ export interface WakePromptInput {
   memories: Map<string, { user_id: string; items: { id: number; content: string }[] }[]>;
   plans: Plan[];
   handoff?: string | null;
+  /** 可聊的谈资（只在主动 tick 时给，有人说话时不需要） */
+  topics?: { id: number; kind: string; content: string; source?: string }[];
 }
 
 export function wakePrompt(store: Store, x: WakePromptInput): string {
@@ -79,6 +81,13 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
+  if (x.topics?.length) {
+    blocks.push(render("part-topics", {
+      items: x.topics
+        .map((t) => `- #${t.id} [${t.kind}] ${t.content}${t.source ? `（${t.source}）` : ""}`)
+        .join("\n"),
+    }));
+  }
 
   // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这两行直接决定该不该开口
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;

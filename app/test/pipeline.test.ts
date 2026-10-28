@@ -316,3 +316,43 @@ test("没人等着的时候报错：不发系统提示，避免打扰", async ()
   assert.equal(t.mock.sent.length, 0, "没人在等就别发");
   await t.done();
 });
+
+test("谈资：只在水位 tick 时注入，有人说话时不给（她该接那句话，不是另起话题）", async () => {
+  const t = await setup();
+  const pool = t.app.store.listPools()[0]?.pool_id ?? null;
+  const id = t.app.store.addTopic({ content: "冰箱里的钱拿去充原神", kind: "meme", pool_id: pool, source: "他发的视频", now: t.clock.now() });
+
+  // 有人说话 → 不注入
+  const seen: string[] = [];
+  const orig = (t.app as any).engine.run.bind((t.app as any).engine);
+  (t.app as any).engine.run = async (prompt: string, ...rest: any[]) => { seen.push(prompt); return orig(prompt, ...rest); };
+  t.dm("在吗");
+  await t.settle(30_000);
+  assert.equal(seen.some((p) => p.includes("可以拿来聊的")), false, "有人说话时不该给谈资");
+
+  // 水位 tick → 注入
+  await (t.app as any).handleWake({
+    id: "w2", type: "tick", reasons: ["定时检查"], pools: new Set([pool].filter(Boolean)), planFires: [], wakeAt: t.clock.now(),
+    proactive: [{ pool, stage: 1, a: 1.2, peak: 2.4, sessionTs: t.clock.now() - 3600e3, detail: "退潮第 1 档" }],
+  });
+  const tickPrompt = seen[seen.length - 1] ?? "";
+  assert.match(tickPrompt, /可以拿来聊的/, `tick 该给谈资，实际 prompt：${tickPrompt.slice(0, 200)}`);
+  assert.match(tickPrompt, new RegExp(`#${id}`), "要带 id，不然她没法记账");
+  assert.match(tickPrompt, /冰箱里的钱拿去充原神/);
+  await t.done();
+});
+
+test("谈资：用过进冷却，冷却期内不再推；每天新增有上限", async () => {
+  const t = await setup();
+  const s = t.app.store;
+  const now = t.clock.now();
+  const a = s.addTopic({ content: "他上次说的冷笑话", kind: "joke", pool_id: null, source: "", now });
+  const b = s.addTopic({ content: "另一个梗", kind: "meme", pool_id: null, source: "", now });
+
+  assert.deepEqual(s.pickTopics(null, 5, now).map((x: any) => x.id), [b, a], "都没用过时按 id 倒序（新的先出）");
+  s.markTopicUsed(a, now, 7);
+  assert.deepEqual(s.pickTopics(null, 5, now).map((x: any) => x.id), [b], "用过的进冷却，不该再推");
+  assert.deepEqual(s.pickTopics(null, 5, now + 8 * 86400e3).map((x: any) => x.id).sort(), [a, b].sort(), "冷却过了可以再用");
+  assert.equal(s.countTopicsAddedSince(now - 1000), 2);
+  await t.done();
+});
