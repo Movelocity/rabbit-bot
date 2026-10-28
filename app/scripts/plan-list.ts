@@ -13,7 +13,8 @@ await run(({ flags }) => {
       id: p.id, title: p.title, status: p.status, kind: p.schedule_kind,
       schedule: p.schedule ?? null, anchor: p.anchor_kind ?? null,
       pool: p.pool_id ? store.poolAlias(p.pool_id) : null,
-      next_fire_local: p.next_fire_at ? fmtLocal(p.next_fire_at) : null,
+      // once 的直接算出本地时间；cron 的就给表达式（下一次要跑 plans.ts 里的调度器才算得准）
+      next_fire_local: p.schedule_kind === "once" && p.schedule ? fmtLocal(Date.parse(p.schedule)) : null,
       why: p.why ?? null,
     }));
   } finally { store.close(); }
