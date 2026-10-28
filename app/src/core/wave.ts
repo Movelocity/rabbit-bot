@@ -210,6 +210,7 @@ export interface WaveCandidate {
   a: number;
   peak: number;
   sessionTs: number;  // 这一轮对话的第一条消息（drained 之后），当会话 id 用
+  lastTs: number;     // 最后一条消息（任何一方）：沉默从这儿算，档位也从这儿重置
   detail: string;
 }
 
@@ -235,7 +236,7 @@ export function waveCandidate(
   if (!sessionStart) return null;
   const lastTs = Math.max(...pulses.map((p) => p.ts));
   if (now - lastTs < cfg.delayMin * 60e3) {
-    return { ok: false, stage: -1, a: 0, peak: 0, sessionTs: sessionStart, detail: `还在不打扰期（最后一条 ${Math.round((now - lastTs) / 60e3)} 分钟前）` };
+    return { ok: false, stage: -1, a: 0, peak: 0, sessionTs: sessionStart, lastTs, detail: `还在不打扰期（最后一条 ${Math.round((now - lastTs) / 60e3)} 分钟前）` };
   }
 
   // 峰值：从会话开始扫到现在
@@ -243,20 +244,23 @@ export function waveCandidate(
   for (let t = sessionStart; t <= now; t += 60e3) {
     peak = Math.max(peak, level(pulses.filter((p) => p.ts <= t), t, cfg).a);
   }
-  if (peak < cfg.thr) return { ok: false, stage: -1, a: 0, peak, sessionTs: sessionStart, detail: "这个会话的水位峰值都没到阈值" };
+  if (peak < cfg.thr) return { ok: false, stage: -1, a: 0, peak, sessionTs: sessionStart, lastTs, detail: "这个会话的水位峰值都没到阈值" };
 
   const a = level(pulses, now, cfg).a;
   const raw = Math.ceil(Math.log(a / peak) / Math.log(cfg.ratio));
   const stage = a >= cfg.thr && raw <= 0 ? 0 : raw;   // 水位还在峰值附近 = 首档（注意 -0）
-  if (!Number.isFinite(stage) || stage < 0) return { ok: false, stage: -1, a, peak, sessionTs: sessionStart, detail: "水位已退回峰值以上？" };
-  if (stage > cfg.maxStages) return { ok: false, stage, a, peak, sessionTs: sessionStart, detail: `已经退到第 ${stage} 档，超过上限 ${cfg.maxStages}` };
+  if (!Number.isFinite(stage) || stage < 0) return { ok: false, stage: -1, a, peak, sessionTs: sessionStart, lastTs, detail: "水位已退回峰值以上？" };
+  if (stage > cfg.maxStages) return { ok: false, stage, a, peak, sessionTs: sessionStart, lastTs, detail: `已经退到第 ${stage} 档，超过上限 ${cfg.maxStages}` };
 
-  const used = store.usedWaveStages(poolId, sessionStart);
+  // 档位是「这段沉默退到第几档」——所以有人说话就该重置。
+  // 早先用 drained（上次真发）当界：她连着几档都选择不说，session 就永远不结束，
+  // 档位全被占满，从此一次都不再叫（2026-10-27 夜里 6 连问之后，10-28 全天静默）。
+  const used = store.usedWaveStages(poolId, lastTs);
   if (used.includes(stage)) {
-    return { ok: false, stage, a, peak, sessionTs: sessionStart, detail: `第 ${stage} 档已经用过（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）` };
+    return { ok: false, stage, a, peak, sessionTs: sessionStart, lastTs, detail: `第 ${stage} 档已经用过（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）` };
   }
   return {
-    ok: true, stage, a, peak, sessionTs: sessionStart,
+    ok: true, stage, a, peak, sessionTs: sessionStart, lastTs,
     detail: `退潮第 ${stage}/${cfg.maxStages} 档（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）`,
   };
 }

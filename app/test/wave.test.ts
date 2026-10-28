@@ -229,6 +229,34 @@ test("退潮档位：单个会话水位不够就永远没机会", () => {
   assert.equal(c.peak, 0.4);
 });
 
+test("退潮档位：连着几档都选择不说，只要有人再说话，档位就重置（10-28 全天静默的回归）", () => {
+  const s = new Store(":memory:");
+  const pool = s.insertMessage(msg({ ts: NOW }))!.pool_id;
+  s.insertMessage(msg({ ts: NOW + 3 * MIN }));
+  s.insertMessage(msg({ ts: NOW + 6 * MIN }));
+
+  // 走完一轮退潮：每一档都给过机会，但每次都记「问过」，她选择不说
+  let t = NOW + 20 * MIN;
+  const asked: number[] = [];
+  for (let i = 0; i < 30; i++) {
+    const c = waveCandidate(s, pool, t, candCfg())!;
+    if (c.ok) {
+      asked.push(c.stage);
+      s.recordTideEvent({ pool_id: pool, day: "2026-10-26", ts: t, kind: "wave", anchor_kind: "L2", stage: c.stage, wave_a: c.a, reason: "没发" });
+    }
+    t += 10 * MIN;
+  }
+  assert.ok(asked.length >= 2, `该问过好几档，实际：${asked.join(",")}`);
+
+  // 档位用完之后：没人说话就安静着（这是对的，硬叫也是硬凑）
+  assert.equal(waveCandidate(s, pool, t, candCfg())!.ok, false);
+
+  // 但只要有人再说一句，沉默就是新的一段，档位从头算
+  s.insertMessage(msg({ ts: t + 1 * MIN }));
+  const after = waveCandidate(s, pool, t + 40 * MIN, candCfg())!;
+  assert.equal(after.ok, true, `有新消息该重新给机会，实际：${after.detail}`);
+});
+
 // ---------- 夜间静默 ----------
 
 import { inQuietHours } from "../src/core/wave.ts";
