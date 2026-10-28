@@ -27,7 +27,7 @@ console.log(`参数 delay=${wave?.delayMin} peak=${wave?.peakMin} thr=${wave?.th
 
 for (const pool of store.listPools()) {
   const c = waveCandidate(store, pool.pool_id, now, wave);
-  const used = c ? store.usedWaveStages(pool.pool_id, c.sessionTs) : [];
+  const used = c ? store.usedWaveStages(pool.pool_id, c.lastTs) : [];
   console.log(`池 ${pool.pool_id}（最后一条 ${mins(now - pool.last_msg_at)} 分钟前）`);
   if (!c) { console.log("  没有会话\n"); continue; }
   console.log(`  会话起 ${new Date(c.sessionTs).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit" })}`
