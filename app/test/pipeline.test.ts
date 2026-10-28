@@ -274,3 +274,45 @@ test("事故复现（端到端）：入池后 VM 冻结 221s → 恢复后看门
   assert.deepEqual(seqs, seqs.map((_, i) => seqs[0] + i), "重复投递不占 seq");
   await t.done();
 });
+
+test("模型报错：程序自己发一条系统提示（不走模型、不进上下文、不刷屏）", async () => {
+  const t = await setup();
+  // 让引擎这一轮直接失败，模拟接口 500 / 超时
+  (t.app as any).engine.run = async () => ({
+    llmCalls: 1, tokens: 0, toolCalls: [], assistantText: "", error: "上游接口 500",
+  });
+  t.dm("在吗");
+  await t.settle(30_000);
+
+  const hits = () => t.mock.sent.filter((x: any) => String(x.content).includes("〔系统〕"));
+  assert.equal(hits().length, 1, `该发一条系统提示，实际发出：${JSON.stringify(t.mock.sent)}`);
+  assert.match(String(hits()[0].content), /上游接口 500/, "要说清是什么故障，不能只发「出错了」");
+  assert.match(String(hits()[0].content), /不是她说的/, "得让人看出这不是她的回复");
+
+  // 不进上下文：库里不该有这条
+  for (const pool of t.app.store.listPools()) {
+    const rows = t.app.store.recentMessages(pool.pool_id, 100) as any[];
+    assert.equal(rows.filter((r: any) => String(r.text ?? "").includes("〔系统〕")).length, 0, "系统提示不能入库");
+  }
+  // 游标没被消费：他这句话还等着，恢复后能接着回
+  assert.equal(t.app.store.poolsWithUnread().length, 1, "报错不能让他的消息被吃掉");
+
+  // 同一个故障在一小时内不重复发（报错往往连续触发）
+  t.dm("还在吗");
+  await t.settle(30_000);
+  assert.equal(hits().length, 1, "一小时内只发一次，不能刷屏");
+  await t.done();
+});
+
+test("没人等着的时候报错：不发系统提示，避免打扰", async () => {
+  const t = await setup();
+  (t.app as any).engine.run = async () => ({
+    llmCalls: 1, tokens: 0, toolCalls: [], assistantText: "", error: "上游接口 500",
+  });
+  // 直接给一次 tick 唤醒：没有未读
+  await (t.app as any).handleWake({
+    id: "w1", type: "tick", reasons: ["定时检查"], pools: [], planFires: [], wakeAt: t.clock.now(),
+  });
+  assert.equal(t.mock.sent.length, 0, "没人在等就别发");
+  await t.done();
+});

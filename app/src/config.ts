@@ -24,6 +24,8 @@ export interface Config {
     dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
     /** 额度用尽时给用户发一条提示：不走模型、不进上下文，只为不让对方以为被无视 */
     capNotice?: { enabled: boolean; text: string; oncePerDay: boolean };
+    /** 程序自己出的错（模型报错、异常崩了）：直接发 IM，不过模型、不进上下文 */
+    errorNotice?: { enabled: boolean; text: string; dedupeMinutes: number };
   };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
   tide: { enabled: boolean; dailyCap: { L1: number; L2: number }; wave?: Partial<WaveConfig> };

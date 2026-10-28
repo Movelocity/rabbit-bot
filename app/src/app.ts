@@ -149,6 +149,45 @@ export class App {
     return n.text;
   }
 
+  /**
+   * 程序自己出的错，直接发到 IM：不走模型、不进上下文。
+   *
+   * 和 capNotice 的区别：那条是「额度用完了」这种预期内的暂停，这条是「出故障了」。
+   * 用户看到的都是「她没回我」——但前者是设计，后者是 bug，得让人知道是哪种，
+   * 否则他只会觉得被无视，然后一直等。
+   *
+   * 只发给「有未读在等」的池：没人等着的时候报错，静悄悄修就是了，不必打扰。
+   * 同一个 kind 在 dedupeMinutes 内只发一次——报错往往连续触发，不能刷屏。
+   */
+  private async notifySys(kind: string, text: string): Promise<void> {
+    const n = this.o.cfg.limits.errorNotice;
+    if (!n?.enabled) return;
+    const waiting = this.store.poolsWithUnread();
+    if (!waiting.length) return;
+    const key = `sysNotice.${kind}`;
+    const now = this.clock.now();
+    const last = Number(this.store.getKv(key) ?? 0);
+    if (now - last < (n.dedupeMinutes ?? 60) * 60_000) return;
+    const sent: string[] = [];
+    for (const pool of waiting) {
+      try {
+        const r = await this.hub.send(pool, text, { internal: true });
+        if (r.ok) sent.push(pool);
+      } catch (e) {
+        this.log.warn(`系统消息发送失败 ${pool}：${(e as Error).message}`);
+      }
+    }
+    if (!sent.length) return;
+    this.store.setKv(key, String(now));
+    this.log.info(`系统消息（${kind}）→ ${sent.length} 个池（不进上下文）：${text}`);
+  }
+
+  /** 把 {reason} 填进配置文案里；错误信息太长就截断，别把整段堆栈发给人 */
+  private errorText(reason: string): string {
+    const text = this.o.cfg.limits.errorNotice?.text ?? "〔系统〕我这边出了点问题（{reason}）。";
+    return text.replace("{reason}", (reason || "未知原因").split("\n")[0].slice(0, 120));
+  }
+
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
@@ -156,6 +195,10 @@ export class App {
     this.sendsThisTurn = 0;
     try {
       await this.handleWakeInner(w);
+    } catch (e) {
+      // 真崩了（模板缺变量、适配器炸了、意料之外的 throw）：用户那边只看到「她不回我」
+      this.log.error(`唤醒异常：${(e as Error).stack ?? e}`);
+      await this.notifySys("crash", this.errorText((e as Error).message)).catch(() => {});
     } finally {
       this.activeWake = null;
     }
@@ -274,7 +317,11 @@ export class App {
     if (this.silenceReason) entry.silent = this.silenceReason;
     entry.sentCount = sent.length;
     // LLM 出错且什么都没发：回滚游标，下次 tick 重试
-    if (res.error && !sent.length) for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
+    if (res.error && !sent.length) {
+      for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
+      // 模型/接口报错也是「程序的事」，别让她背锅
+      await this.notifySys("error", this.errorText(res.error));
+    }
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {
       tools: res.toolCalls.map((c) => ({ name: c.name, args: c.args, result: c.result, isError: c.isError })),
       sent, assistantText: res.assistantText, llmCalls: res.llmCalls, tokens: res.tokens,

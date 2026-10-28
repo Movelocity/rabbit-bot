@@ -37,6 +37,11 @@
       "enabled": true,
       "text": "〔系统〕今天的额度用完了，我先歇一会儿——你说的话我记着，回头接着聊。",
       "oncePerDay": true
+    },
+    "errorNotice": {
+      "enabled": true,
+      "text": "〔系统〕我这边出了点问题（{reason}）。这条不是她说的——你刚才那句话我记着，等恢复了我再回。",
+      "dedupeMinutes": 60
     }
   },
   "plans": {
