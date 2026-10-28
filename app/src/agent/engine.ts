@@ -20,7 +20,12 @@ export interface RunResult {
   assistantText: string;
   toolCalls: ToolLog[];
   llmCalls: number;
+  /** 计入日额度的那种（缓存读按汇率折算过） */
   tokens: number;
+  /** 没折算的原始 token，只用于观测 */
+  rawTokens?: number;
+  /** 上游报的美元成本（pi 按模型定价算好的） */
+  cost?: number;
   aborted: boolean;
   abortReason?: string;
   error?: string;
@@ -153,7 +158,7 @@ export class PiEngine implements AgentEngine {
   }
 
   private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
-    const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, aborted: false };
+    const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, rawTokens: 0, cost: 0, aborted: false };
     const pendingArgs = new Map<string, unknown>();
     const abort = (why: string) => { if (!out.aborted) { out.aborted = true; out.abortReason = why; void s.abort(); } };
     const unsub = s.subscribe((ev: any) => {
@@ -164,7 +169,17 @@ export class PiEngine implements AgentEngine {
       } else if (ev.type === "message_end" && ev.message?.role === "assistant") {
         out.llmCalls++;
         const u = ev.message.usage;
-        out.tokens += u?.totalTokens ?? ((u?.input ?? 0) + (u?.output ?? 0) + (u?.cacheRead ?? 0) + (u?.cacheWrite ?? 0));
+        if (u) {
+          // 缓存读按 1/10 记：DeepSeek 的前缀缓存命中就是这个价，pi 已经在报 cacheRead 了。
+          // 之前把 cacheRead 全额算进日额度，等于「几乎免费的重读」也按全价扣，
+          // 一天 200 万的表看着满了，实际花的钱可能只有十分之一。
+          // 原始 token 仍然记在 rawTokens 里，观测口径不变，变的是记账口径。
+          out.rawTokens += u.totalTokens ?? ((u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0));
+          out.tokens += (u.input ?? 0) + (u.output ?? 0)
+            + Math.round((u.cacheRead ?? 0) * this.d.cfg.limits.cacheReadRate)
+            + (u.cacheWrite ?? 0);
+          out.cost += u.cost?.total ?? 0;
+        }
         if (out.tokens >= limits.tokensLeft) abort("daily-token-cap");
         else if (out.llmCalls >= limits.callsLeft) abort("daily-call-cap");
       }

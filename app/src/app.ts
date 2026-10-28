@@ -88,7 +88,7 @@ export class App {
   async start() {
     await this.hub.startAdapters();
     this.scheduler.start();
-    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 合并窗=${this.o.cfg.scheduler.sessionWindowMs}ms 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok paused=${this.store.isPaused()}`);
+    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok paused=${this.store.isPaused()}`);
   }
 
   async stop() {
@@ -214,9 +214,6 @@ export class App {
       this.log.wake(entry);
       this.log.info(`唤醒 ${w.type} → ${outcome}${extra.sent ? ` 发送${(extra.sent as unknown[]).length}条` : ""}`);
       this.onWakeDone?.(entry);
-      // 刚回完话 → 接下来这段对话算同一个 session，窗内的消息攒起来一起处理。
-      // 只对 message 开：tick/计划开口不该把人晾五分钟。
-      if (w.type === "message") this.scheduler.onWakeDone([...w.pools]);
     };
 
     if (this.store.isPaused()) return finish("skipped:paused");
