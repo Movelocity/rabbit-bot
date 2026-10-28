@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /** 记一条谈资：梗、冷笑话、聊过还想再提的话题。
  *  npx tsx scripts/topic-add.ts --content "冰箱里的钱拿去充原神" --kind meme [--pool p1] [--source "他说的"] */
-import { run, openStore, describe, str, now } from "./lib/kit.ts";
+import { run, openStore, describe, str, now, bool } from "./lib/kit.ts";
 
-describe('npx tsx scripts/topic-add.ts --content C [--kind joke|meme|topic] [--pool P] [--source S]');
+describe('npx tsx scripts/topic-add.ts --content C [--kind joke|meme|topic] [--pool P] [--source S] [--force]');
 
 /** 每天最多记几条：不封顶的话一天能塞 50 条没人看的「梗」，挑的时候全是噪声 */
 const MAX_PER_DAY = 3;
@@ -17,7 +17,11 @@ await run(({ flags }) => {
     const t = now(flags);
     const dayStart = t - ((t + 8 * 3600e3) % 86400e3);
     const used = store.countTopicsAddedSince(dayStart);
-    if (used >= MAX_PER_DAY) throw new Error(`今天已经记了 ${used} 条（上限 ${MAX_PER_DAY}）——明天再说，别一次塞一堆`);
+    // --force 是给「人批量导入」留的口子（比如从收藏夹里一次挑六条）。
+    // agent 自己用不着它：它能用的就是不带上限的那条路，上限对它才有意义。
+    if (!bool(flags, "force") && used >= MAX_PER_DAY) {
+      throw new Error(`今天已经记了 ${used} 条（上限 ${MAX_PER_DAY}）——明天再说，别一次塞一堆`);
+    }
     const poolRef = str(flags, "pool");
     const poolId = poolRef ? store.resolvePool(poolRef)?.pool_id ?? null : null;
     const id = store.addTopic({
