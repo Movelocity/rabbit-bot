@@ -258,7 +258,11 @@ export class App {
     }
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, plans, handoff });
+    // 谈资只在「没人在跟你说话、她自己得找话说」的时候给：
+    // 有人刚开口时她该接那句话，不需要别人替她想话题
+    const topicPool = unread[0]?.pool_id ?? [...context.keys()][0] ?? [...w.pools][0] ?? null;
+    const topics = w.type === "tick" ? this.store.pickTopics(topicPool, 3, t0) : [];
+    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, plans, handoff, topics });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;
