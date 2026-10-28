@@ -28,8 +28,16 @@ npx tsx scripts/pool-list.ts    # 等价的完整写法
 | `sb` | 沙盒目录：`list / read / write / run` | `rb sb run "ls -la /work"` |
 | `web-search` | 联网搜索 | `rb web-search "DeepSeek v4" --count 5` |
 | `web-fetch` | 抓网页正文 | `rb web-fetch https://example.com` |
+| `topic-add` | 记一条谈资（梗/冷笑话/聊过的话题） | `rb topic-add --content "..." --kind meme --pool p1` |
+| `topic-list` | 看谈资库存 | `rb topic-list --limit 20` |
+| `topic-pick` | 挑几条现在能聊的（只读） | `rb topic-pick --pool p1 --n 3` |
+| `topic-used` | 用过就记账 + 进 7 天冷却 | `rb topic-used 12` |
 
 `wave-*.ts` 是水位场的调参/观测脚本，不接 agent（见 `WAVE.md`）。
+
+谈资（`topic-*`）跟记忆是两张表：记忆记「对方说过的具体事实」，谈资是「可以拿来聊的东西」。
+排序只用行为信号（用过几次 / 多久没用），不让模型打分——问它「重要吗」它会全打 5 分。
+每天最多新增 3 条，`--force` 是给人批量导入留的口子（agent 不该用它绕过自己的约束）。
 
 ## 约定（新脚本照抄）
 
