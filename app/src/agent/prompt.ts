@@ -93,6 +93,9 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
   const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
+  // 连憋了几次：这句话只在数到 2 以上时才出现（模板里无条件，靠这里给空串）
+  const silentN = primaryPool ? store.silentWaveStreak(primaryPool) : 0;
+  const silentNote = silentN >= 2 ? `你已经连着 ${silentN} 次醒过来又什么都没说。这次别挑了。` : "";
   const last = store.lastTideFired(primaryPool);
   const day = localDay(x.now, "Asia/Shanghai");
   const firedL2 = store.countTideFired(day, primaryPool, "L2");
@@ -112,6 +115,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
       chat_gap: lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）",
     }),
     scene: render(`scene-${x.wake.type}`, {
+      silent_note: silentNote,
       proactive_block: x.wake.proactive?.length
         ? render("part-proactive", { detail: x.wake.proactive.map((p) => p.detail).join("；") })
         : "",
