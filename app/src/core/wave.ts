@@ -243,7 +243,7 @@ export interface WaveCandidate {
  * 档位只是「可以开口」的许可，说什么、发不发由 agent 自己决定。
  */
 export function waveCandidate(
-  store: Pick<Store, "messagesForWave" | "lastTideFired" | "usedWaveStages">,
+  store: Pick<Store, "messagesForWave" | "lastTideFired" | "usedWaveStages" | "firedWaveCount">,
   poolId: string | null, now: number, c?: Partial<WaveConfig> | null,
 ): WaveCandidate | null {
   const cfg = waveCfg(c);
@@ -271,12 +271,19 @@ export function waveCandidate(
   const raw = Math.ceil(Math.log(a / peak) / Math.log(cfg.ratio));
   const stage = a >= cfg.thr && raw <= 0 ? 0 : raw;   // 水位还在峰值附近 = 首档（注意 -0）
   if (!Number.isFinite(stage) || stage < 0) return { ok: false, stage: -1, a, peak, sessionTs: sessionStart, lastTs, detail: "水位已退回峰值以上？" };
-  if (stage > cfg.maxStages) return { ok: false, stage, a, peak, sessionTs: sessionStart, lastTs, detail: `已经退到第 ${stage} 档，超过上限 ${cfg.maxStages}` };
-
-  // 档位是「这段沉默退到第几档」——所以有人说话就该重置。
+  // 不因为「退得深」就放弃：退得深＝沉默久，正是该开口的时候。
+  // 上限改成「这段沉默里真开口过几次」——没发的不算（见 Store.usedWaveStages）。
+  // 早先这里是 `stage > maxStages` 直接放弃，结果 10-29 下午水位退到第 4 档，
+  // 她憋着没发（3 次），机制从此再也不叫她，直到有新消息把水位重新推高。
+  //
+  // 档位是「这段沉默退到第几档」，所以有人说话就该重置。
   // 早先用 drained（上次真发）当界：她连着几档都选择不说，session 就永远不结束，
   // 档位全被占满，从此一次都不再叫（2026-10-27 夜里 6 连问之后，10-28 全天静默）。
-  const used = store.usedWaveStages(poolId, lastTs);
+  const used = store.usedWaveStages(poolId, lastTs);      // 问过就算：同一档不重复问
+  const fired = store.firedWaveCount(poolId, lastTs);     // 真开口才算：没发不消耗
+  if (fired >= cfg.maxStages) {
+    return { ok: false, stage, a, peak, sessionTs: sessionStart, lastTs, detail: `这段沉默里已经开口过 ${fired} 次（上限 ${cfg.maxStages}）` };
+  }
   if (used.includes(stage)) {
     return { ok: false, stage, a, peak, sessionTs: sessionStart, lastTs, detail: `第 ${stage} 档已经用过（水位 ${a.toFixed(2)}，峰值 ${peak.toFixed(2)}）` };
   }
