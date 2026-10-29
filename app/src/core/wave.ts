@@ -23,6 +23,9 @@ export interface WaveConfig {
   thr: number;        // 触发水位
   wUser: number;      // 用户消息权重（必须 < thr）
   wSelf: number;      // 自己说出口的消息权重
+  wIdle: number;      // 空窗权重：距上次对话越久越大（不衰减，只增长；0 = 关掉）
+  idleRampH: number;  // 空窗项爬到满值要多少小时
+  idleStartH: number; // 空窗项从「多久没说话」才开始算（这段之内不贡献，免得聊着聊着也被加温）
   horizonH: number;   // 只累加这么久以内的脉冲（6h 后 K 已归零，再长是浪费）
   idleExemptMin: number; // 最后一条消息超过这么久就不拦了：这不是「刚聊完」，是「冷场了该开口」
   /** 退潮档位比例：水位每落到峰值的这个比例，就给一个候选点（0.5 = 每退一半给一次） */
@@ -45,6 +48,9 @@ export const WAVE_DEFAULTS: WaveConfig = {
   thr: 0.5,
   wUser: 0.4,
   wSelf: 0.25,
+  wIdle: 0.55,
+  idleRampH: 24,
+  idleStartH: 6,
   horizonH: 24,
   idleExemptMin: 180,
   ratio: 0.5,
@@ -94,16 +100,31 @@ export function level(pulses: Pulse[], now: number, cfg: WaveConfig, drainedTs =
   let nSelf = 0;
   let newest: number | null = null;
   const horizon = cfg.horizonH * 3600e3;
+  // newest 单独先取，且**不**受 horizon 限制：24 小时没说话时也得知道「多久了」，
+  // 否则 horizon 把脉冲全滤掉 → newest=null → 空窗项永远不生效。
   for (const p of pulses) {
     if (p.ts > now) continue;                    // 补录的未来时间戳不参与
+    if (newest === null || p.ts > newest) newest = p.ts;
+  }
+  for (const p of pulses) {
+    if (p.ts > now) continue;
     const age = now - p.ts;
     if (age > horizon) continue;
-    if (newest === null || p.ts > newest) newest = p.ts;
     // 已经消费掉的脉冲（drained 之前）：只参与「最后一条多久之前」，不再供水位。
     // 少了这一条，泄流后窗口变空 → ageMin=null → 被「冷场豁免」误判成可以开口。
     if (p.ts <= drainedTs) continue;
     a += (p.fromSelf ? cfg.wSelf : cfg.wUser) * pulseK(age / 1000, cfg);
     if (p.fromSelf) nSelf += 1; else nUser += 1;
+  }
+  // 空窗项：跟具体事件无关，只看「多久没说话了」。
+  // K(τ)=θ/τ 让「越久越不该开口」，这一项把方向掰回来：人是因为久了才想发一句。
+  if (cfg.wIdle > 0 && newest !== null && cfg.idleRampH > 0) {
+    // 从 idleStartH 才开始爬：刚聊完的几个小时里这一项必须是 0，
+    // 否则「正在聊天」也会被空窗项加温，阈值标定全歪。
+    const start = Math.min(cfg.idleStartH ?? 6, cfg.idleRampH);
+    const idleH = (now - newest) / 3600e3;
+    const ramp = (idleH - start) / Math.max(1e-6, cfg.idleRampH - start);
+    a += cfg.wIdle * Math.min(1, Math.max(0, ramp));
   }
   // 不打扰期是「整个场」的属性：锚点是最后一条发言，无论谁说
   if (newest !== null && now - newest < cfg.delayMin * 60e3) a = 0;
