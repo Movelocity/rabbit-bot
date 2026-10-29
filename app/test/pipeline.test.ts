@@ -21,6 +21,14 @@ async function setup(over: any = {}) {
   });
   // 默认按「每条消息各自去抖唤醒」跑（老链路），要测 tick 批处理的那条自己打开
   if (over.batchToTick === undefined) cfg.scheduler.batchToTick = false;
+  // 默认跑水位（老契约），充能模型只在专用用例里打开——否则这里的断言全都要重写，
+  // 而它们守的是「别把用户晾着 / 别每 3 分钟叫一次」这些不该随模型变的行为。
+  if ((over.tide as any)?.energy === undefined) {
+    cfg.tide.energy = { ...(cfg.tide.energy ?? {}), enabled: false };
+  }
+  if ((over.tide as any)?.wave?.enabled === undefined) {
+    cfg.tide.wave = { ...(cfg.tide.wave ?? {}), enabled: true };
+  }
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
   const app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true });

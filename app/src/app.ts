@@ -6,6 +6,7 @@ import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
 import { PlanEngine } from "./core/plans.ts";
 import { waveCandidate, inQuietHours, waveCfg as cfgApp } from "./core/wave.ts";
+import { energyCfg, replay, verdict, settle, type EnergyConfig } from "./core/energy.ts";
 import { RunQueue } from "./core/queue.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
@@ -105,7 +106,12 @@ export class App {
    */
   private proactivePools(now: number): NonNullable<Wake["proactive"]> {
     const cfg = this.o.cfg.tide?.wave;
-    if (!cfg?.enabled) return [];
+    const ecfg = energyCfg(this.o.cfg.tide?.energy);
+    if (!cfg?.enabled && !ecfg.enabled) return [];
+    // 记账先做：静默期、额度用完都不该让电量停摆
+    if (ecfg.enabled) {
+      for (const p of this.store.listPools()) this.energyAccrue(p.pool_id, now, ecfg);
+    }
     // 夜间不叫：叫醒只是为了让她说句话，凌晨说给谁听
     if (inQuietHours(now, cfgApp(cfg), this.o.cfg.timezone)) return [];
     // 每天的次数和 token 都封顶：一个人一天被想起 8 次够了，凌晨连问 60 次那是程序发疯
@@ -115,6 +121,11 @@ export class App {
     if (used.tokens >= cfgApp(cfg).dailyTokens) return [];
     const out: NonNullable<Wake["proactive"]> = [];
     for (const pool of this.store.listPools()) {
+      if (ecfg.enabled) {
+        const e = this.energyTick(pool.pool_id, now, ecfg);
+        if (e) out.push(e);
+        continue;
+      }
       const c = waveCandidate(this.store, pool.pool_id, now, cfg);
       if (!c?.ok) continue;
       // 沉默也要有重量：连着两次放行都没开口，这次就把话说重一点
@@ -123,6 +134,86 @@ export class App {
       out.push({ pool: pool.pool_id, stage: c.stage, a: c.a, peak: c.peak, sessionTs: c.sessionTs, detail });
     }
     return out;
+  }
+
+  /**
+   * 记账：把 ts→now 之间的消息记到电量上，写回 kv。
+   *
+   * 这一步必须**先于**额度/静默期检查执行——电量是关系状态，不是「今天还能不能唤醒」的开关。
+   * 放在额度后面的话，额度用完的那天她整天不记账，第二天结算时发现「昨天一片空白」。
+   */
+  private energyAccrue(poolId: string | null, now: number, ecfg: EnergyConfig): number {
+    if (!poolId) return ecfg.floor;
+    const key = `energy.${poolId}`;
+    const dayStart = now - ((now + 8 * 3600e3) % 86400e3);
+    const day = new Date(dayStart).toISOString().slice(0, 10);
+
+    let st: { E: number; ts: number; day: string };
+    try {
+      const raw = JSON.parse(this.store.getKv(key) ?? "");
+      if (typeof raw?.E !== "number" || typeof raw?.ts !== "number") throw new Error("bad");
+      st = raw;
+    } catch {
+      const base = this.settleDay(poolId, dayStart - 86400e3, dayStart, ecfg);
+      st = { E: base, ts: dayStart, day };
+    }
+
+    if (st.day !== day) {
+      st = { E: this.settleDay(poolId, dayStart - 86400e3, dayStart, ecfg), ts: dayStart, day };
+    }
+
+    // 只处理已发生的那部分；now 本身留给下一 tick，避免相邻 tick 把同一条消息充两次
+    const rows = this.store.messagesForWave(poolId, st.ts, now);
+    const rep = replay(st.E, rows.map((r) => ({ ts: r.ts, fromSelf: !!r.from_self })), st.ts, now, ecfg);
+    this.store.setKv(key, JSON.stringify({ E: rep.E, ts: now, day }));
+    return rep.E;
+  }
+
+  /**
+   * 充能模型的每个 tick：先把这段消息记到电量上，再问「现在能不能开口」。
+   *
+   * 状态存在 kv（`energy.<pool>`），字段 `{ E, ts, day }`。`ts` 是上次结算到的时刻，
+   * 每次只处理 ts→now 之间的消息——同一条红蓝区间因此不会被充两次。
+   */
+  private energyTick(
+    poolId: string | null, now: number, ecfg: EnergyConfig,
+  ): NonNullable<Wake["proactive"]>[number] | null {
+    if (!poolId) return null;
+    const E = this.energyAccrue(poolId, now, ecfg);
+    const rep = { E };
+    const last = this.store.lastMessage(poolId);
+    if (!last) return null;
+    const v = verdict(rep.E, last.ts, !!last.from_self, now, ecfg);
+    if (!v.ok) return null;
+
+    const silent = this.store.silentWaveStreak(poolId);
+    const detail = silent >= 2
+      ? `${v.detail}｜已经连着 ${silent} 次放行都没开口，这次除非真的没话说，别再憋着`
+      : v.detail;
+    return {
+      pool: poolId,
+      stage: Math.max(1, Math.round(ecfg.cap - rep.E)),
+      a: rep.E,
+      peak: ecfg.cap,
+      sessionTs: last.ts,
+      detail,
+    };
+  }
+
+  /** 隔夜结算：昨天她发出的每条消息 → 他多久才回，折算成今天的基准电量 */
+  private settleDay(poolId: string | null, from: number, to: number, ecfg: EnergyConfig): number {
+    const rows = this.store.messagesForWave(poolId, from, to);
+    const replies: number[] = [];
+    let pending: number | null = null;
+    for (const r of rows) {
+      if (r.from_self) {
+        if (pending === null) pending = r.ts;   // 连发几条算同一次开口
+      } else if (pending !== null) {
+        replies.push((r.ts - pending) / 60e3);
+        pending = null;
+      }
+    }
+    return settle(replies, ecfg);
   }
 
   /**

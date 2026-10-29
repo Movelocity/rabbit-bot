@@ -1,6 +1,7 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
 import type { WaveConfig } from "./core/wave.ts";
+import type { EnergyConfig } from "./core/energy.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,7 +31,13 @@ export interface Config {
     errorNotice?: { enabled: boolean; text: string; dedupeMinutes: number };
   };
   plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
-  tide: { enabled: boolean; dailyCap: { L1: number; L2: number }; wave?: Partial<WaveConfig> };
+  tide: {
+    enabled: boolean;
+    dailyCap: { L1: number; L2: number };
+    wave?: Partial<WaveConfig>;
+    /** 充能模型：一个状态量 E + 一个函数 I(E)。开了就替代 wave，可随时关掉回退 */
+    energy?: Partial<EnergyConfig>;
+  };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
