@@ -339,6 +339,8 @@ export class App {
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {
       tools: res.toolCalls.map((c) => ({ name: c.name, args: c.args, result: c.result, isError: c.isError })),
       sent, assistantText: res.assistantText, llmCalls: res.llmCalls, tokens: res.tokens,
+      // 折算前的原始 token 和 pi 报的美元成本：用来判断缓存到底命中没有
+      rawTokens: res.rawTokens, cost: res.cost ? Number(res.cost.toFixed(6)) : undefined,
       contextTokens: res.contextTokens, handoffId: res.handoffId, error: res.error,
     });
   }
