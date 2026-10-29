@@ -331,9 +331,36 @@ export class Store {
     ).all(...args);
   }
 
+  /** 这个池里最后一条消息的时间（任意一方）：给她「我们多久没说话了」的时间感 */
+  lastMessageTs(poolId: string): number | null {
+    const r = this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE pool_id = ?").get(poolId) as
+      | { t: number | null }
+      | undefined;
+    return r?.t ?? null;
+  }
+
   /**
-   * 挑几条可以聊的：用得最少的先出，同样少用就用最久没用的。
+   * 最近几次 wave 放行里，连着「放行了却没开口」有几次（从新往旧数，遇到发过的就停）。
    *
+   * 用途：沉默要有重量。现在的语义是「放行＝她可以选择不说」，模型在自由时永远选最安全的，
+   * 于是连着几次机会都白给。数到 2 就在 brief 里点她一句。
+   */
+  silentWaveStreak(poolId: string, cap = 5): number {
+    const rows = this.db
+      .prepare("SELECT reason FROM tide_events WHERE pool_id = ? AND kind = 'wave' ORDER BY ts DESC LIMIT ?")
+      .all(poolId, cap) as { reason: string | null }[];
+    let n = 0;
+    for (const r of rows) {
+      if (String(r.reason ?? "").includes("没发")) n++;
+      else break;
+    }
+    return n;
+  }
+
+  /**
+   * 挑几条可以聊的：悬置类（pending，他没回答的问题 / 答应过的事）先出，然后才轮到谈资。
+   *
+   * 之后的排序是用得最少的先出，同样少用就用最久没用的。
    * 刻意不让模型给话题打分——问它「这条重要吗」，它会把所有都打 5 分。
    * 行为信号（用过几次 / 多久没用）不会撒谎，也不需要额外问一次。
    */
@@ -341,7 +368,8 @@ export class Store {
     return this.db.prepare(
       `SELECT * FROM topics
         WHERE retired=0 AND cooldown_until <= ? AND (pool_id IS NULL OR pool_id = ?)
-        ORDER BY used_count ASC, COALESCE(last_used_at,0) ASC, id DESC LIMIT ?`,
+        ORDER BY CASE kind WHEN 'pending' THEN 0 ELSE 1 END,
+                 used_count ASC, COALESCE(last_used_at,0) ASC, id DESC LIMIT ?`,
     ).all(now, poolId, n);
   }
 

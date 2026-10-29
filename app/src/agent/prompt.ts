@@ -91,6 +91,8 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
 
   // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这两行直接决定该不该开口
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
+  // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
+  const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
   const last = store.lastTideFired(primaryPool);
   const day = localDay(x.now, "Asia/Shanghai");
   const firedL2 = store.countTideFired(day, primaryPool, "L2");
@@ -107,6 +109,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
         ? `${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}`
         : "（这是第一次主动开口）",
       fired: String(firedL2),
+      chat_gap: lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）",
     }),
     scene: render(`scene-${x.wake.type}`, {
       proactive_block: x.wake.proactive?.length

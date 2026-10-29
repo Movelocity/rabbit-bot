@@ -116,7 +116,11 @@ export class App {
     const out: NonNullable<Wake["proactive"]> = [];
     for (const pool of this.store.listPools()) {
       const c = waveCandidate(this.store, pool.pool_id, now, cfg);
-      if (c?.ok) out.push({ pool: pool.pool_id, stage: c.stage, a: c.a, peak: c.peak, sessionTs: c.sessionTs, detail: c.detail });
+      if (!c?.ok) continue;
+      // 沉默也要有重量：连着两次放行都没开口，这次就把话说重一点
+      const silent = this.store.silentWaveStreak(pool.pool_id);
+      const detail = silent >= 2 ? `${c.detail}｜已经连着 ${silent} 次放行都没开口，这次除非真的没话说，别再憋着` : c.detail;
+      out.push({ pool: pool.pool_id, stage: c.stage, a: c.a, peak: c.peak, sessionTs: c.sessionTs, detail });
     }
     return out;
   }
