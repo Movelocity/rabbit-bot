@@ -32,6 +32,22 @@ pm2 restart rabbit-bot
 - `scripts/run.sh fg` 负责：source env → preflight 校验凭据 → `exec node dist/main.js`。
 - 实测：`kill -9` 后约 4 秒自动回来，长连接重建。
 
+### 改代码之后（2026-10-29 踩过）
+
+**`pm2 restart` 不编译。** 跑的是 `dist/main.js`，改 `src/*.ts` 之后必须：
+
+```bash
+npm run build && pm2 restart rabbit-bot
+```
+
+漏 `build` 的现象很阴：进程照常 online、飞书长连接照常建立、日志没有崩溃，只有走到改动那条路径才报错。
+10-29 那次改了 `prompt.ts` 和 `part-tide.md` 却只 restart —— 模板是运行时热读的（新的），
+代码是旧 dist（没有那个变量），于是从 15:46 起每次唤醒都抛 `模板 part-tide.md 缺少变量`，
+每 3 分钟一条，100 分钟里她一句都没能发出来。而 `pm2 status` 一直显示 online。
+
+判据：`config/prompt/*.md` 改完 `pm2 restart` 就够；**`src/` 下任何改动都要先 `npm run build`**。
+自查一行：`grep -c chat_gap dist/agent/prompt.js`（有改动就该 >0）。
+
 **开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.weikang.plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是
 
 ```bash
