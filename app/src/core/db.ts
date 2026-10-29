@@ -305,6 +305,14 @@ export class Store {
     return this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id = ? AND ts >= ? AND ts <= ? ORDER BY ts")
       .all(poolId, fromTs, toTs) as any[];
   }
+  /** 池里最后一条消息（时间和是不是她说的），充能判定要用「最后谁说的话」 */
+  lastMessage(poolId: string | null): { ts: number; from_self: number } | null {
+    const row = poolId === null
+      ? this.db.prepare("SELECT ts, from_self FROM messages ORDER BY ts DESC LIMIT 1").get()
+      : this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT 1").get(poolId);
+    return (row as any) ?? null;
+  }
+
   /** 今天某个池、某一档已经真发了几条（L0 不占额度，不会问到这里） */
   countTideFired(day: string, poolId: string | null, anchorKind: string): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM tide_events WHERE day=? AND kind='fired' AND anchor_kind=? AND (pool_id IS ? OR pool_id=?)`)
