@@ -145,6 +145,10 @@ I_hers = 3 × I                         # 最后一句是她说的：他没回�
 2. **及时回复要全额返还（`GAIN=1.0`）。** 原来我给 0.5，热态下每次主动净亏 0.5，
    连续插话 4 次就到底——和「聊得好时几分钟就能插一句」直接矛盾。
 
+3. **连发几条算同一轮。** 10 分钟内连着发的只扣一次 `costInit`。少了这条，18:57 连发四句
+   会被记成四次主动、扣光 4 点——实测她一天 61 条消息直接把 E 打到地板，而真实感受只是
+   「聊了一场」。
+
 ### 删掉的中间层
 
 | 原来要算 | 现在 |
@@ -267,7 +271,17 @@ npx tsx scripts/sim-energy-mc.ts    # 完整版：蒙特卡洛，看长期稳定
 npx tsx scripts/sim-compare.ts      # 新旧对比（直接 import 真实 wave.ts）
 npx tsx scripts/sim-simple.ts       # 简化版：sigmoid 二级机制，4 个场景
 npx tsx scripts/sim-sweep.ts        # 简化版：24 组参数扫描 + 偏离评分
+
+# 线上实时状态（接进项目之后）
+sqlite3 ~/projects/rabbit-bot/app/data/rabbit-bot.db \
+  "SELECT k, v FROM kv WHERE k LIKE 'energy%'"
+sqlite3 ~/projects/rabbit-bot/app/data/rabbit-bot.db \
+  "SELECT datetime(ts/1000,'unixepoch','localtime'), substr(reason,1,100) \
+   FROM tide_events ORDER BY ts DESC LIMIT 5"
 ```
+
+回退：`config/default.json` 把 `tide.energy.enabled` 置 false、`tide.wave.enabled` 置 true，
+`npm run build && pm2 restart rabbit-bot`——两套判定是并列的，旧水位代码没删。
 
 改参数就改脚本顶部那 8 个常量（`COST_ANSWER`/`COST_INIT`/`GAIN`/`FLOOR`/`CAP`/`HALF_H`/
 `ACTIVE_START`/`ACTIVE_END`），然后加自己的场景：`sim("名字", 基准E, [{t: 分钟, color:"r", kind:"init"}])`。
