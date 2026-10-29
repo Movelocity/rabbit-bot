@@ -21,3 +21,5 @@ console.log("=== part-tide 三行 ===");
 for (const l of tide) console.log(l);
 console.log("=== 断言 ===");
 console.log("距上次对话 有值:", /距上次对话：\S/.test(out));
+console.log("=== 睡眠/提示语尾部 ===");
+console.log(out.split("\n").slice(-11).join("\n"));
