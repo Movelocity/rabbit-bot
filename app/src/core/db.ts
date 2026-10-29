@@ -268,12 +268,33 @@ export class Store {
     return { wakes, tokens };
   }
 
-  /** 这个会话（sinceTs 之后）已经用掉的退潮档位。问过就算，不管她说没说。 */
+  /**
+   * 这段沉默里**问过**的档位（不管是发了还是没发）。
+   *
+   * 用途只有一个：同一档不要再问第二遍。少了这条，水位停在某一档时每个 tick
+   * 都会再问一次——3 分钟一叫，10-27 夜里就是这么烧掉 200 万 token 的。
+   */
   usedWaveStages(poolId: string | null, sinceTs: number): number[] {
     const rows = poolId === null
       ? this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave')`).all(sinceTs)
       : this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND pool_id = ? AND kind IN ('fired','wave')`).all(sinceTs, poolId);
     return (rows as { stage: number }[]).map((r) => r.stage);
+  }
+
+  /**
+   * 这段沉默里**真的开口过**几次（「没发」不算）。
+   *
+   * 用途：要不要继续给机会，看的是她开过几次口，不是水位退了几档。
+   * 早先用「退到第几档 > maxStages」当上限，结果她连着憋几次、水位退到第 4 档后
+   * 机制就再也不叫她（10-29 下午，从此四小时静默）——用「不主动」惩罚「不主动」。
+   */
+  firedWaveCount(poolId: string | null, sinceTs: number): number {
+    const where =
+      "stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave') AND COALESCE(reason,'') NOT LIKE '%没发%'";
+    const row = poolId === null
+      ? this.db.prepare(`SELECT COUNT(DISTINCT stage) AS n FROM tide_events WHERE ${where}`).get(sinceTs)
+      : this.db.prepare(`SELECT COUNT(DISTINCT stage) AS n FROM tide_events WHERE ${where} AND pool_id = ?`).get(sinceTs, poolId);
+    return Number((row as { n: number } | undefined)?.n ?? 0);
   }
   /** 水位场用：某池（null=跨池）在 [fromTs, toTs] 内的消息骨架，不含正文 */
   messagesForWave(poolId: string | null, fromTs: number, toTs: number): { ts: number; from_self: number }[] {
