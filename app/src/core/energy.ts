@@ -146,6 +146,8 @@ export type ReplayResult = {
  */
 export function replay(
   E: number, msgs: EnergyMsg[], t0: number, t1: number, cfg: EnergyConfig = ENERGY_DEFAULTS,
+  /** t0 之前的最后一条。增量记账时如果是她说的，本段第一条她的话才算「回答」而不是「起话头」 */
+  ctx?: EnergyMsg | null,
 ): ReplayResult {
   // 必须是「当天 0 点起的分钟」（0~1440），cool() 的 activeSpan 按这个语义算活跃时段。
   // 曾经写成 ms/60e3（epoch 分钟，约 2900 万），activeSpan 每次都返回满格 960 分钟，
@@ -157,13 +159,15 @@ export function replay(
   // 不要在这里先整体衰减一次：循环里已经按消息间隔逐段衰减，两头都算等于冷却翻倍。
   // 线上实测就是被这个吃掉的——今天 24 次配对该充 +19.65，E 却只到 2.5。
   let cur = E;
-  let prev: EnergyMsg | null = null;
+  let prev: EnergyMsg | null = ctx ?? null;
   let gained = 0, spent = 0;
   const replies: number[] = [];
 
   for (const m of msgs) {
     if (m.ts <= t0 || m.ts > t1) continue;
-    cur = cool(cur, prev ? toMin(prev.ts) : toMin(t0), toMin(m.ts), cfg);
+    // 只有落在本段内的 prev 才用作冷却起点；ctx 是段外的一条，从 t0 起算
+    const from = prev && prev.ts >= t0 ? toMin(prev.ts) : toMin(t0);
+    cur = cool(cur, from, toMin(m.ts), cfg);
     if (m.fromSelf) {
       // 连着几条是她一口气发的（10 分钟内）→ 同一轮发言，只计一次
       // 少了这条，18:57 连发 4 条会被算成 4 次主动、扣光 4 点
@@ -188,7 +192,8 @@ export function replay(
     prev = m;
   }
   // 补尾部：最后一条消息之后到 t1 的这段也得衰减
-  cur = cool(cur, prev ? toMin(prev.ts) : toMin(t0), toMin(t1), cfg);
+  const tailFrom = prev && prev.ts >= t0 ? toMin(prev.ts) : toMin(t0);
+  cur = cool(cur, tailFrom, toMin(t1), cfg);
   // 收到两位小数：浮点累加会攒出 2.4999999999999996 这种尾巴，写进 kv 和日志都难看
   return { E: Math.round(cur * 100) / 100, gained, spent, replies };
 }

@@ -305,6 +305,15 @@ export class Store {
     return this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id = ? AND ts >= ? AND ts <= ? ORDER BY ts")
       .all(poolId, fromTs, toTs) as any[];
   }
+  /** ts 之前的最后一条消息。跨 tick 增量记账时要用它当「上一句是谁说的」，
+   *  否则每个 tick 窗口里她说的第一条都会被当成「自己起的话头」扣 1 点而不是 0.1 */
+  messageBefore(poolId: string | null, ts: number): { ts: number; from_self: number } | null {
+    if (poolId === null) return null;
+    const row = this.db.prepare(
+      "SELECT ts, from_self FROM messages WHERE pool_id=? AND ts<? ORDER BY ts DESC LIMIT 1").get(poolId, ts);
+    return (row as any) ?? null;
+  }
+
   /** 池里她说的最后一条。主动判定拿它当基准：她一答完时钟就重新起步，
    *  用「任何人最后说话」的话，热聊时永远差几分钟，聊得越热主动机制越死 */
   lastSelfMessage(poolId: string | null): { ts: number } | null {

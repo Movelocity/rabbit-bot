@@ -145,6 +145,26 @@ test("重放：冷却不能重复算（分段推进和一次推进结果一致�
     `分段 ${E.toFixed(2)} 应≈ 一次 ${oneShot.E.toFixed(2)}（冷却被重复计算会差很多）`);
 });
 
+test("重放：跨 tick 时她说的第一句是回答，不是起话头", () => {
+  // 线上事故：每个 tick 只 replay 最近三分钟，prev 永远是 null，
+  // 于是窗口里她说的第一条一律被当成「主动开口」扣 1.0 而不是 0.1。
+  // 一天 70 个 tick，白扣几十点，E 直接躺在地板上，她就再也不主动了。
+  const t0 = 540 * 60e3, D2 = { ...D };
+  const him = { ts: t0 + 60e3, fromSelf: false };
+  const her = { ts: t0 + 120e3, fromSelf: true };
+
+  const oneShot = replay(5, [him, her], t0, t0 + 300e3, D2);
+
+  // 同一个消息流切成两个 tick
+  const tick1 = replay(5, [him], t0, t0 + 90e3, D2);
+  const tick2 = replay(tick1.E, [her], t0 + 90e3, t0 + 300e3, D2, him);
+
+  assert.ok(Math.abs(oneShot.spent - (tick1.spent + tick2.spent)) < 1e-9,
+    `跨 tick 消耗 ${(tick1.spent + tick2.spent).toFixed(2)} 应等于一次跑完 ${oneShot.spent.toFixed(2)}`);
+  assert.ok(Math.abs(oneShot.E - tick2.E) < 0.05,
+    `跨 tick 终值 ${tick2.E.toFixed(2)} 应≈ 一次跑完 ${oneShot.E.toFixed(2)}`);
+});
+
 test("重放：三分钟没有消息，电量不该掉 75%", () => {
   // 曾经 replay 把 epoch 分钟当「当天分钟」传给 cool，activeSpan 永远返回满格，
   // 每个 tick 固定掉 75%。这条守住：一个 tick 的冷却就是三分钟的量。
