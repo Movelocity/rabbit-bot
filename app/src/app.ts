@@ -164,7 +164,10 @@ export class App {
 
     // 只处理已发生的那部分；now 本身留给下一 tick，避免相邻 tick 把同一条消息充两次
     const rows = this.store.messagesForWave(poolId, st.ts, now);
-    const rep = replay(st.E, rows.map((r) => ({ ts: r.ts, fromSelf: !!r.from_self })), st.ts, now, ecfg);
+    // 把 st.ts 之前的那一条也带上：这个 tick 窗口里她说的第一句，可能是「回答」而不是「起话头」
+    const before = this.store.messageBefore(poolId, st.ts);
+    const ctx = before ? { ts: before.ts, fromSelf: !!before.from_self } : null;
+    const rep = replay(st.E, rows.map((r) => ({ ts: r.ts, fromSelf: !!r.from_self })), st.ts, now, ecfg, ctx);
     this.store.setKv(key, JSON.stringify({ E: rep.E, ts: now, day }));
     return rep.E;
   }
