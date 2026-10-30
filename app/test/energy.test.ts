@@ -92,6 +92,15 @@ test("重放：连发几条只算一次开口，也只配一个区间", () => {
   near(r.gained, 0.45, 0.01);   // 30 分钟档
 });
 
+test("重放：连着说很多句也扣不到地板以下（每天保底一次）", () => {
+  const t0 = 540 * 60e3;
+  const msgs: { ts: number; fromSelf: boolean }[] = [];
+  // 12 轮主动开口，中间对方没接
+  for (let i = 0; i < 12; i++) msgs.push({ ts: t0 + i * 30 * 60e3, fromSelf: true });
+  const r = replay(8, msgs, t0 - 60e3, t0 + 12 * 30 * 60e3, D);
+  assert.ok(r.E >= D.floor, `E 不该跌破地板，实际 ${r.E}`);
+});
+
 test("判定：没电就别说，刚聊完也别说", () => {
   const now = 600 * 60e3;
   // 电低于地板
