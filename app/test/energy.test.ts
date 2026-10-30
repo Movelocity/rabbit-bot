@@ -145,6 +145,15 @@ test("重放：冷却不能重复算（分段推进和一次推进结果一致�
     `分段 ${E.toFixed(2)} 应≈ 一次 ${oneShot.E.toFixed(2)}（冷却被重复计算会差很多）`);
 });
 
+test("重放：三分钟没有消息，电量不该掉 75%", () => {
+  // 曾经 replay 把 epoch 分钟当「当天分钟」传给 cool，activeSpan 永远返回满格，
+  // 每个 tick 固定掉 75%。这条守住：一个 tick 的冷却就是三分钟的量。
+  const t = new Date(2026, 9, 30, 16, 0, 0).getTime();   // 本地 16:00
+  const r = replay(7, [], t, t + 3 * 60e3, D);
+  // 三分钟 / 半衰 8 小时 → 相对地板衰减不到 0.5%
+  assert.ok(r.E > 6.9, `三分钟只该掉一点点，实际 ${r.E.toFixed(2)}`);
+});
+
 test("判定：没有任何消息时也放行（新池第一天）", () => {
   const v = verdict(2, null, false, 600 * 60e3);
   assert.equal(v.ok, true);

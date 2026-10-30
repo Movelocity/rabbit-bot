@@ -147,7 +147,13 @@ export type ReplayResult = {
 export function replay(
   E: number, msgs: EnergyMsg[], t0: number, t1: number, cfg: EnergyConfig = ENERGY_DEFAULTS,
 ): ReplayResult {
-  const toMin = (ms: number) => ms / 60e3;
+  // 必须是「当天 0 点起的分钟」（0~1440），cool() 的 activeSpan 按这个语义算活跃时段。
+  // 曾经写成 ms/60e3（epoch 分钟，约 2900 万），activeSpan 每次都返回满格 960 分钟，
+  // 于是每个 tick 都把电量砍掉 75%——E 从 6.9 一路掉到地板，她彻底不说话了。
+  const toMin = (ms: number) => {
+    const d = new Date(ms);
+    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  };
   // 不要在这里先整体衰减一次：循环里已经按消息间隔逐段衰减，两头都算等于冷却翻倍。
   // 线上实测就是被这个吃掉的——今天 24 次配对该充 +19.65，E 却只到 2.5。
   let cur = E;
