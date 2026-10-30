@@ -148,7 +148,9 @@ export function replay(
   E: number, msgs: EnergyMsg[], t0: number, t1: number, cfg: EnergyConfig = ENERGY_DEFAULTS,
 ): ReplayResult {
   const toMin = (ms: number) => ms / 60e3;
-  let cur = cool(E, toMin(t0), toMin(t1), cfg);
+  // 不要在这里先整体衰减一次：循环里已经按消息间隔逐段衰减，两头都算等于冷却翻倍。
+  // 线上实测就是被这个吃掉的——今天 24 次配对该充 +19.65，E 却只到 2.5。
+  let cur = E;
   let prev: EnergyMsg | null = null;
   let gained = 0, spent = 0;
   const replies: number[] = [];
@@ -179,6 +181,8 @@ export function replay(
     }
     prev = m;
   }
+  // 补尾部：最后一条消息之后到 t1 的这段也得衰减
+  cur = cool(cur, prev ? toMin(prev.ts) : toMin(t0), toMin(t1), cfg);
   // 收到两位小数：浮点累加会攒出 2.4999999999999996 这种尾巴，写进 kv 和日志都难看
   return { E: Math.round(cur * 100) / 100, gained, spent, replies };
 }
