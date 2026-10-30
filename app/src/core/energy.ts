@@ -179,7 +179,8 @@ export function replay(
     }
     prev = m;
   }
-  return { E: cur, gained, spent, replies };
+  // 收到两位小数：浮点累加会攒出 2.4999999999999996 这种尾巴，写进 kv 和日志都难看
+  return { E: Math.round(cur * 100) / 100, gained, spent, replies };
 }
 
 export type EnergyVerdict = {
