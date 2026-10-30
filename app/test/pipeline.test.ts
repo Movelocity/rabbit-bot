@@ -327,18 +327,19 @@ test("没人等着的时候报错：不发系统提示，避免打扰", async ()
   await t.done();
 });
 
-test("谈资：只在水位 tick 时注入，有人说话时不给（她该接那句话，不是另起话题）", async () => {
+test("谈资：有人说话时也给（只接话就变成他说一句她答一句），水位 tick 给得更多", async () => {
   const t = await setup();
   const pool = t.app.store.listPools()[0]?.pool_id ?? null;
   const id = t.app.store.addTopic({ content: "冰箱里的钱拿去充原神", kind: "meme", pool_id: pool, source: "他发的视频", now: t.clock.now() });
 
-  // 有人说话 → 不注入
+  // 有人说话 → 也要给：手里没别的东西，她只能接话，接完就是问答
   const seen: string[] = [];
   const orig = (t.app as any).engine.run.bind((t.app as any).engine);
   (t.app as any).engine.run = async (prompt: string, ...rest: any[]) => { seen.push(prompt); return orig(prompt, ...rest); };
   t.dm("在吗");
   await t.settle(30_000);
-  assert.equal(seen.some((p) => p.includes("可以拿来聊的")), false, "有人说话时不该给谈资");
+  assert.equal(seen.some((p) => p.includes("可以拿来聊的")), true,
+    "有人说话时也该给谈资，否则她只会说一句答一句");
 
   // 水位 tick → 注入
   await (t.app as any).handleWake({
