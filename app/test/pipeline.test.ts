@@ -327,6 +327,28 @@ test("没人等着的时候报错：不发系统提示，避免打扰", async ()
   await t.done();
 });
 
+test("判定：她主动说完没人回，要等三倍间隔（接线层，不是纯函数）", async () => {
+  const t = await setup();
+  const now = t.clock.now();
+  // 他的消息会顺带建池
+  const m = t.app.store.insertMessage({
+    platform: "feishu", external_chat_id: "c1", pool_kind: "private", msg_id: "m1",
+    sender_id: "u1", sender_name: "他", ts: now - 60 * 60e3, text: "嗯",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  const pool = m.pool_id;
+  // 20 分钟前她自己起了个话头，用户一直没回
+  t.app.store.db.prepare(
+    "INSERT INTO messages(pool_id,platform,msg_id,sender_id,sender_name,ts,text,from_self) VALUES(?,?,?,?,?,?,?,?)")
+    .run(pool, "feishu", "m2", "bot", "她", now - 20 * 60e3, "今天风挺大", 1);
+  t.app.store.setKv(`energy.${pool}`, JSON.stringify({ E: 7, ts: now - 5 * 60e3, day: "x" }));
+
+  const got = (t.app as any).energyTick(pool, now, { ...(t.app as any).o.cfg.tide.energy, enabled: true });
+  // I(7) ≈ 9.6 分钟 < 20 分钟，但她说完没人回要三倍 ≈ 28.7 分钟，所以不能放行
+  assert.ok(!got || !got.pool, `她说完没人回，20 分钟不该放行（实际 ${JSON.stringify(got)}）`);
+  await t.done();
+});
+
 test("谈资：有人说话时也给（只接话就变成他说一句她答一句），水位 tick 给得更多", async () => {
   const t = await setup();
   const pool = t.app.store.listPools()[0]?.pool_id ?? null;

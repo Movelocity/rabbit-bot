@@ -186,10 +186,14 @@ export class App {
     const rep = { E };
     // 基准是「距她最后说话多久」，不是「距任何人说话」。
     // 她答完你 5 分钟没接，她就可以自己补一句/换个话题——这才叫主动，而不是单纯回答。
-    // 不乘三倍：三倍是防「她主动开口后没人理还追问」，她用回答收尾时不该受这个惩罚。
     const mine = this.store.lastSelfMessage(poolId);
     if (!mine) return null;
-    const v = verdict(rep.E, mine.ts, false, now, ecfg);
+    // 但她最后这句是自己起的话头，还是在你后面答的？这决定要不要乘三倍。
+    // 曾经这里写死 false（等于「已被回答」），三倍分支在线上一次都没走过——
+    // 她主动说一句没人理，过了 I(E) 就放行，一路自说自话。
+    const prevMsg = this.store.messageBefore(poolId, mine.ts);
+    const wasAnswer = !!prevMsg && prevMsg.from_self === 0 && (mine.ts - prevMsg.ts) <= 5 * 60e3;
+    const v = verdict(rep.E, mine.ts, !wasAnswer, now, ecfg);
     if (!v.ok) return null;
 
     const silent = this.store.silentWaveStreak(poolId);
