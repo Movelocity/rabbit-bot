@@ -164,7 +164,9 @@ export function replay(
         // 跟在他后面 5 分钟内 = 她在回答问题；否则是她自己起的话头
         const isAnswer = prev && !prev.fromSelf && m.ts - prev.ts <= 5 * 60e3;
         const cost = isAnswer ? cfg.costAnswer : cfg.costInit;
-        cur = Math.max(0, cur - cost);
+        // 消耗不许跌破地板。曾经允许跌破再靠冷却拉回，线上实测 E 掉到 0 之后
+        // 冷却只能渐近逼近 1、永远到不了，等于当天再也主动不了——地板就是「每天留一次」
+        cur = Math.max(cfg.floor, cur - cost);
         spent += cost;
       }
     } else if (prev && prev.fromSelf) {
