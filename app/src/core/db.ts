@@ -305,6 +305,15 @@ export class Store {
     return this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id = ? AND ts >= ? AND ts <= ? ORDER BY ts")
       .all(poolId, fromTs, toTs) as any[];
   }
+  /** 池里她说的最后一条。主动判定拿它当基准：她一答完时钟就重新起步，
+   *  用「任何人最后说话」的话，热聊时永远差几分钟，聊得越热主动机制越死 */
+  lastSelfMessage(poolId: string | null): { ts: number } | null {
+    if (poolId === null) return null;
+    const row = this.db.prepare(
+      "SELECT ts FROM messages WHERE pool_id=? AND from_self=1 ORDER BY ts DESC LIMIT 1").get(poolId);
+    return (row as any) ?? null;
+  }
+
   /** 池里最后一条消息（时间和是不是她说的），充能判定要用「最后谁说的话」 */
   lastMessage(poolId: string | null): { ts: number; from_self: number } | null {
     const row = poolId === null

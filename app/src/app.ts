@@ -181,9 +181,12 @@ export class App {
     if (!poolId) return null;
     const E = this.energyAccrue(poolId, now, ecfg);
     const rep = { E };
-    const last = this.store.lastMessage(poolId);
-    if (!last) return null;
-    const v = verdict(rep.E, last.ts, !!last.from_self, now, ecfg);
+    // 基准是「距她最后说话多久」，不是「距任何人说话」。
+    // 她答完你 5 分钟没接，她就可以自己补一句/换个话题——这才叫主动，而不是单纯回答。
+    // 不乘三倍：三倍是防「她主动开口后没人理还追问」，她用回答收尾时不该受这个惩罚。
+    const mine = this.store.lastSelfMessage(poolId);
+    if (!mine) return null;
+    const v = verdict(rep.E, mine.ts, false, now, ecfg);
     if (!v.ok) return null;
 
     const silent = this.store.silentWaveStreak(poolId);
@@ -195,7 +198,7 @@ export class App {
       stage: Math.max(1, Math.round(ecfg.cap - rep.E)),
       a: rep.E,
       peak: ecfg.cap,
-      sessionTs: last.ts,
+      sessionTs: mine.ts,
       detail,
     };
   }

@@ -123,6 +123,28 @@ test("判定：没电就别说，刚聊完也别说", () => {
   assert.equal(ok.ok, true);
 });
 
+test("重放：冷却不能重复算（分段推进和一次推进结果一致）", () => {
+  const t0 = 540 * 60e3;
+  const msgs = [
+    { ts: t0 + 10 * 60e3, fromSelf: true },
+    { ts: t0 + 12 * 60e3, fromSelf: false },
+    { ts: t0 + 200 * 60e3, fromSelf: true },
+    { ts: t0 + 205 * 60e3, fromSelf: false },
+  ];
+  const end = t0 + 400 * 60e3;
+  const oneShot = replay(6, msgs, t0, end, D);
+
+  // 拆成 4 段，每段都带上「上次结算到的时刻」继续推进
+  let E = 6, cursor = t0;
+  for (const cut of [t0 + 15 * 60e3, t0 + 100 * 60e3, t0 + 210 * 60e3, end]) {
+    const slice = msgs.filter((m) => m.ts > cursor && m.ts <= cut);
+    E = replay(E, slice, cursor, cut, D).E;
+    cursor = cut;
+  }
+  assert.ok(Math.abs(E - oneShot.E) < 0.05,
+    `分段 ${E.toFixed(2)} 应≈ 一次 ${oneShot.E.toFixed(2)}（冷却被重复计算会差很多）`);
+});
+
 test("判定：没有任何消息时也放行（新池第一天）", () => {
   const v = verdict(2, null, false, 600 * 60e3);
   assert.equal(v.ok, true);
