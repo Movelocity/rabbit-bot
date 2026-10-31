@@ -47,7 +47,7 @@ export interface Config {
     maxFileBytes: number;
     maxFiles: number;
     maxReadChars: number;
-    shell: { enabled: boolean; container: string; image: string; network: "bridge" | "none"; timeoutMs: number; maxOutputChars: number };
+    shell: { enabled: boolean; container: string; image: string; network: "bridge" | "none"; timeoutMs: number; maxOutputChars: number; volumes: Array<{ host: string; container: string; mode?: "ro" | "rw" }> };
   };
   inject?: { port: number };
   agent: { name: string; persona: string };
@@ -80,6 +80,11 @@ export function loadConfig(overrides?: unknown): Config {
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
   cfg.sandbox.dir = path.resolve(APP_ROOT, cfg.sandbox.dir);
+  // volumes 里的 host 是相对 APP_ROOT 的路径（和 sandbox.dir 一样）
+  cfg.sandbox.shell.volumes = (cfg.sandbox.shell.volumes ?? []).map((v) => ({
+    ...v,
+    host: path.resolve(APP_ROOT, v.host),
+  }));
   if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);
   return cfg;

@@ -13,13 +13,23 @@
  */
 import { execFile } from "node:child_process";
 
+export interface VolumeSpec {
+  /** 宿主机路径（绝对路径） */
+  host: string;
+  /** 容器内路径 */
+  container: string;
+  mode?: "ro" | "rw";
+}
+
 export interface SandboxShellOptions {
   container: string;
   image: string;
   /** "bridge" 有网（装包、抓网页）；"none" 完全断网。 */
   network: "bridge" | "none";
-  /** 宿主的沙盒目录，挂进容器当 /work。 */
-  workspace: string;
+  /** 要挂进容器的宿主机目录。宿主其余路径在容器里不存在。 */
+  volumes: VolumeSpec[];
+  /** 容器内工作目录（默认 /work）。 */
+  workdir?: string;
   timeoutMs: number;
   maxOutputChars: number;
 }
@@ -66,8 +76,8 @@ export async function ensureSandboxContainer(opts: SandboxShellOptions): Promise
       "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges",
       "--restart", "unless-stopped",
-      "-v", `${opts.workspace}:/work:rw`,
-      "-w", "/work",
+      ...opts.volumes.flatMap((v) => ["-v", `${v.host}:${v.container}:${v.mode ?? "rw"}`]),
+      "-w", opts.workdir ?? "/work",
       "--user", `${process.getuid?.() ?? 501}:${process.getgid?.() ?? 20}`,
       opts.image,
       "sleep", "infinity",
