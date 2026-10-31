@@ -1,6 +1,10 @@
 node_modules/
 dist/
-data/
+data/*
+# 提示词放在沙盒目录里（容器内外都能读写），但它仍是代码资产，要进版本控制
+!data/sandbox/
+data/sandbox/*
+!data/sandbox/prompt/
 logs/
 *.log
 .env

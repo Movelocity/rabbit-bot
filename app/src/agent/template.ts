@@ -1,5 +1,9 @@
 /**
- * 提示词模板：读 config/prompt/*.md，替换 {{变量}}。
+ * 提示词模板：读 data/sandbox/prompt/*.md，替换 {{变量}}。
+ *
+ * 放在沙盒目录里是有意的：那个目录同时挂进容器当 /work，
+ * 所以她在容器里用 shell 就能读、也能改自己这一份——
+ * 宿主和容器看的是同一批文件，改完下一轮就生效（下面是按 mtime 缓存）。
  *
  * 刻意不做模板语言（没有 if、没有 for、没有函数）：
  * 需要分支就在代码里选哪个模板，需要列表就由代码拼成整段再注入。
@@ -10,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "config", "prompt");
+const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "data", "sandbox", "prompt");
 
 let dir = DEFAULT_DIR;
 /** 测试用：把模板目录指到夹具上 */
