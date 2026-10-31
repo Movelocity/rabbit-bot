@@ -186,18 +186,33 @@ extensionFactories: [
 
 | 边界 | 值 |
 |---|---|
+| 模式 | `config.sandbox.shell.mode`：`docker`（默认，隔离）/ `host`（无隔离，仅本地开发） |
 | 网络 | `--network bridge`（**有网**；`config.sandbox.shell.network` 可切回 `none`） |
 | 根文件系统 | `--read-only`，只有 `/tmp`（tmpfs 256m）和 `/work` 可写 |
 | 挂载 | 只把 `data/sandbox` 挂成 `/work`，宿主其余路径在容器里**不存在** |
 | 权限 | `--cap-drop ALL`、`no-new-privileges`、非 root（宿主 uid:gid） |
 | 资源 | 512MB 内存、1 CPU、64 进程 |
-| 镜像 | `rabbit-bot-sandbox:latest`（`docker/sandbox.Dockerfile`，239MB）：node 22、Python 3.14 + pip、git、curl、GNU bash、jq、ripgrep；根文件系统只读，`HOME=/tmp/home` |
+| 镜像 | `rabbit-bot-sandbox:latest`（`docker/sandbox.Dockerfile`，实测 343MB）：node 22、Python 3.14 + pip、git、curl、GNU bash、jq、ripgrep；根文件系统只读，`HOME=/tmp/home` |
 
 容器名 `rabbit-bot-sbx`，`--restart unless-stopped`。`src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 会在容器缺失时按上表参数重建，所以删了也能自愈——**改这张表就是改安全边界**。
 
+**无沙盒模式（`mode=host`，仅本地开发）**：写进 `config/local.json`（已 gitignore），别写 `default.json`：
+
+```json
+{ "sandbox": { "shell": { "mode": "host", "host": { "cwd": "data/sandbox", "inheritEnv": false } } } }
+```
+
+命令用 `bash -c`（不读登录 profile，免得把过滤掉的环境变量又塞回来）直接跑在宿主机上，cwd 默认 `data/sandbox`（和容器里的 `/work` 是同一个目录），只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`；超时、输出截断、4000 字上限和 docker 模式共用同一套逻辑。**它没有隔离**：模型能读 `~/.config/rabbit-bot/env`、能碰任意宿主路径——这正是当年排除 `sandbox-exec` 的理由。`mode=host` 不建容器，`npm run sbx` 的容器参数全部不生效，`npm run doctor` / `npm run sbx -- status` 会打黄色警告。`enabled:false` 仍等价于「shell 关闭」，和 mode 正交。
+
+**沙盒里的技能脚本怎么用业务命令**（2026-10-31 加）：不再把 `scripts/` 或数据库挂进容器，宿主进程起一个 REST API（`src/api.ts`，默认 `0.0.0.0:3738`），覆盖池 / 计划 / 记忆 / 图片 / 联网 / 沙盒文件。容器创建时自动注入 `RB_API_URL`（`http://host.docker.internal:3738`）和 `RB_API_TOKEN`（`data/run/api.token`，首次启动自动生成 0600；token 变了会重建容器）。`src/app` 启动时会先起 API 再把 `mode=docker` 的容器拉起来，所以 `sb run` 之前容器就已经在跑。`sb run` 本身不开放 HTTP 接口——技能脚本已经在 shell 里，再开一层只会递归。完整路由和 curl 示例见 `docs/sandbox-api.md`。
+
+**技能（2026-10-31）**：`data/sandbox/skills/<name>/` 一个技能一个目录，`SKILL.md` 等设计资产进 git，`skills/<name>/data/` 是运行时产物、被 `.gitignore` 排除；空 `data/` 由启动时和每次 `sb run` 前自动补（`src/ops/skills.ts`）。`data/sandbox` 本来就挂成 `/work`，所以容器里直接是 `/work/skills/<name>/`，没有同步步骤。`GET /v1/skills` 给技能自己发现名字和数据目录。
+
+**这层 API 的边界**：绑 `0.0.0.0` 是为了容器能连，局域网也能访问，全靠 Bearer token；token 文件在 `data/run/`，别提交。API 不返回飞书/LLM 密钥，沙盒文件路径仍走 `createSandboxFs`（`../` 逃逸一律 400）。
+
 **超时的坑**：只给 `execFile` 设 timeout 会杀掉 docker CLI，但容器里的进程继续跑成孤儿。现在超时交给容器内的 `timeout -s KILL <secs> sh -lc <cmd>`（命令走 execFile 参数数组，不经宿主 shell）。
 
-**换镜像**：改 `docker/sandbox.Dockerfile` → `docker build -t rabbit-bot-sandbox:latest -f docker/sandbox.Dockerfile docker/` → `docker rm -f rabbit-bot-sbx`，下次 `sandbox_run` 会用新镜像自愈重建（参数在 `ensureSandboxContainer` 里，和手建的等价）。
+**换镜像**：改 `docker/sandbox.Dockerfile` → `docker build -t rabbit-bot-sandbox:latest -f docker/sandbox.Dockerfile docker/` → `docker rm -f rabbit-bot-sbx`，下次 `sb run` 会用新镜像自愈重建（参数在 `ensureSandboxContainer` 里，和手建的等价）。
 
 **装包**：网络是 `bridge`，所以 `pip install` / `npm i` / `git clone` 都能用。镜像里设了 `PIP_USER=1` + `PIP_BREAK_SYSTEM_PACKAGES=1`，`pip install requests` 直接成功——装在 `/tmp/home/.local`（tmpfs），**容器一重建就没了**。要长期留着就 `python3 -m venv /work/.venv`，包落在沙盒目录里。
 

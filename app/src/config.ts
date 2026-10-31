@@ -47,8 +47,24 @@ export interface Config {
     maxFileBytes: number;
     maxFiles: number;
     maxReadChars: number;
-    shell: { enabled: boolean; container: string; image: string; network: "bridge" | "none"; timeoutMs: number; maxOutputChars: number; volumes: Array<{ host: string; container: string; mode?: "ro" | "rw" }> };
+    shell: {
+      enabled: boolean;
+      /** docker = 隔离容器（默认）；host = 直接跑在宿主机上，无隔离，仅本地开发用 */
+      mode: "docker" | "host";
+      container: string;
+      image: string;
+      network: "bridge" | "none";
+      timeoutMs: number;
+      maxOutputChars: number;
+      volumes: Array<{ host: string; container: string; mode?: "ro" | "rw" }>;
+      /** 额外注入容器/宿主 shell 的环境变量（自动带 RB_API_URL / RB_API_TOKEN） */
+      env?: Record<string, string>;
+      /** 仅 mode=host 生效 */
+      host?: { cwd?: string; inheritEnv?: boolean };
+    };
   };
+  /** 本地 REST API：沙盒里的技能脚本通过它访问池/计划/记忆/沙盒文件 */
+  api?: { enabled: boolean; port: number; host: string };
   inject?: { port: number };
   agent: { name: string; persona: string };
 }
@@ -85,6 +101,9 @@ export function loadConfig(overrides?: unknown): Config {
     ...v,
     host: path.resolve(APP_ROOT, v.host),
   }));
+  // host 模式的 cwd 不填就落到沙盒目录（和 docker 模式的 /work 指向同一个地方）
+  if (cfg.sandbox.shell.host?.cwd) cfg.sandbox.shell.host.cwd = path.resolve(APP_ROOT, cfg.sandbox.shell.host.cwd);
+  else cfg.sandbox.shell.host = { ...cfg.sandbox.shell.host, cwd: cfg.sandbox.dir };
   if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);
   return cfg;
@@ -103,6 +122,14 @@ export function validateConfig(cfg: Config): void {
   }
   pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
   pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
+  const mode = cfg.sandbox.shell.mode;
+  if (mode !== "docker" && mode !== "host") throw new Error('config: sandbox.shell.mode 只能是 "docker" 或 "host"');
+  if (cfg.sandbox.shell.enabled) pos(cfg.sandbox.shell.timeoutMs, "sandbox.shell.timeoutMs");
+  if (cfg.api?.enabled) {
+    const p = cfg.api.port;
+    if (!Number.isInteger(p) || p < 0 || p > 65535) throw new Error("config: api.port 必须是 0~65535 的整数（0 = 随机端口）");
+    if (!cfg.api.host) throw new Error("config: api.host 不能为空（默认 0.0.0.0）");
+  }
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");
   if (cfg.tide?.enabled) {
     const { L1, L2 } = cfg.tide.dailyCap;

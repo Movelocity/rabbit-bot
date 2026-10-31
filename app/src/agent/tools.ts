@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { createSandboxFs } from "../core/sandbox-fs.ts";
-import { runInSandbox } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 
 export interface ToolDeps {

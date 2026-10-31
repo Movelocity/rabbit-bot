@@ -1,4 +1,4 @@
-# poolchat 沙盒镜像：通用 shell + node + python，给 sandbox_run 用。
+# poolchat 沙盒镜像：通用 shell + node + python，给 sb run 用。
 # 边界不在这里，在 docker run 的参数里（见 src/core/sandbox-shell.ts）：
 #   --network none / --read-only / --cap-drop ALL / 只挂 data/sandbox → /work
 FROM node:22-alpine

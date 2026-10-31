@@ -35,9 +35,34 @@ else
   echo "  没在听（进程没起？）"
 fi
 
+say "沙盒 shell"
+SHELL_MODE=$(npx tsx -e 'import { loadConfig } from "./src/config.ts"; const s = loadConfig({}).sandbox.shell; console.log(s.enabled ? s.mode : "off")' 2>/dev/null || echo "读取失败")
+echo "  mode: ${SHELL_MODE}"
+if [ "$SHELL_MODE" = "host" ]; then
+  printf '  \033[33m⚠ host 模式：命令直接跑在宿主机上，没有隔离，仅本地开发用\033[0m\n'
+fi
+
 say "沙盒容器"
-docker inspect -f '  {{.State.Status}} | 镜像 {{.Config.Image}} | 网络 {{.HostConfig.NetworkMode}} | 内存 {{.HostConfig.Memory}}' rabbit-bot-sbx 2>/dev/null ||
-  echo "  容器不存在（下次 sandbox_run 会按 config.sandbox.shell 自建）"
+if [ "$SHELL_MODE" = "host" ]; then
+  echo "  host 模式，不建容器"
+elif [ "$SHELL_MODE" = "off" ] || [ "$SHELL_MODE" = "读取失败" ]; then
+  echo "  shell 没开，跳过"
+else
+  docker inspect -f '  {{.State.Status}} | 镜像 {{.Config.Image}} | 网络 {{.HostConfig.NetworkMode}} | 内存 {{.HostConfig.Memory}}' rabbit-bot-sbx 2>/dev/null ||
+    echo "  容器不存在（下次 sb run 会按 config.sandbox.shell 自建）"
+fi
+
+say "REST API"
+read -r API_STATE API_PORT <<< "$(npx tsx -e 'import { loadConfig } from "./src/config.ts"; const a = loadConfig({}).api; console.log(`${a?.enabled === false ? "off" : "on"} ${a?.port ?? 3738}`)' 2>/dev/null || echo 'unknown 3738')"
+echo "  配置：${API_STATE}（端口 ${API_PORT}）"
+if [ "$API_STATE" = "on" ]; then
+  if lsof -nP -iTCP:"$API_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "  ${API_PORT} 在听 ✓（沙盒用 host.docker.internal:${API_PORT}）"
+  else
+    echo "  没在听（进程没起？）"
+  fi
+  if [ -f data/run/api.token ]; then echo "  token 文件在（data/run/api.token，不打印内容）"; else echo "  token 文件还没生成（首次启动时会建）"; fi
+fi
 
 say "最近 24h 唤醒"
 node --input-type=module -e '

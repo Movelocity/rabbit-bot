@@ -6,6 +6,9 @@ data/*
 data/sandbox/*
 !data/sandbox/prompt/
 !data/sandbox/topics/
+!data/sandbox/skills/
+# 技能：SKILL.md 等设计资产进 git；每个技能自己的 data/ 是运行时产物，不进
+data/sandbox/skills/*/data/
 logs/
 *.log
 .env

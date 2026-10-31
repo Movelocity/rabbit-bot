@@ -7,6 +7,11 @@ import { FeishuAdapter } from "./adapters/feishu.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { Logger } from "./core/logger.ts";
 import { startInjectServer } from "./inject.ts";
+import { startApiServer } from "./api.ts";
+import { resolveApiToken } from "./api-token.ts";
+import { ensureSandboxContainer } from "./core/sandbox-shell.ts";
+import { sandboxShellOptions } from "./ops/sandbox.ts";
+import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
 import path from "node:path";
 
@@ -35,6 +40,9 @@ async function main() {
   process.on("exit", () => releaseLock(lockFile));
 
   const app = new App({ cfg, model: model.model, modelRuntime: model.modelRuntime, logger: log });
+  // 技能约定：skills/<name>/SKILL.md 进 git，data/ 是运行时。空目录 clone 不下来，启动时补。
+  const madeDirs = ensureSkillDataDirs(cfg);
+  if (madeDirs.length) log.info(`补了 ${madeDirs.length} 个技能 data 目录`);
   if (cfg.adapters.feishu.enabled)
     app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes } }, log));
   // 测试池（platform=mock）：send 只记在内存里，不发任何真实 IM。
@@ -43,11 +51,13 @@ async function main() {
 
   let stopping = false;
   let injectSrv: Awaited<ReturnType<typeof startInjectServer>> = null;
+  let apiSrv: Awaited<ReturnType<typeof startApiServer>> = null;
   const shutdown = async (sig: string) => {
     if (stopping) return; stopping = true;
     log.info(`收到 ${sig}，等待当前唤醒结束后退出`);
     const force = setTimeout(() => process.exit(1), 30_000); force.unref();
     if (injectSrv) await new Promise<void>((r) => injectSrv!.close(() => r()));
+    if (apiSrv) await new Promise<void>((r) => apiSrv!.close(() => r()));
     await app.stop().catch((e) => log.error("退出异常", e));
     process.exit(0);
   };
@@ -56,6 +66,20 @@ async function main() {
   process.on("unhandledRejection", (e) => log.error("unhandledRejection", e));
   await app.start();
   injectSrv = await startInjectServer({ cfg, hub: app.hub, store: app.store, log });
+
+  // REST API：沙盒里的技能脚本靠它访问池/计划/记忆/沙盒文件。
+  // 先起服务，再按 mode=docker 把容器拉起来（容器里拿到 RB_API_URL / RB_API_TOKEN）。
+  try {
+    const token = resolveApiToken(cfg);
+    apiSrv = await startApiServer({ cfg, store: app.store, log, token });
+    if (cfg.sandbox.shell.enabled && cfg.sandbox.shell.mode === "docker") {
+      const r = await ensureSandboxContainer(sandboxShellOptions(cfg));
+      if (r.ok) log.info(`沙盒容器 ${cfg.sandbox.shell.container}：${r.message}`);
+      else log.warn(`沙盒容器没起来：${r.message}（sb run 时会再试）`);
+    }
+  } catch (e) {
+    log.error("api 启动失败（沙盒里的技能脚本会连不上）", e);
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

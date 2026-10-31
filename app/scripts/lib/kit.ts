@@ -64,18 +64,6 @@ export function now(flags: Flags): number {
   return num(flags, "now") ?? Date.now();
 }
 
-/** pm2 里的进程有这些变量，交互 shell 没有：从仓库外的 env 文件补 */
-export function loadEnvFile(): void {
-  const f = path.join(process.env.HOME ?? "", ".config", "rabbit-bot", "env");
-  if (!fs.existsSync(f)) return;
-  for (const line of fs.readFileSync(f, "utf8").split("\n")) {
-    const m = /^\s*(?:export\s+)?([A-Z0-9_]+)=(.*)$/.exec(line);
-    if (!m) continue;
-    const [, k, v] = m;
-    if (!process.env[k]) process.env[k] = v.replace(/^["']|["']$/g, "");
-  }
-}
-
 /**
  * 统一的出口：成功 {ok:true,data}；失败 {ok:false,error} + 退出码 1。
  * 失败一定要走这里，不要 console.log 完还退 0——调用方分不清「查到了空」和「查挂了」。

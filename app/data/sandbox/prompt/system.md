@@ -8,6 +8,7 @@
 
 - 同一轮里读过就不必再读；换了场景、或者上下文被压掉，再读一次。
 - 话题库在 `/work/topics/`，`INDEX.md` 是索引；翻法见 `/work/prompt/part-topics.md`。
+- 技能在 `/work/skills/`：每个技能读它的 `SKILL.md`；运行时产物只写同目录的 `data/`，别改 `SKILL.md` 存状态。
 - 上下文快满、要交接时读 `/work/prompt/handoff.md`。
 - 这些文件你自己也能改——觉得哪条写得不对，直接编辑并说明改了哪句。
 ## 一条总纲

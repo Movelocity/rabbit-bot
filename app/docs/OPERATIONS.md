@@ -35,12 +35,14 @@ npm run inject -- "..." 某人                          # 指定发送者
 ```bash
 npm run sbx -- status        # 状态 + 边界参数 + /work 内容
 npm run sbx -- shell         # 进容器逛（cwd=/work）
-npm run sbx -- rebuild       # 删容器，下次 sandbox_run 按 config 自建
+npm run sbx -- rebuild       # 删容器，下次 sb run 按 config 自建
 npm run sbx -- image         # 改过 docker/sandbox.Dockerfile 后重建镜像
 npm run sbx -- clean         # 清空 data/sandbox（会二次确认）
 ```
 
-容器 `rabbit-bot-sbx`，边界写在 `src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 里，**改那里就是改安全边界**。
+容器 `rabbit-bot-sbx`，边界写在 `src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 里，**改那里就是改安全边界**。`config.sandbox.shell.mode` 可切 `host`（无容器、无隔离，仅本地开发；见 `DEPLOY.local.md`），`status` 和 `doctor` 都会显示当前模式。
+
+沙盒里的技能脚本走宿主 REST API（默认 `0.0.0.0:3738`，`src/api.ts`，token 在 `data/run/api.token`）。路由和 curl 示例见 `docs/sandbox-api.md`；`npm run doctor` 会检查端口监听和 token 文件。
 
 ## 运维查询（ctl）
 

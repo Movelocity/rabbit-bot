@@ -78,6 +78,11 @@
   "inject": {
     "port": 3737
   },
+  "api": {
+    "enabled": true,
+    "port": 3738,
+    "host": "0.0.0.0"
+  },
   "agent": {
     "name": "小池",
     "persona": "你是一个自然、简短、有分寸的聊天伙伴。"
@@ -89,6 +94,7 @@
     "maxReadChars": 8000,
     "shell": {
       "enabled": true,
+      "mode": "docker",
       "container": "rabbit-bot-sbx",
       "image": "rabbit-bot-sandbox:latest",
       "timeoutMs": 10000,

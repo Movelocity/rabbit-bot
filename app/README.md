@@ -40,18 +40,18 @@ src/adapters/    飞书 / mock（sim 与测试用）
 src/ctl.ts       运维命令（pause / resume / status / usage / wakes / plans …）
 scripts/         run.sh（pm2 的前台入口：读 env → 预检 → exec node）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
 docker/          沙盒镜像 Dockerfile
-test/            118 条，node --test
+test/            251 条，node --test
 data/            运行时数据（db / media / sandbox / 会话），.gitignore
 ```
 
-## 工具清单（模型能调的 17 个）
+## 工具清单（模型能调的 9 个）
 
-`send` `list_pools` `read_pool` `search_messages` `plan_add` `plan_update` `plan_list`
-`memory_add` `memory_search` `list_images` `view_image`
-`sandbox_list` `sandbox_read` `sandbox_write` `sandbox_run`
-`web_search` `web_fetch`
+`send` `stay_silent` `read_pool` `search_messages` `list_images` `view_image`
+`web_search` `web_fetch` `rb`
 
-`send` 是唯一出口。沙盒相关的五个都锁在固定目录里（`data/sandbox`），容器内跑、碰不到宿主。
+`send` 是唯一对外出口。`rb` 是脚本通道（`pool-*` / `plan-*` / `mem-*` / `img-*` / `web-*` / `sb`），
+沙盒文件锁在 `data/sandbox`，命令跑在 Docker 容器里，碰不到宿主文件系统。沙盒里的技能脚本走宿主 REST API，
+见 [docs/sandbox-api.md](docs/sandbox-api.md)。
 
 ## 文档
 
