@@ -14,7 +14,7 @@ test("真实模板都在：六个场景 + 三个片段", () => {
   for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-plan", "handoff", "part-tide", "part-proactive"]) {
     assert.ok(names.includes(n), `缺模板 ${n}.md（现有：${names.join(", ")}）`);
   }
-  assert.match(templateDir(), /config\/prompt$/);
+  assert.match(templateDir(), /data\/sandbox\/prompt$/);
 });
 
 test("handoff 渲染出来是那段交接要求", () => {

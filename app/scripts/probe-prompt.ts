@@ -13,7 +13,7 @@ const out = wakePrompt(store, {
   context: new Map([[pool.pool_id, store.recentMessages(pool.pool_id, 2)]]),
   memories: new Map(),
   plans: [],
-  topics: store.pickTopics(pool.pool_id, 2, Date.now()),
+  topics: [],
 });
 
 const tide = out.split("\n").filter((l) => l.includes("上次主动") || l.includes("距上次对话") || l.includes("今天已主动"));

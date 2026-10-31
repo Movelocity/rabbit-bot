@@ -363,15 +363,8 @@ export class App {
     }
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
-    // 谈资只在「没人在跟你说话、她自己得找话说」的时候给：
-    // 有人刚开口时她该接那句话，不需要别人替她想话题
-    const topicPool = unread[0]?.pool_id ?? [...context.keys()][0] ?? [...w.pools][0] ?? null;
-    // 以前只给 tick 发谈资，message 唤醒一条都不给——她手上没别的可讲，只能接话，
-    // 于是「他说一句她答一句」。message 少给两条就够，够她往下延半步。
-    const topics = w.type === "tick" ? this.store.pickTopics(topicPool, 3, t0)
-      : w.type === "message" ? this.store.pickTopics(topicPool, 2, t0)
-      : [];
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, plans, handoff, topics });
+    // 话题库已经搬进沙盒（/work/topics），她自己去读，这里不再查库。
+    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, plans, handoff, topics: [] });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;

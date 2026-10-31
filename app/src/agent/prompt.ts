@@ -81,13 +81,9 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
-  if (x.topics?.length) {
-    blocks.push(render("part-topics", {
-      items: x.topics
-        .map((t) => `- #${t.id} [${t.kind}] ${t.content}${t.source ? `（${t.source}）` : ""}`)
-        .join("\n"),
-    }));
-  }
+  // 话题库住在沙盒里（/work/topics），不往提示词里塞条目——她要用自己去读。
+  // 每轮只给一句「在哪儿、怎么看」，翻不翻由她判断。
+  blocks.push(render("part-topics", {}));
 
   // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这两行直接决定该不该开口
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
