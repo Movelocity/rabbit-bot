@@ -99,11 +99,6 @@
           "host": "data/sandbox",
           "container": "/work",
           "mode": "rw"
-        },
-        {
-          "host": "config/prompt",
-          "container": "/prompt",
-          "mode": "ro"
         }
       ]
     }
