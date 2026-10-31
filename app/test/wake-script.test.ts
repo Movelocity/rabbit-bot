@@ -28,12 +28,12 @@ test("tick 剧本：路由指向 scene-tick，文案里许空手开口、不许�
   assert.match(p, /\/work\/prompt\/scene-tick\.md/, "要指路，不然她不知道读哪份");
 
   const script = render("scene-tick", {});
-  assert.match(script, /没有人在等你/);
-  assert.match(script, /也可以发/, "没事也能发：不需要先证明它有理由");
-  assert.match(script, /上班/, "上班不是禁区，反而有话题");
-  assert.match(script, /调 stay_silent/);
-  assert.match(script, /或者什么都不调用直接结束/);
-  assert.match(script, /证明自己在线/, "底线：不为证明在线发空话");
+  // 默认动作是「说」，不是「想清楚再说」——旧文案到处都是免责句，把它养成了不敢开口
+  assert.match(script, /默认说点什么/, "醒过来默认开口");
+  assert.match(script, /不用先证明它值得说/);
+  assert.match(script, /别为了「不打扰他」而沉默/, "沉默不是稳，是错过");
+  assert.match(script, /调 stay_silent|stay_silent/, "仍要留闭嘴的口子");
+  assert.match(script, /话题库/);
   // 旧契约是「说不出具体的事，就是没有」——把主动变成了举证责任，已废弃
   assert.doesNotMatch(script, /说不出具体的事，就是没有/);
   assert.doesNotMatch(script, /沉默不等于欠债/);
@@ -48,7 +48,9 @@ test("message 剧本：路由指向 scene-message，先读懂再说", () => {
 
   const script = render("scene-message", {});
   assert.match(script, /有人刚说了话/);
-  assert.match(script, /一句话说出他为什么挑这个时候说这个/);
+  assert.match(script, /默认动作是回/, "有人说话就回，不是可选");
+  assert.match(script, /往下延半步/, "要往下走，不能一问一答");
+  assert.match(script, /连发 2~3 条/);
   assert.doesNotMatch(script, /定时检查/);
   assert.doesNotMatch(script, /沉默不等于欠债/);
 });
