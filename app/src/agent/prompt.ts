@@ -60,14 +60,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   // 数据在这边拼好，文案在 config/prompt/wake.md 和 scene-*.md 里。
   // 模板没有条件分支——要分岔就选不同的模板文件（比如有理由/没理由的计划）。
   const blocks: string[] = [];
-  if (x.plans.length) {
-    blocks.push(
-      "到点的计划：\n" +
-        x.plans
-          .map((p) => `- 计划#${p.id}「${p.title}」${p.content ? `：${p.content}` : ""}${p.pool_id ? `（池 ${store.poolAlias(p.pool_id)}）` : ""}`)
-          .join("\n"),
-    );
-  }
   for (const [pid, ctx] of x.context) {
     if (!ctx.length) continue;
     const pool = store.getPool(pid)!;
@@ -81,45 +73,43 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
-  // 话题库住在沙盒里（/work/topics），不往提示词里塞条目——她要用自己去读。
-  // 每轮只给一句「在哪儿、怎么看」，翻不翻由她判断。
-  blocks.push(render("part-topics", {}));
-
-  // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这两行直接决定该不该开口
+  // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这几行直接决定该不该开口
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
   const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
-  // 连憋了几次：这句话只在数到 2 以上时才出现（模板里无条件，靠这里给空串）
   const silentN = primaryPool ? store.silentWaveStreak(primaryPool) : 0;
-  const silentNote = silentN >= 2 ? `你已经连着 ${silentN} 次醒过来又什么都没说。这次别挑了。` : "";
   const last = store.lastTideFired(primaryPool);
   const day = localDay(x.now, "Asia/Shanghai");
   const firedL2 = store.countTideFired(day, primaryPool, "L2");
-
   const plan0 = x.plans[0];
+
+  // 状态不写成模板片段，直接拼成几行数据：文案（怎么读这些数）在 scene-*.md 里
+  const state: string[] = ["## 状态"];
+  state.push(
+    `- 上次主动：${last ? `${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}` : "（这是第一次主动开口）"}`,
+  );
+  state.push(`- 今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`);
+  state.push(`- 距上次对话：${lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）"}`);
+  if (x.wake.proactive?.length) {
+    state.push(`- 水位：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮是退到这一档给的机会，不是有人找你）`);
+  }
+  if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来又什么都没说，这次别再挑`);
+  if (plan0) {
+    state.push(
+      `- 到点计划：#${plan0.id}「${plan0.title}」${plan0.content ? `：${plan0.content}` : ""}${
+        plan0.pool_id ? `（池 ${store.poolAlias(plan0.pool_id)}）` : ""
+      }`,
+    );
+    state.push(`  当初排它的理由：${plan0.why || "（当时没写——想清楚这次为什么要说，说不出来就作废）"}`);
+  }
+
   return render("wake", {
     handoff_block: x.handoff ? `【上一会话的交接文档】\n${x.handoff}\n【交接文档结束】\n\n` : "",
     now: fmtLocal(x.now),
     wake_type: x.wake.type,
     reasons: x.wake.reasons.join("；") || "-",
     blocks: blocks.join("\n"),
-    tide_block: render("part-tide", {
-      last: last
-        ? `${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}`
-        : "（这是第一次主动开口）",
-      fired: String(firedL2),
-      chat_gap: lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）",
-    }),
-    scene: render(`scene-${x.wake.type}`, {
-      silent_note: silentNote,
-      proactive_block: x.wake.proactive?.length
-        ? render("part-proactive", { detail: x.wake.proactive.map((p) => p.detail).join("；") })
-        : "",
-      plan_label: plan0 ? `：#${plan0.id}「${plan0.title}」` : "",
-      plan_why: plan0?.why
-        ? render("part-plan-why", { why: plan0.why })
-        : render("part-plan-nowhy", {}),
-    }),
+    state_block: state.join("\n"),
   });
 }
 

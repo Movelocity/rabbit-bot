@@ -51,10 +51,9 @@ function respond(context: any): any {
       return fauxAssistantMessage(`交接文档（桩）\n- 涉及池：${pools.join(",") || "无"}\n- 共 ${msgs.length} 条上下文消息\n- 无未完成承诺`);
     }
     const calls: any[] = [];
-    const planBlock = /到点的计划：\n([\s\S]*?)(?:\n(?:近期上下文|记忆|未读消息|没有未读)|$)/.exec(t)?.[1] ?? "";
-    for (const pl of planBlock.split("\n")) {
-      const m = /^- 计划#(\d+)「(.+?)」.*?（池 (p\d+)）/.exec(pl);
-      if (m) calls.push(fauxToolCall("send", { pool: m[3], content: `⏰ 提醒：${m[2]}` }));
+    // 计划现在长这样（在「## 状态」块里）：- 到点计划：#12「一分钟后提醒」（池 p1）
+    for (const m of t.matchAll(/^- 到点计划：#(\d+)「(.+?)」.*?（池 (p\d+)）/gm)) {
+      calls.push(fauxToolCall("send", { pool: m[3], content: `⏰ 提醒：${m[2]}` }));
     }
     const unread = t.split("未读消息：\n")[1] ?? "";
     const parsed = parseMessages(unread);
