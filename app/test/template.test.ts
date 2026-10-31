@@ -9,10 +9,15 @@ import os from "node:os";
 import path from "node:path";
 import { render, setTemplateDir, templateDir, listTemplates } from "../src/agent/template.ts";
 
-test("真实模板都在：六个场景 + 三个片段", () => {
+test("真实模板都在：主提示词 + 三份场景 + 三个附件", () => {
   const names = listTemplates();
-  for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-plan", "handoff", "part-tide", "part-proactive"]) {
+  for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-plan", "handoff", "part-topics"]) {
     assert.ok(names.includes(n), `缺模板 ${n}.md（现有：${names.join(", ")}）`);
+  }
+  // 已删的四份（part-tide / part-proactive / part-plan-why / part-plan-nowhy）不该再回来：
+  // 它们的文案并进了唤醒消息的「状态」块和 scene-*.md，留着会两处说法打架
+  for (const gone of ["part-tide", "part-proactive", "part-plan-why", "part-plan-nowhy"]) {
+    assert.ok(!names.includes(gone), `${gone}.md 已并入别处，不该再存在`);
   }
   assert.match(templateDir(), /data\/sandbox\/prompt$/);
 });

@@ -349,7 +349,7 @@ test("判定：她主动说完没人回，要等三倍间隔（接线层，不�
   await t.done();
 });
 
-test("谈资：只给话题库路径，不塞条目（她自己读 /work/topics）", async () => {
+test("谈资：话题库路径进主提示词，条目一条都不进", async () => {
   const t = await setup();
   const pool = t.app.store.listPools()[0]?.pool_id ?? null;
   // 库里有一条，但不该出现在提示词里——话题不再由服务端挑
@@ -361,17 +361,23 @@ test("谈资：只给话题库路径，不塞条目（她自己读 /work/topics�
   t.dm("在吗");
   await t.settle(30_000);
   const msgPrompt = seen[seen.length - 1] ?? "";
-  assert.match(msgPrompt, /\/work\/topics/, `有人说话时也该告诉她话题库在哪，实际：${msgPrompt.slice(0, 200)}`);
+  // 路径和翻法住在 system.md（常驻，构造 engine 时传的），不在每轮的唤醒消息里
+  const fs = await import("node:fs");
+  const sys = fs.readFileSync(new URL("../data/sandbox/prompt/system.md", import.meta.url), "utf8");
+  assert.match(sys, /\/work\/topics/, "system.md 要告诉她话题库在哪");
+  assert.match(sys, /part-topics\.md/, "翻法在 part-topics.md，主提示词要给指针");
+  assert.match(sys, /scene-X\.md|scene-\{\{/, "主提示词要写清「读 scene-X.md」这条路由");
+  assert.doesNotMatch(msgPrompt, /冰箱里的钱拿去充原神/, "话题条目不该被塞进提示词");
 
   await (t.app as any).handleWake({
     id: "w2", type: "tick", reasons: ["定时检查"], pools: new Set([pool].filter(Boolean)), planFires: [], wakeAt: t.clock.now(),
     proactive: [{ pool, stage: 1, a: 1.2, peak: 2.4, sessionTs: t.clock.now() - 3600e3, detail: "退潮第 1 档" }],
   });
   const tickPrompt = seen[seen.length - 1] ?? "";
-  assert.match(tickPrompt, /\/work\/topics/, "tick 也该指路");
-  assert.match(tickPrompt, /INDEX\.md/, "要告诉她先看索引");
-  // 关键：条目本身不进提示词，省 token，也避免她照着念
-  assert.doesNotMatch(tickPrompt, /冰箱里的钱拿去充原神/, "话题条目不该被塞进提示词");
+  // 唤醒消息这层：只有信号和数据，不再重复贴话题库说明
+  assert.match(tickPrompt, /【这一轮：tick】/);
+  assert.match(tickPrompt, /scene-tick\.md/, "要指路");
+  assert.doesNotMatch(tickPrompt, /冰箱里的钱拿去充原神/);
   assert.doesNotMatch(tickPrompt, new RegExp(`#${id}`), "不再有 id，也不再有 rb topic-used 记账");
   await t.done();
 });
