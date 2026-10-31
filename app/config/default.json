@@ -93,7 +93,19 @@
       "image": "rabbit-bot-sandbox:latest",
       "timeoutMs": 10000,
       "maxOutputChars": 8000,
-      "network": "bridge"
+      "network": "bridge",
+      "volumes": [
+        {
+          "host": "data/sandbox",
+          "container": "/work",
+          "mode": "rw"
+        },
+        {
+          "host": "config/prompt",
+          "container": "/prompt",
+          "mode": "ro"
+        }
+      ]
     }
   },
   "tide": {

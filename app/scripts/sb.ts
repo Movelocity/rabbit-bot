@@ -38,7 +38,8 @@ await run(async ({ pos, flags }) => {
     const secs = Math.min(30, Math.max(1, Math.floor(num(flags, "timeout") ?? sc.shell.timeoutMs / 1000)));
     const r = await runInSandbox(cmd, {
       container: sc.shell.container, image: sc.shell.image, network: sc.shell.network,
-      workspace: sc.dir, timeoutMs: secs * 1000, maxOutputChars: sc.shell.maxOutputChars,
+      volumes: sc.shell.volumes, workdir: "/work",
+      timeoutMs: secs * 1000, maxOutputChars: sc.shell.maxOutputChars,
     });
     return { code: r.code, ok: r.ok, output: r.output };
   }
