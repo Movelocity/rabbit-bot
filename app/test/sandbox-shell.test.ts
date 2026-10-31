@@ -31,7 +31,7 @@ const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-sbxsh-"));
 const opts: SandboxShellOptions = {
   container,
   image,
-  workspace,
+  volumes: [{ host: workspace, container: "/work", mode: "rw" }],
   network: "bridge",
   timeoutMs: 15000,
   maxOutputChars: 4000,

@@ -5,6 +5,7 @@ data/*
 !data/sandbox/
 data/sandbox/*
 !data/sandbox/prompt/
+!data/sandbox/topics/
 logs/
 *.log
 .env

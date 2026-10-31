@@ -349,29 +349,30 @@ test("判定：她主动说完没人回，要等三倍间隔（接线层，不�
   await t.done();
 });
 
-test("谈资：有人说话时也给（只接话就变成他说一句她答一句），水位 tick 给得更多", async () => {
+test("谈资：只给话题库路径，不塞条目（她自己读 /work/topics）", async () => {
   const t = await setup();
   const pool = t.app.store.listPools()[0]?.pool_id ?? null;
+  // 库里有一条，但不该出现在提示词里——话题不再由服务端挑
   const id = t.app.store.addTopic({ content: "冰箱里的钱拿去充原神", kind: "meme", pool_id: pool, source: "他发的视频", now: t.clock.now() });
 
-  // 有人说话 → 也要给：手里没别的东西，她只能接话，接完就是问答
   const seen: string[] = [];
   const orig = (t.app as any).engine.run.bind((t.app as any).engine);
   (t.app as any).engine.run = async (prompt: string, ...rest: any[]) => { seen.push(prompt); return orig(prompt, ...rest); };
   t.dm("在吗");
   await t.settle(30_000);
-  assert.equal(seen.some((p) => p.includes("可以拿来聊的")), true,
-    "有人说话时也该给谈资，否则她只会说一句答一句");
+  const msgPrompt = seen[seen.length - 1] ?? "";
+  assert.match(msgPrompt, /\/work\/topics/, `有人说话时也该告诉她话题库在哪，实际：${msgPrompt.slice(0, 200)}`);
 
-  // 水位 tick → 注入
   await (t.app as any).handleWake({
     id: "w2", type: "tick", reasons: ["定时检查"], pools: new Set([pool].filter(Boolean)), planFires: [], wakeAt: t.clock.now(),
     proactive: [{ pool, stage: 1, a: 1.2, peak: 2.4, sessionTs: t.clock.now() - 3600e3, detail: "退潮第 1 档" }],
   });
   const tickPrompt = seen[seen.length - 1] ?? "";
-  assert.match(tickPrompt, /可以拿来聊的/, `tick 该给谈资，实际 prompt：${tickPrompt.slice(0, 200)}`);
-  assert.match(tickPrompt, new RegExp(`#${id}`), "要带 id，不然她没法记账");
-  assert.match(tickPrompt, /冰箱里的钱拿去充原神/);
+  assert.match(tickPrompt, /\/work\/topics/, "tick 也该指路");
+  assert.match(tickPrompt, /INDEX\.md/, "要告诉她先看索引");
+  // 关键：条目本身不进提示词，省 token，也避免她照着念
+  assert.doesNotMatch(tickPrompt, /冰箱里的钱拿去充原神/, "话题条目不该被塞进提示词");
+  assert.doesNotMatch(tickPrompt, new RegExp(`#${id}`), "不再有 id，也不再有 rb topic-used 记账");
   await t.done();
 });
 
