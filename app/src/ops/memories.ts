@@ -1,4 +1,4 @@
-/** 长期记忆：写入与检索。CLI（scripts/mem-*.ts）和 API 都走这里。 */
+/** 长期记忆：写入与检索。宿主 API 和沙盒 rb 客户端共用。 */
 import type { Store } from "../core/db.ts";
 import type { MemoryScope } from "../types.ts";
 import { clampInt, resolvePool } from "./common.ts";

@@ -59,7 +59,7 @@ function respond(context: any): any {
     const parsed = parseMessages(unread);
     const nowStr = /现在 (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/.exec(t)?.[1];
     for (const p of parsed) {
-      if (p.text.includes("/loop")) return fauxAssistantMessage(fauxToolCall("read_pool", { pool: p.pool, limit: 1 }));
+      if (p.text.includes("/loop")) return fauxAssistantMessage(fauxToolCall("view_image", { path: "loop-not-a-real-image.png" }));
     }
     const replyTo = new Map<string, Parsed>();
     for (const p of parsed) if (p.kind === "私聊" || p.mention) replyTo.set(p.pool, p);
@@ -79,7 +79,7 @@ function respond(context: any): any {
   if (last.role === "toolResult") {
     // 死循环演示：继续用同样参数调用
     const lastCall = turnToolCalls[turnToolCalls.length - 1];
-    if (lastCall?.name === "read_pool" && turnToolCalls.length < 50) return fauxAssistantMessage(fauxToolCall("read_pool", lastCall.arguments));
+    if (lastCall?.name === "view_image" && turnToolCalls.length < 50) return fauxAssistantMessage(fauxToolCall("view_image", lastCall.arguments));
     // send 返回里出现新的私聊/@消息 → 再回一条（最多 5 次）
     const r = textOf(last);
     if (r.includes("期间新消息：") && turnToolCalls.length < 5) {

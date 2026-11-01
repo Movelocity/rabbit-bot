@@ -22,3 +22,7 @@ ENV HOME=/tmp/home \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /work
+
+# 沙盒内的 rb 客户端：业务数据走宿主 REST API，文件/shell 直接操作 /work。
+COPY rb.mjs /usr/local/bin/rb
+RUN chmod +x /usr/local/bin/rb && /usr/local/bin/rb help >/dev/null

@@ -1,8 +1,8 @@
-话题库在 `/work/topics/`，不在这一轮的消息里——想看自己读：
+话题库在 `topics/`（沙盒工作目录），不在这一轮的消息里——想看自己读：
 
-- `cat /work/topics/INDEX.md` 先看有哪些块（AI/科普/历史/经济/社会/游戏/心理/文化/生活）
-- 挑一块 `cat /work/topics/<块>/话题.md` 再挑一条，或 `rg '关键词' /work/topics` 直接搜
+- `rb sb read topics/INDEX.md` 先看有哪些块（AI/科普/历史/经济/社会/游戏/心理/文化/生活）
+- 挑一块 `rb sb read topics/<块>/话题.md` 再挑一条，或 `rb sb run "rg '关键词' topics"` 直接搜
 - 挑中了就用你自己的话说，别照抄原句；说完在那行后面补个日期，下次跳过标过的
-- 想到新的就往里加：`echo '- 内容' >> /work/topics/<块>/话题.md`，拿不准放哪就 `life/`
+- 想到新的就往里加：`rb sb run "printf '%s\n' '- 内容' >> topics/<块>/话题.md"`，拿不准放哪就 `life/`
 
 不必每轮都看一眼。手上已经有想说的，直接说，比翻库更像人。

@@ -1,4 +1,4 @@
-/** 池与消息的只读查询。CLI（scripts/pool-*.ts）和 API 都走这里。 */
+/** 池与消息的只读查询：宿主 API 和沙盒 rb 客户端共用。 */
 import type { Store } from "../core/db.ts";
 import { fmtLocal } from "../core/time.ts";
 import { clampInt, resolvePool } from "./common.ts";

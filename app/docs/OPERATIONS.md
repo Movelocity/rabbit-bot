@@ -60,7 +60,7 @@ npm run ctl -- models         # 可用 provider / 模型
 ## 测试
 
 ```bash
-npm test                      # 118 条，全部离线；容器沙盒那 5 条没有 docker 会自动 skip
+npm test                      # 257 条，全部离线；容器沙盒那几条没有 docker 会自动 skip
 npm run typecheck
 ```
 

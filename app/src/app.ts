@@ -17,7 +17,7 @@ import { toImageContent } from "./core/media.ts";
 import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine } from "./agent/engine.ts";
-import { createTools } from "./agent/tools.ts";
+import { createTools, type RbExec } from "./agent/tools.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -31,6 +31,8 @@ export interface AppOptions {
   dbFile?: string;
   logger?: Logger;
   inMemorySessions?: boolean;
+  /** 测试注入：进程内 rb 执行器（替代容器） */
+  rbExec?: RbExec;
 }
 
 /** 从消息里挑最近的 N 张图，转成 pi 的 image content；文件读不到就跳过。 */
@@ -82,6 +84,7 @@ export class App {
       currentWake: () => this.activeWake,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
+      rbExec: o.rbExec,
     });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }

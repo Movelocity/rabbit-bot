@@ -1,21 +1,9 @@
+/** 抓网页正文（ops/web）：API 和沙盒 rb 客户端共用。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { createTools } from "../src/agent/tools.ts";
-import { Store } from "../src/core/db.ts";
-import { loadConfig } from "../src/config.ts";
+import { fetchWeb } from "../src/ops/web.ts";
 
-// 这两个工具读 DEEPSEEK_API_KEY；测试不依赖外部 env（有专门用例临时删它）。
 process.env.DEEPSEEK_API_KEY ||= "sk-test-placeholder";
-
-function setup() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-wf-"));
-  const cfg = { ...loadConfig(), dataDir };
-  const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() });
-  return { tool: (tools as any[]).find((t) => t.name === "web_fetch") };
-}
 
 async function withFetch<T>(impl: (url: string, init: any) => Promise<any>, fn: (last: () => any) => Promise<T>): Promise<T> {
   const orig = (globalThis as any).fetch;
@@ -28,60 +16,54 @@ const ok = (body: any, status = 200) => async () => ({
   ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body),
 });
 
-test("web_fetch：返回标题和正文，打到 /v1/tools/fetch", async () => {
-  const { tool } = setup();
+test("web-fetch：返回标题和正文，打到 /v1/tools/fetch", async () => {
   await withFetch(ok({ title: "示例标题", content: "# 正文\n\n第一段\n\n\n\n第二段" }), async (last) => {
-    const r = await tool.execute("c1", { url: "https://ex.com/a" });
-    const text = r.content[0].text as string;
-    assert.match(text, /标题：示例标题/);
-    assert.match(text, /第一段/);
-    assert.match(text, /第二段/);
-    assert.equal(r.details.ok, true);
+    const r = await fetchWeb("https://ex.com/a");
+    assert.equal(r.title, "示例标题");
+    assert.match(r.content, /第一段/);
+    assert.match(r.content, /第二段/);
+    assert.equal(r.truncated, false);
     const req = last();
     assert.equal(req.url, "https://api.deepseek.com/v1/tools/fetch");
     assert.equal(req.body.url, "https://ex.com/a");
   });
 });
 
-test("web_fetch：超长正文截断并标注", async () => {
-  const { tool } = setup();
+test("web-fetch：超长正文截断到 6000 并标注", async () => {
   await withFetch(ok({ title: "长文", content: "字".repeat(9000) }), async () => {
-    const r = await tool.execute("c1", { url: "https://ex.com/long" });
-    assert.equal((r.content[0].text as string).includes("字".repeat(6001)), false);
-    assert.match(r.content[0].text as string, /正文已截断/);
-    assert.equal(r.details.truncated, true);
+    const r = await fetchWeb("https://ex.com/long");
+    assert.equal(r.content.length, 6000);
+    assert.equal(r.chars, 9000);
+    assert.equal(r.truncated, true);
   });
 });
 
-test("web_fetch：非法链接本地就拦掉，不发请求", async () => {
-  const { tool } = setup();
-  for (const bad of ["not-a-url", "ftp://ex.com/a", "https://user:pw@ex.com/a", ""]) {
-    const r = await tool.execute("c1", { url: bad });
-    assert.match(r.content[0].text as string, /链接不合法/, `应当拒绝 ${JSON.stringify(bad)}`);
-  }
+test("web-fetch：非法链接本地就拦掉，不发请求", async () => {
+  let called = false;
+  await withFetch(async () => { called = true; throw new Error("should not"); }, async () => {
+    for (const bad of ["not-a-url", "ftp://ex.com/a", "https://user:pw@ex.com/a", ""]) {
+      await assert.rejects(() => fetchWeb(bad), /链接不合法|缺少 url/, `应当拒绝 ${JSON.stringify(bad)}`);
+    }
+  });
+  assert.equal(called, false);
 });
 
-test("web_fetch：HTTP 错误兜成文本", async () => {
-  const { tool } = setup();
+test("web-fetch：HTTP 错误抛出", async () => {
   await withFetch(ok({ error: "nope" }, 404), async () => {
-    const r = await tool.execute("c1", { url: "https://ex.com/404" });
-    assert.match(r.content[0].text as string, /抓取失败：HTTP 404/);
-    assert.equal(r.details.ok, false);
+    await assert.rejects(() => fetchWeb("https://ex.com/404"), /抓取失败 HTTP 404/);
   });
 });
 
-test("web_fetch：没有正文时说明白", async () => {
-  const { tool } = setup();
+test("web-fetch：没有正文时返回空内容而不是编造", async () => {
   await withFetch(ok({ title: "空页", content: "" }), async () => {
-    const r = await tool.execute("c1", { url: "https://ex.com/empty" });
-    assert.match(r.content[0].text as string, /没有正文/);
+    const r = await fetchWeb("https://ex.com/empty");
+    assert.equal(r.content, "");
+    assert.equal(r.chars, 0);
   });
 });
 
-test("web_fetch：异常被兜住", async () => {
-  const { tool } = setup();
+test("web-fetch：网络异常原样抛出", async () => {
   await withFetch(async () => { throw new Error("net down"); }, async () => {
-    const r = await tool.execute("c1", { url: "https://ex.com/x" });
-    assert.match(r.content[0].text as string, /抓取失败：net down/);
+    await assert.rejects(() => fetchWeb("https://ex.com/x"), /net down/);
   });
 });

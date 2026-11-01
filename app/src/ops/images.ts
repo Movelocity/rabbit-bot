@@ -1,4 +1,4 @@
-/** 图片索引与路径解析。CLI（scripts/img-*.ts）、API 和工具共用。 */
+/** 图片索引与路径解析：宿主 API、view_image 工具共用。 */
 import fs from "node:fs";
 import path from "node:path";
 import type { Store } from "../core/db.ts";

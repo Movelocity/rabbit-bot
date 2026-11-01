@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 沙盒容器管理（sb run 背后那个 Docker 容器）。
 #   npm run sbx -- status      看状态和边界参数
+#   npm run sbx -- start       按 config.sandbox.shell 起容器（已存在就启动）
 #   npm run sbx -- shell       进容器逛（工作目录 /work）
 #   npm run sbx -- rebuild     按 config.sandbox.shell 重建（先删再让下次 sb run 自建）
 #   npm run sbx -- image       重建镜像（改过 docker/sandbox.Dockerfile 之后跑）
@@ -36,6 +37,9 @@ case "${1:-status}" in
   shell)
     docker exec -it "$NAME" sh -lc 'cd /work && exec sh'
     ;;
+  start)
+    npx tsx -e 'import { loadConfig } from "./src/config.ts"; import { sandboxShellOptions } from "./src/ops/sandbox.ts"; import { ensureSandboxContainer } from "./src/core/sandbox-shell.ts"; (async () => { const cfg = loadConfig({}); const r = await ensureSandboxContainer(sandboxShellOptions(cfg)); console.log(`容器：${r.message}`); process.exit(r.ok ? 0 : 1); })()'
+    ;;
   rebuild)
     docker rm -f "$NAME" >/dev/null 2>&1 && echo "已删除，下次 sb run 会按 config 重建" || echo "本来就不存在"
     ;;
@@ -48,7 +52,7 @@ case "${1:-status}" in
     [ "$ans" = "yes" ] && rm -rf "${APP_DIR:?}/data/sandbox"/* && echo "已清空" || echo "取消"
     ;;
   *)
-    echo "用法: npm run sbx -- status|shell|rebuild|image|clean" >&2
+    echo "用法: npm run sbx -- status|start|shell|rebuild|image|clean" >&2
     exit 64
     ;;
 esac

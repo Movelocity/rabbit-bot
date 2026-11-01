@@ -2,6 +2,9 @@
 
 沙盒里的技能脚本不挂数据库、不挂 `scripts/`，要访问池 / 计划 / 记忆 / 沙盒文件，统一走宿主进程的 REST API（`src/api.ts`）。
 
+容器里装了客户端 `/usr/local/bin/rb`（源码 `docker/rb.mjs`），下面这些接口它都有同名命令：
+业务数据走 API，`sb list/read/write/run` 直接操作 `/work`。模型和技能脚本用 `rb`，宿主和外部进程用 HTTP。
+
 ## 环境变量（由宿主自动注入容器）
 
 | 变量 | 容器里 | host 模式 |
@@ -30,7 +33,7 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 
 ## 路由
 
-| 方法 | 路径 | 对应 CLI |
+| 方法 | 路径 | 对应 rb 命令 |
 |---|---|---|
 | GET | `/health` | — |
 | GET | `/v1/pools` | `pool-list` |
@@ -42,7 +45,7 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 | GET | `/v1/memories?user=u1&pool=p1&limit=20` | `mem-search` |
 | POST | `/v1/memories` `{user,content,pool,kind,scope}` | `mem-add` |
 | GET | `/v1/images?source=media\|inbox\|all&page=1&size=20` | `img-list` |
-| GET | `/v1/images/file?path=media/x.jpg` | `img-view`（直接回图片字节） |
+| GET | `/v1/images/file?path=media/x.jpg` | `img-get`（下载到 /work） |
 | GET | `/v1/web/search?q=…&count=6&content=1` | `web-search` |
 | POST | `/v1/web/fetch` `{url}` | `web-fetch` |
 | GET | `/v1/skills` | —（技能发现：名字、SKILL.md、data 路径） |

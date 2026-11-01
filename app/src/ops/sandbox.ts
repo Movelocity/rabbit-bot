@@ -1,7 +1,8 @@
-/** 沙盒文件区与 shell。CLI（scripts/sb.ts）和 API 都走这里。 */
-import type { Config } from "../config.ts";
+/** 沙盒文件区与 shell：宿主 API 和沙盒 rb 客户端共用。 */
+import path from "node:path";
+import { APP_ROOT, type Config } from "../config.ts";
 import { createSandboxFs } from "../core/sandbox-fs.ts";
-import { runShell, type SandboxShellOptions } from "../core/sandbox-shell.ts";
+import { runShell, type SandboxArgvOptions } from "../core/sandbox-shell.ts";
 import { apiEnv, resolveApiToken } from "../api-token.ts";
 import { ensureSkillDataDirs } from "./skills.ts";
 
@@ -16,7 +17,7 @@ function sbox(cfg: Config) {
 }
 
 /** 沙盒 shell 的完整参数；会自动补上 RB_API_URL / RB_API_TOKEN。 */
-export function sandboxShellOptions(cfg: Config, timeoutMs?: number): SandboxShellOptions {
+export function sandboxShellOptions(cfg: Config, timeoutMs?: number): SandboxArgvOptions {
   const sc = cfg.sandbox.shell;
   return {
     mode: sc.mode,
@@ -28,6 +29,7 @@ export function sandboxShellOptions(cfg: Config, timeoutMs?: number): SandboxShe
     hostCwd: sc.host?.cwd,
     hostInheritEnv: sc.host?.inheritEnv,
     env: cfg.api?.enabled === false ? { ...sc.env } : { ...sc.env, ...apiEnv(cfg, resolveApiToken(cfg)) },
+    hostPrefix: [process.execPath, path.join(APP_ROOT, "docker", "rb.mjs")],
     timeoutMs: timeoutMs ?? sc.timeoutMs,
     maxOutputChars: sc.maxOutputChars,
   };

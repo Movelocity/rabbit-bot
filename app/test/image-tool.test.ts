@@ -1,3 +1,4 @@
+/** 图片：view_image 工具（进上下文）+ ops/images 的索引。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -7,6 +8,7 @@ import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { saveImage } from "../src/core/media.ts";
+import { listImages } from "../src/ops/images.ts";
 
 const PNG_1PX = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -17,11 +19,10 @@ function setup() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-tool-"));
   const cfg = { ...loadConfig(), dataDir };
   const store = new Store(":memory:");
-  const hub = {} as any; // view_image / list_images 不用 hub
-  const tools = createTools({ store, hub, cfg, now: () => Date.now() });
-  const view = (tools as any[]).find((t) => t.name === "view_image");
-  const list = (tools as any[]).find((t) => t.name === "list_images");
-  return { cfg, tools, view, list, store, dataDir };
+  const hub = {} as any;
+  const tools = createTools({ store, hub, cfg, now: () => Date.now() }) as any[];
+  const view = tools.find((t) => t.name === "view_image");
+  return { cfg, tools, view, store, dataDir };
 }
 
 const imgMsg = (attachment: any) => ({
@@ -60,53 +61,46 @@ test("view_image 对不存在的文件给出提示而不是抛错", async () => 
   assert.match(r.content[0].text, /没有/);
 });
 
-test("list_images（inbox）分页、按修改时间从新到旧", async () => {
-  const { list, dataDir } = setup();
+test("img-list（inbox）分页、按修改时间从新到旧", () => {
+  const { store, dataDir } = setup();
   const inbox = path.join(dataDir, "inbox");
   fs.mkdirSync(inbox, { recursive: true });
-  const empty: any = await list.execute("l0", { source: "inbox" });
-  assert.match(empty.content[0].text, /还没有能看的图片/);
+  assert.equal(listImages(store, dataDir, { source: "inbox" }).total, 0);
 
   for (let i = 0; i < 5; i++) {
     const f = path.join(inbox, `p${i}.png`);
     fs.writeFileSync(f, PNG_1PX);
     fs.utimesSync(f, new Date(2026, 0, i + 1), new Date(2026, 0, i + 1));
   }
-  const p1: any = await list.execute("l1", { source: "inbox", page: 1, page_size: 2 });
-  assert.match(p1.content[0].text, /共 5 张，第 1\/3 页/);
-  assert.match(p1.content[0].text, /inbox\/p4\.png/);
-  assert.match(p1.content[0].text, /inbox\/p3\.png/);
-  assert.ok(!p1.content[0].text.includes("p2.png"));
-  assert.match(p1.content[0].text, /page=2/);
+  const p1 = listImages(store, dataDir, { source: "inbox", page: 1, size: 2 });
+  assert.equal(p1.total, 5);
+  assert.equal(p1.pages, 3);
+  assert.deepEqual(p1.items.map((i) => i.name), ["inbox/p4.png", "inbox/p3.png"]);
 
-  const p3: any = await list.execute("l3", { source: "inbox", page: 3, page_size: 2 });
-  assert.match(p3.content[0].text, /第 3\/3 页/);
-  assert.match(p3.content[0].text, /p0\.png/);
-  assert.ok(!p3.content[0].text.includes("page=4"));
+  const p3 = listImages(store, dataDir, { source: "inbox", page: 3, size: 2 });
+  assert.deepEqual(p3.items.map((i) => i.name), ["inbox/p0.png"]);
 
-  const p9: any = await list.execute("l9", { source: "inbox", page: 9, page_size: 2 });
-  assert.match(p9.content[0].text, /本页为空/);
+  const p9 = listImages(store, dataDir, { source: "inbox", page: 9, size: 2 });
+  assert.deepEqual(p9.items, []);
 });
 
-test("list_images 能列出聊天里收到的图，view_image 能按 media/ 名字读回", async () => {
-  const { list, view, store, dataDir } = setup();
+test("img-list 能列出聊天里收到的图，view_image 能按 media/ 名字读回", async () => {
+  const { view, store, dataDir } = setup();
   fs.mkdirSync(path.join(dataDir, "media"), { recursive: true });
   const a = saveImage(PNG_1PX, { dir: path.join(dataDir, "media"), maxEdge: 1024, maxBytes: 512000 }, "om_chat_1");
   store.insertMessage(imgMsg(a));
 
-  const r: any = await list.execute("m1", { source: "media" });
-  assert.match(r.content[0].text, /共 1 张/);
-  assert.match(r.content[0].text, /media\/om_chat_1\.jpg/);
-  assert.match(r.content[0].text, /消息#\d+/);
+  const r = listImages(store, dataDir, { source: "media" });
+  assert.equal(r.total, 1);
+  assert.equal(r.items[0].name, "media/om_chat_1.jpg");
+  assert.match(r.items[0].note ?? "", /消息#\d+/);
 
   const v: any = await view.execute("m2", { path: "media/om_chat_1.jpg" });
   assert.equal(v.content[0].type, "image");
 
-  // 裸文件名也能找到
   const v2: any = await view.execute("m3", { path: "om_chat_1.jpg" });
   assert.equal(v2.content[0].type, "image");
 
   // view 的压缩缓存不会混进 media 列表
-  const after: any = await list.execute("m4", { source: "media" });
-  assert.match(after.content[0].text, /共 1 张/);
+  assert.equal(listImages(store, dataDir, { source: "media" }).total, 1);
 });

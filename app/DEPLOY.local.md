@@ -204,7 +204,7 @@ extensionFactories: [
 
 命令用 `bash -c`（不读登录 profile，免得把过滤掉的环境变量又塞回来）直接跑在宿主机上，cwd 默认 `data/sandbox`（和容器里的 `/work` 是同一个目录），只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`；超时、输出截断、4000 字上限和 docker 模式共用同一套逻辑。**它没有隔离**：模型能读 `~/.config/rabbit-bot/env`、能碰任意宿主路径——这正是当年排除 `sandbox-exec` 的理由。`mode=host` 不建容器，`npm run sbx` 的容器参数全部不生效，`npm run doctor` / `npm run sbx -- status` 会打黄色警告。`enabled:false` 仍等价于「shell 关闭」，和 mode 正交。
 
-**沙盒里的技能脚本怎么用业务命令**（2026-10-31 加）：不再把 `scripts/` 或数据库挂进容器，宿主进程起一个 REST API（`src/api.ts`，默认 `0.0.0.0:3738`），覆盖池 / 计划 / 记忆 / 图片 / 联网 / 沙盒文件。容器创建时自动注入 `RB_API_URL`（`http://host.docker.internal:3738`）和 `RB_API_TOKEN`（`data/run/api.token`，首次启动自动生成 0600；token 变了会重建容器）。`src/app` 启动时会先起 API 再把 `mode=docker` 的容器拉起来，所以 `sb run` 之前容器就已经在跑。`sb run` 本身不开放 HTTP 接口——技能脚本已经在 shell 里，再开一层只会递归。完整路由和 curl 示例见 `docs/sandbox-api.md`。
+**沙盒里的技能脚本怎么用业务命令**（2026-10-31 加）：不再把 `scripts/` 或数据库挂进容器，宿主进程起一个 REST API（`src/api.ts`，默认 `0.0.0.0:3738`），覆盖池 / 计划 / 记忆 / 图片 / 联网 / 沙盒文件。容器创建时自动注入 `RB_API_URL`（`http://host.docker.internal:3738`）和 `RB_API_TOKEN`（`data/run/api.token`，首次启动自动生成 0600；token 变了会重建容器）。镜像里装了 `/usr/local/bin/rb`（源码 `docker/rb.mjs`），模型唯一的业务通道就是它：`rb pool-list` / `rb plan-add` 等走 API，`rb sb read/write/run` 直接操作 `/work`。`src/app` 启动时会先起 API 再把 `mode=docker` 的容器拉起来，所以 `sb run` 之前容器就已经在跑。`sb run` 本身不开放 HTTP 接口——技能脚本已经在 shell 里，再开一层只会递归。完整路由和 curl 示例见 `docs/sandbox-api.md`。
 
 **技能（2026-10-31）**：`data/sandbox/skills/<name>/` 一个技能一个目录，`SKILL.md` 等设计资产进 git，`skills/<name>/data/` 是运行时产物、被 `.gitignore` 排除；空 `data/` 由启动时和每次 `sb run` 前自动补（`src/ops/skills.ts`）。`data/sandbox` 本来就挂成 `/work`，所以容器里直接是 `/work/skills/<name>/`，没有同步步骤。`GET /v1/skills` 给技能自己发现名字和数据目录。
 

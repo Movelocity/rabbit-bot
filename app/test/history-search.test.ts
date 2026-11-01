@@ -1,11 +1,8 @@
+/** 池与消息的查询契约（ops/pools）：CLI 已删，脚本/API 共用这一层。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
-import { loadConfig } from "../src/config.ts";
+import { listPools, readPool, searchPool } from "../src/ops/pools.ts";
 
 let seq = 0;
 const msg = (text: string, sender = "主人") => ({
@@ -16,83 +13,82 @@ const msg = (text: string, sender = "主人") => ({
 });
 
 function setup(lines: string[]) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-hist-"));
-  const cfg = { ...loadConfig(), dataDir };
   const store = new Store(":memory:");
   for (const l of lines) store.insertMessage(msg(l) as any);
-  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now() }) as any[];
-  return {
-    store,
-    search: tools.find((t) => t.name === "search_messages"),
-    read: tools.find((t) => t.name === "read_pool"),
-  };
+  return store;
 }
 
-test("search_messages：按关键词命中历史消息", async () => {
-  const { search } = setup(["今天加班到十点", "明天还要上班", "火锅约不约", "又是加班"]);
-  const r = await search.execute("c1", { pool: "p1", keyword: "加班" });
-  const text = r.content[0].text as string;
-  assert.match(text, /命中 2 条/);
+test("pool-list：别名、类型、条数", () => {
+  const store = setup(["你好"]);
+  const pools = listPools(store);
+  assert.equal(pools.length, 1);
+  assert.equal(pools[0].alias, "p1");
+  assert.equal(pools[0].kind, "private");
+  assert.equal(pools[0].total, 1);
+});
+
+test("pool-search：按关键词命中历史消息", () => {
+  const store = setup(["今天加班到十点", "明天还要上班", "火锅约不约", "又是加班"]);
+  const r = searchPool(store, "加班", "p1");
+  assert.equal(r.hits, 2);
+  const text = JSON.stringify(r.messages);
   assert.match(text, /今天加班到十点/);
   assert.match(text, /又是加班/);
   assert.doesNotMatch(text, /火锅约不约/);
-  assert.equal(r.details.hits, 2);
 });
 
-test("search_messages：没有命中时说清楚，不报错", async () => {
-  const { search } = setup(["今天加班"]); 
-  const r = await search.execute("c1", { pool: "p1", keyword: "火箭发射" });
-  assert.match(r.content[0].text as string, /没找到/);
-  assert.equal(r.details.hits, 0);
+test("pool-search：没有命中是空数组，不是错误", () => {
+  const store = setup(["今天加班"]);
+  const r = searchPool(store, "火箭发射", "p1");
+  assert.equal(r.hits, 0);
+  assert.deepEqual(r.messages, []);
 });
 
-test("search_messages：关键词太短直接拦", async () => {
-  const { search } = setup(["随便一句"]);
+test("pool-search：关键词太短直接拒绝", () => {
+  const store = setup(["随便一句"]);
   for (const kw of ["", "加", "  a  "]) {
-    const r = await search.execute("c1", { pool: "p1", keyword: kw });
-    assert.match(r.content[0].text as string, /至少两个字/, `应拒绝 ${JSON.stringify(kw)}`);
+    assert.throws(() => searchPool(store, kw, "p1"), /至少两个字/, `应拒绝 ${JSON.stringify(kw)}`);
   }
 });
 
-test("search_messages：_ 被当字面量而不是通配符", async () => {
-  const { search } = setup(["变量叫 a_b", "变量叫 axb"]);
-  const r = await search.execute("c1", { pool: "p1", keyword: "a_b" });
-  const text = r.content[0].text as string;
-  assert.match(text, /a_b/);
-  assert.doesNotMatch(text, /axb/);
-  assert.equal(r.details.hits, 1);
+test("pool-search：_ 被当字面量而不是通配符", () => {
+  const store = setup(["变量叫 a_b", "变量叫 axb"]);
+  const r = searchPool(store, "a_b", "p1");
+  assert.equal(r.hits, 1);
+  assert.match(JSON.stringify(r.messages), /a_b/);
+  assert.doesNotMatch(JSON.stringify(r.messages), /axb/);
 });
 
-test("search_messages：limit 越界夹到 1-30", async () => {
-  const lines = Array.from({ length: 40 }, (_, i) => `第${i}条加班记录`);
-  const { search } = setup(lines);
-  const r = await search.execute("c1", { pool: "p1", keyword: "加班", limit: 999 });
-  assert.equal(r.details.hits, 30);
-  assert.match(r.content[0].text as string, /可能还有更早的/);
+test("pool-search：limit 夹到 1-30", () => {
+  const store = setup(Array.from({ length: 40 }, (_, i) => `第${i}条加班记录`));
+  assert.equal(searchPool(store, "加班", "p1", 999).hits, 30);
+  assert.equal(searchPool(store, "加班", "p1", 0).hits, 1);
 });
 
-test("search_messages：未知池报错不抛", async () => {
-  const { search } = setup(["x"]);
-  const r = await search.execute("c1", { pool: "p9", keyword: "加班" });
-  assert.match(r.content[0].text as string, /未知的池/);
+test("pool-search：未知池报错", () => {
+  const store = setup(["x"]);
+  assert.throws(() => searchPool(store, "加班", "p9"), /未知的池/);
 });
 
-test("read_pool：给出池规模与最早序号，提示往前翻", async () => {
-  const { read } = setup(["第一条", "第二条", "第三条"]);
-  const r = await read.execute("c1", { pool: "p1" });
-  const text = r.content[0].text as string;
-  assert.match(text, /本池共 3 条/);
-  assert.match(text, /最早 #1/);
-  assert.match(text, /before_seq/);
-  assert.match(text, /第三条/);
-  assert.equal(r.details.total, 3);
+test("pool-read：给出池规模与最早序号", () => {
+  const store = setup(["第一条", "第二条", "第三条"]);
+  const r = readPool(store, "p1", { limit: 5 });
+  assert.equal(r.total, 3);
+  assert.equal(r.oldest_seq, 1);
+  assert.match(JSON.stringify(r.messages), /第三条/);
 });
 
-test("read_pool：带 before_seq 时只给更早的部分", async () => {
-  const { read } = setup(["第一条", "第二条", "第三条"]);
-  const r = await read.execute("c1", { pool: "p1", before_seq: 3, limit: 5 });
-  const text = r.content[0].text as string;
+test("pool-read：带 beforeSeq 时只给更早的部分", () => {
+  const store = setup(["第一条", "第二条", "第三条"]);
+  const r = readPool(store, "p1", { limit: 5, beforeSeq: 3 });
+  const text = JSON.stringify(r.messages);
   assert.match(text, /第一条/);
   assert.match(text, /第二条/);
   assert.doesNotMatch(text, /第三条/);
+});
+
+test("pool-read：limit 夹到 1-50", () => {
+  const store = setup(Array.from({ length: 60 }, (_, i) => `第${i}条`));
+  assert.equal(readPool(store, "p1", { limit: 999 }).messages.length, 50);
+  assert.equal(readPool(store, "p1", { limit: 0 }).messages.length, 1);
 });

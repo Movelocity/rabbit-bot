@@ -14,8 +14,7 @@
     "start:dev": "tsx src/main.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "idle": "node scripts/idle.mjs",
-    "rb": "tsx src/cli.ts"
+    "idle": "node scripts/idle.mjs"
   },
   "keywords": [],
   "author": "",
@@ -43,8 +42,5 @@
     "esbuild@0.28.2": true,
     "protobufjs@7.6.6": true,
     "fsevents@2.3.3": true
-  },
-  "bin": {
-    "rb": "bin/rb"
   }
 }

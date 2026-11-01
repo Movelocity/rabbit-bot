@@ -4,18 +4,16 @@ import { Type } from "@earendil-works/pi-ai";
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import type { Hub } from "../core/hub.ts";
-import { validateSchedule } from "../core/plans.ts";
-import { parseIsoInTz, fmtLocal } from "../core/time.ts";
-import type { MemoryScope } from "../types.ts";
-import { fmtGrouped, fmtMsg, poolLabel } from "./prompt.ts";
+import { fmtGrouped } from "./prompt.ts";
 import fs from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
-import { createSandboxFs } from "../core/sandbox-fs.ts";
+import { resolveImagePath } from "../ops/images.ts";
+import { sandboxShellOptions } from "../ops/sandbox.ts";
+import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
+
+export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
 
 export interface ToolDeps {
   store: Store;
@@ -26,11 +24,10 @@ export interface ToolDeps {
   currentWake?: () => { type: string } | null;
   /** 本轮决定不回时的理由（stay_silent）；非空就是已决定不回 */
   silenceReason?: () => string | null;
+  /** 测试注入：用进程内实现替代沙盒 rb（生产走 docker）。 */
+  rbExec?: RbExec;
   markSilent?: (reason: string) => void;
 }
-
-const execFileAsync = promisify(execFile);
-const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
 
@@ -80,91 +77,23 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-
-  const readPool = defineTool({
-    name: "read_pool",
-    label: "read_pool",
-    executionMode: "sequential",
-    description: "读某个池的历史消息（不影响未读游标）。",
-    parameters: Type.Object({
-      pool: Type.String(),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-      before_seq: Type.Optional(Type.Integer({ description: "只看此 #seq 之前" })),
-    }),
-    async execute(_id, p) {
-      const pool = d.store.resolvePool(p.pool);
-      if (!pool) return txt(`未知的池 ${p.pool}`);
-      const limit = p.limit ?? 15;
-      const msgs = d.store.recentMessages(pool.pool_id, limit, p.before_seq ? p.before_seq - 1 : undefined);
-      const span = d.store.poolSpan(pool.pool_id);
-      const oldest = span.first ? `最早 #${span.first.seq}` : "空池";
-      const range = msgs.length ? `#${msgs[0].seq}–#${msgs[msgs.length - 1].seq}` : "无";
-      const head = `本池共 ${span.total} 条（${oldest}）；这段 ${range}${p.before_seq ? "" : "，要往前翻就传 before_seq"}。`;
-      return txt(`${head}\n${msgs.map((m) => fmtMsg(m)).join("\n") || "（无消息）"}`, { total: span.total, shown: msgs.length });
-    },
-  });
-
-  // 按关键词翻旧账：比一页页 read_pool 快，命中的 #seq 再拿去 read_pool 看上下文。
-  const searchMessages = defineTool({
-    name: "search_messages",
-    label: "search_messages",
-    executionMode: "sequential",
-    description: "在聊天记录里按关键词搜（找很久以前聊过的事、某个名字、某句话）。比一页页翻 read_pool 快多了；命中后可用 read_pool 的 before_seq 看上下文。",
-    parameters: Type.Object({
-      pool: Type.String({ description: "池别名，如 p1" }),
-      keyword: Type.String({ description: "关键词，2-30 字" }),
-      limit: Type.Optional(Type.Integer({ description: "最多返回几条 1-30，默认 15" })),
-    }),
-    async execute(_id, p) {
-      const pool = d.store.resolvePool(p.pool);
-      if (!pool) return txt(`未知的池 ${p.pool}`);
-      const kw = String(p.keyword || "").trim().slice(0, 30);
-      if (kw.length < 2) return txt("关键词至少两个字，太短会把整个池捞出来");
-      const limit = Math.min(30, Math.max(1, Math.round(Number(p.limit) || 15)));
-      const hits = d.store.searchMessages(pool.pool_id, kw, limit);
-      const span = d.store.poolSpan(pool.pool_id);
-      if (!hits.length) return txt(`「${kw}」在 ${span.total} 条记录里没找到`, { hits: 0, total: span.total });
-      const more = span.total > 0 && hits.length >= limit ? "（可能还有更早的，把 limit 调大或换个更具体的词）" : "";
-      return txt(
-        `「${kw}」命中 ${hits.length} 条${more}，共 ${span.total} 条记录：\n${hits.map((m) => fmtMsg(m)).join("\n")}`,
-        { hits: hits.length, total: span.total },
-      );
-    },
-  });
-
-
-
-
-
-
   // 读本地图片进上下文。只允许两个沙箱目录：data/media/（聊天里收到的图）和 data/inbox/（手动放的）。
   // rabbit-bot 收的是任意飞书用户消息，一句提示注入就能让它读走 ~/.ssh 或凭据文件，所以路径必须锁死在这两个根下。
-  const mediaDir = path.join(d.cfg.dataDir, "media");
-  const inboxDir = path.join(d.cfg.dataDir, "inbox");
   const viewCacheDir = path.join(d.cfg.dataDir, "cache");
-
-  /** "media/x.jpg" / "inbox/x.png" / 裸文件名 → 两个根下的真实文件；越界一律返回 null */
-  const resolveImage = (p: string): string | null => {
-    const bare = p.replace(/^(media|inbox)[/\\]/, "");
-    for (const root of [inboxDir, mediaDir]) {
-      for (const rel of [p, bare]) {
-        const abs = path.resolve(root, rel);
-        if (!abs.startsWith(root + path.sep)) continue;
-        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;
-      }
-    }
-    return null;
-  };
 
   const viewImage = defineTool({
     name: "view_image",
     label: "view_image",
     executionMode: "sequential",
-    description: "把一张图片加载进上下文（长边压到 1024）。path 用 list_images 给出的名字，如 media/om_xxx.jpg、inbox/shot.png。一次只加载一张。",
+    description: "把一张图片加载进上下文（长边压到 1024）。path 用 `rb img-list` 给出的名字，如 media/om_xxx.jpg、inbox/shot.png。一次只加载一张。",
     parameters: Type.Object({ path: Type.String({ description: "media/… 或 inbox/… 开头的文件名" }) }),
     async execute(_id, p) {
-      const abs = resolveImage(p.path);
-      if (!abs) return txt(`没有这张图：${p.path}（先用 list_images 看看有哪些）`, { ok: false });
+      let abs: string;
+      try {
+        abs = resolveImagePath(d.cfg.dataDir, p.path);
+      } catch {
+        return txt(`没有这张图：${p.path}（先用 rb img-list 看看有哪些）`, { ok: false });
+      }
       try {
         const a = saveImage(fs.readFileSync(abs), { dir: viewCacheDir, maxEdge: d.cfg.media.maxEdge, maxBytes: d.cfg.media.maxBytes }, `view-${path.basename(abs)}`);
         const c = toImageContent(a);
@@ -176,190 +105,11 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  // 列能看的图（分页）。它看不到文件系统，没这个就不知道 view_image 该传什么名字。
-
-  // 联网搜索：DeepSeek 官方搜索接口（POST /v1/tools/search，自研搜索引擎）。
-  // 只返回标题/站点/日期/摘要/链接，正文按需（with_content）——摘要 600-800 字够模型读了。
-  const webSearch = defineTool({
-    name: "web_search",
-    label: "web_search",
-    executionMode: "sequential",
-    description:
-      "联网搜索，查实时信息：新闻、价格、发售日、天气、版本号、某个说法真假、某人的近况。返回标题、站点、日期、摘要和链接。别用它替代记忆或闲聊。",
-    parameters: Type.Object({
-      query: Type.String({ description: "搜索词，≤128 字，支持 site:、-site:、引号等语法" }),
-      count: Type.Optional(Type.Number({ description: "返回条数 1-10，默认 6" })),
-      with_content: Type.Optional(Type.Boolean({ description: "true 时额外取网页正文，慢，只在摘要不够时用" })),
-    }),
-    async execute(_id, p) {
-      const key = process.env.DEEPSEEK_API_KEY;
-      if (!key) return txt("搜索不可用：进程里没有 DEEPSEEK_API_KEY", { ok: false });
-      const query = String(p.query || "").trim().slice(0, 128);
-      if (!query) return txt("搜索词不能为空", { ok: false });
-      const count = Math.min(10, Math.max(1, Math.round(Number(p.count) || 6)));
-      const withContent = p.with_content === true;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
-      try {
-        const res = await fetch("https://api.deepseek.com/v1/tools/search", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-          body: JSON.stringify({ query, count, need_content: withContent }),
-          signal: ctrl.signal,
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return txt(`搜索失败：HTTP ${res.status} ${body.slice(0, 200)}`, { ok: false, status: res.status });
-        }
-        const data = (await res.json()) as { results?: any[] };
-        const rs = (data.results || []).filter((r) => r && r.title && r.url);
-        if (!rs.length) return txt(`「${query}」没搜到结果`, { ok: true, hits: 0 });
-        const lines = rs.map((r, i) => {
-          const meta = [
-            r.site_name,
-            r.date ? String(r.date).slice(0, 10) : "",
-            typeof r.authority === "number" && r.authority >= 3 ? "权威" : "",
-          ].filter(Boolean).join(" · ");
-          const raw = withContent && r.content ? r.content : r.summary || r.snippet || "";
-          const body = String(raw).replace(/\s+/g, " ").trim().slice(0, withContent ? 1500 : 500);
-          return `${i + 1}. ${r.title}${meta ? `（${meta}）` : ""}\n${r.url}${body ? `\n${body}` : ""}`;
-        });
-        return txt(`「${query}」搜到 ${rs.length} 条：\n\n${lines.join("\n\n")}`, { ok: true, hits: rs.length });
-      } catch (e) {
-        const err = e as Error;
-        return txt(`搜索失败：${err.name === "AbortError" ? "超时 15s" : err.message}`, { ok: false });
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  });
-
-  // 抓全文：DeepSeek 官方 Fetch 接口（POST /v1/tools/fetch），返回标题 + Markdown 正文。
-  const webFetch = defineTool({
-    name: "web_fetch",
-    label: "web_fetch",
-    executionMode: "sequential",
-    description: "打开一个网页，返回标题和 Markdown 正文。web_search 只给摘要，要读全文（文章、文档、公告、帖子）就用这个。一次抓一个链接。",
-    parameters: Type.Object({
-      url: Type.String({ description: "http/https 链接，需含 host" }),
-    }),
-    async execute(_id, p) {
-      const key = process.env.DEEPSEEK_API_KEY;
-      if (!key) return txt("抓取不可用：进程里没有 DEEPSEEK_API_KEY", { ok: false });
-      const url = String(p.url || "").trim();
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        return txt("链接不合法：不是完整 URL", { ok: false });
-      }
-      if (!/^https?:$/.test(parsed.protocol)) return txt("链接不合法：只支持 http/https", { ok: false });
-      if (parsed.username || parsed.password) return txt("链接不合法：不能带用户名或密码", { ok: false });
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 20000);
-      try {
-        const res = await fetch("https://api.deepseek.com/v1/tools/fetch", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-          body: JSON.stringify({ url: parsed.toString() }),
-          signal: ctrl.signal,
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return txt(`抓取失败：HTTP ${res.status} ${body.slice(0, 200)}`, { ok: false, status: res.status });
-        }
-        const data = (await res.json()) as { title?: string; content?: string };
-        const body = String(data.content || "").replace(/\n{3,}/g, "\n\n").trim();
-        if (!body) return txt(`页面没有正文（${parsed.toString()}）`, { ok: true, chars: 0 });
-        const cut = body.length > 6000;
-        return txt(
-          `${data.title ? `标题：${data.title}\n` : ""}${parsed.toString()}\n\n${body.slice(0, 6000)}${cut ? "\n\n…（正文已截断，长文只读了前面一部分）" : ""}`,
-          { ok: true, chars: body.length, truncated: cut },
-        );
-      } catch (e) {
-        const err = e as Error;
-        return txt(`抓取失败：${err.name === "AbortError" ? "超时 20s" : err.message}`, { ok: false });
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  });
-
-  // 沙盒文件区：根目录固定（cfg.sandbox.dir），只收相对路径，越界/符号链逃逸一律拒绝。
-  // codemode 的 VM 里没有 fs，模型只能用这三个工具碰文件；它们也是「沙盒根目录」唯一的实现方式。
-  const sbox = () =>
-    createSandboxFs({
-      root: d.cfg.sandbox.dir,
-      maxFileBytes: d.cfg.sandbox.maxFileBytes,
-      maxFiles: d.cfg.sandbox.maxFiles,
-      maxReadChars: d.cfg.sandbox.maxReadChars,
-    });
-  const sboxErr = (e: unknown) => txt((e as Error).message, { ok: false });
-
-
-
-
-  // 沙盒 shell：命令跑在隔离容器里（无网 / 根只读 / 只有 /work 可写），宿主机的路径在容器里不存在。
-
-
-  const listImages = defineTool({
-    name: "list_images",
-    label: "list_images",
-    executionMode: "sequential",
-    description: "列出能看的图片：media/（聊天里收到的，带消息号和尺寸）和 inbox/（手动放的），按时间从新到旧，分页。看下一页加 page。",
-    parameters: Type.Object({
-      source: Type.Optional(Type.String({ description: "media / inbox / all，默认 all" })),
-      page: Type.Optional(Type.Number({ description: "第几页，从 1 开始，默认 1" })),
-      page_size: Type.Optional(Type.Number({ description: "每页条数，默认 20，最多 50" })),
-    }),
-    async execute(_id, p) {
-      const page = Math.max(1, Math.floor(p.page ?? 1));
-      const size = Math.min(50, Math.max(1, Math.floor(p.page_size ?? 20)));
-      const src = String(p.source ?? "all").toLowerCase();
-      const items: { label: string; mtime: number }[] = [];
-      if (src === "media" || src === "all") {
-        // 从 DB 取（view_image 的压缩缓存写在 data/cache/，不会混进来）
-        const rows = d.store.db.prepare("select seq, ts, attachment from messages where attachment is not null order by seq desc limit 500").all() as any[];
-        for (const r of rows) {
-          let a: any;
-          try { a = JSON.parse(r.attachment); } catch { continue; }
-          if (!a?.path) continue;
-          items.push({ label: `media/${path.basename(a.path)} · ${a.width}×${a.height} · ${(a.bytes / 1024).toFixed(0)}KB · 消息#${r.seq} · ${fmtLocal(r.ts)}`, mtime: r.ts });
-        }
-      }
-      if (src === "inbox" || src === "all") {
-        try {
-          for (const e of fs.readdirSync(inboxDir, { withFileTypes: true })) {
-            if (!e.isFile()) continue;
-            const st = fs.statSync(path.join(inboxDir, e.name));
-            items.push({ label: `inbox/${e.name} · ${(st.size / 1024).toFixed(0)}KB · ${fmtLocal(st.mtimeMs)}`, mtime: st.mtimeMs });
-          }
-        } catch { /* 没有 inbox 目录就当空 */ }
-      }
-      items.sort((a, b) => b.mtime - a.mtime);
-      const total = items.length;
-      if (!total) return txt("还没有能看的图片（聊天里发过的图和 data/inbox/ 里放的文件都会出现在这里）", { total: 0 });
-      const pages = Math.ceil(total / size);
-      const slice = items.slice((page - 1) * size, page * size);
-      const more = page < pages ? `\n（还有下一页：page=${page + 1}）` : "";
-      return txt(`共 ${total} 张，第 ${page}/${pages} 页\n${slice.map((i) => i.label).join("\n") || "（本页为空）"}${more}`, { total, page, pages });
-    },
-  });
-
   /**
-   * 脚本通道：一个工具顶掉一堆 schema，但**不含任何业务逻辑**——它只是把名字翻译成
-   * scripts/<名字>.ts 然后执行。白名单直接扫 scripts/ 目录，所以加新脚本连这里都不用改。
-   *
-   * 不起 shell（execFile 逐参数传），模型拼不出 `; rm -rf`。
+   * 唯一的业务通道：在沙盒里跑 rb 客户端（容器内的 /usr/local/bin/rb）。
+   * 业务数据走宿主 REST API，文件和 shell 直接操作 /work——宿主路径在容器里不存在。
+   * 按 argv 执行、不过 shell，模型拼不出 `; rm -rf`。
    */
-  const scriptNames = (): string[] => {
-    try {
-      return fs.readdirSync(path.join(APP_ROOT, "scripts"))
-        .filter((f) => f.endsWith(".ts"))
-        .map((f) => f.replace(/\.ts$/, ""));
-    } catch { return []; }
-  };
-
   const splitArgs = (line: string): string[] => {
     const out: string[] = [];
     const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -373,31 +123,26 @@ export function createTools(d: ToolDeps) {
     label: "rb",
     executionMode: "sequential",
     description:
-      "跑 rabbit-bot 的一个脚本（JSON 输出）。脚本清单：pool-list / pool-read / pool-search / plan-list / plan-add / plan-update / "
-      + "mem-add / mem-search / img-list / img-view / sb / web-search / web-fetch。"
-      + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"。"
-      + "不确定有哪些脚本就 args=\"--help\"。",
-    parameters: Type.Object({ args: Type.String({ description: "脚本名 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
+      "在沙盒里跑 rb 客户端（JSON 输出）。业务数据走宿主 API，文件和 shell 直接操作 /work。"
+      + "命令：pool-list / pool-read / pool-search / plan-list / plan-add / plan-update / "
+      + "mem-add / mem-search / img-list / img-get / web-search / web-fetch / skills / sb。"
+      + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
+      + "args=\"sb run \\\"ls -la\\\"\"。不确定就 args=\"help\"。",
+    parameters: Type.Object({ args: Type.String({ description: "命令 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
     async execute(_id, p) {
-      const parts = splitArgs(String(p.args ?? ""));
-      const name = parts[0] ?? "";
-      const known = scriptNames();
-      if (!name || !known.includes(name)) {
-        return txt(`没有这个脚本「${name}」。可用：${known.filter((n) => !n.startsWith("wave-")).join(" / ")}`, { ok: false });
-      }
+      const parts = splitArgs(String(p.args ?? "").trim());
+      if (!parts.length) return txt("缺少命令。用 args=\"help\" 看清单", { ok: false });
       try {
-        // --db 指向本进程正在用的库；--now 让脚本和这一轮用同一个「现在」（模拟器里时间也是假的）
-        const { stdout } = await execFileAsync("npx", ["tsx", `scripts/${name}.ts`, ...parts.slice(1), "--db", d.store.file, "--now", String(d.now())], {
-          cwd: APP_ROOT, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: process.env,
-        });
-        return txt(stdout.trim() || "（没有输出）", { ok: true });
+        // RB_NOW 让模拟器里的「现在」和这一轮一致（plan-add 的过期判断会用到）
+        const opts = sandboxShellOptions(d.cfg, 60_000);
+        const exec = d.rbExec ?? ((argv: string[]) => runSandboxArgv(["rb", ...argv], { ...opts, execEnv: { RB_NOW: String(d.now()) } }));
+        const r = await exec(parts);
+        return txt(r.output.trim() || "（没有输出）", { ok: r.ok, code: r.code });
       } catch (e) {
-        const err = e as { stdout?: string; stderr?: string; message: string };
-        const body = (err.stdout || "").trim() || err.message;
-        return txt(`脚本失败：${body.slice(0, 800)}`, { ok: false });
+        return txt(`rb 失败：${(e as Error).message}`, { ok: false });
       }
     },
   });
 
-  return [send, staySilent, readPool, searchMessages, listImages, viewImage, webSearch, webFetch, rb];
+  return [send, staySilent, viewImage, rb];
 }

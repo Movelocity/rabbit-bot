@@ -1,4 +1,4 @@
-/** 联网搜索 / 抓正文（DeepSeek 官方接口）。CLI（scripts/web-*.ts）和 API 都走这里。 */
+/** 联网搜索 / 抓正文（DeepSeek 官方接口）：宿主 API 和沙盒 rb 客户端共用。 */
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,7 +30,7 @@ export async function searchWeb(query: string, opts: SearchOptions = {}) {
   const key = apiKey();
   const q = String(query ?? "").trim().slice(0, 128);
   if (!q) throw new Error("缺少查询词");
-  const count = Math.min(10, Math.max(1, Math.floor(opts.count ?? 6)));
+  const count = Math.min(10, Math.max(1, Math.floor(opts.count || 6)));
   const res = await fetch("https://api.deepseek.com/v1/tools/search", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
@@ -43,16 +43,20 @@ export async function searchWeb(query: string, opts: SearchOptions = {}) {
     title: r.title,
     url: r.url,
     site: r.site_name ?? null,
-    date: r.date ?? null,
-    summary: String(r.content ?? r.summary ?? r.snippet ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+    date: r.date ? String(r.date).slice(0, 10) : null,
+    authority: typeof r.authority === "number" ? r.authority : null,
+    summary: String(r.summary ?? r.snippet ?? r.content ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+    ...(opts.content && r.content ? { content: String(r.content).replace(/\s+/g, " ").trim().slice(0, 1500) } : {}),
   }));
 }
 
 export async function fetchWeb(url: string) {
   const key = apiKey();
   if (!url) throw new Error("缺少 url");
-  const u = new URL(url);
-  if (!/^https?:$/.test(u.protocol)) throw new Error("只支持 http/https");
+  let u: URL;
+  try { u = new URL(url); } catch { throw new Error("链接不合法：不是完整 URL"); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error("链接不合法：只支持 http/https");
+  if (u.username || u.password) throw new Error("链接不合法：不能带用户名或密码");
   const res = await fetch("https://api.deepseek.com/v1/tools/fetch", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },

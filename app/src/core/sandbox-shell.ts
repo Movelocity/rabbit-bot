@@ -177,6 +177,22 @@ export async function runInDocker(cmd: string, opts: SandboxShellOptions): Promi
   };
 }
 
+/** host 模式的 cwd：优先显式配置，否则用挂到 /work 的那条卷。 */
+function hostCwd(opts: SandboxShellOptions): string | undefined {
+  return opts.hostCwd ?? opts.volumes.find((v) => v.container === "/work")?.host ?? opts.workdir;
+}
+
+/** host 模式的环境变量：默认白名单，inheritEnv 才继承；再叠 opts.env。 */
+function hostEnv(opts: SandboxShellOptions, extra?: Record<string, string>): NodeJS.ProcessEnv {
+  return {
+    ...(opts.hostInheritEnv
+      ? process.env
+      : Object.fromEntries(HOST_ENV_KEYS.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]]])))),
+    ...opts.env,
+    ...extra,
+  };
+}
+
 /**
  * 在宿主机上跑一段 shell（bash -c）。**没有隔离**：能读宿主文件、偷环境变量之外的密钥文件。
  * 用 -c 而不是 -lc：登录 shell 会读 ~/.bash_profile，可能把我们刚过滤掉的环境变量又塞回来。
@@ -184,18 +200,56 @@ export async function runInDocker(cmd: string, opts: SandboxShellOptions): Promi
  */
 export async function runOnHost(cmd: string, opts: SandboxShellOptions): Promise<SandboxShellResult> {
   const trimmed = checkCmd(cmd);
-  const cwd = opts.hostCwd ?? opts.volumes.find((v) => v.container === "/work")?.host ?? opts.workdir;
-  const env = {
-    ...(opts.hostInheritEnv
-      ? process.env
-      : Object.fromEntries(HOST_ENV_KEYS.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]]])))),
-    ...opts.env,
-  };
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
-  const r = await run("bash", ["-c", trimmed], opts.timeoutMs, cwd, env);
+  const r = await run("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
   const timedOut = r.killed === true || r.signal === "SIGKILL";
   return {
     ok: r.code === 0 && !timedOut,
+    code: r.code,
+    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+  };
+}
+
+export interface SandboxArgvOptions extends SandboxShellOptions {
+  /** host 模式下 argv[0] 的替代启动器，例如 [node, /path/rb.mjs]；argv 其余部分原样传给它 */
+  hostPrefix?: string[];
+  /** 只对本次执行注入的环境变量（docker exec -e / host env） */
+  execEnv?: Record<string, string>;
+}
+
+/**
+ * 按 argv 直接执行（不过 shell）：模型拼不出 `; rm -rf`。
+ * 用于沙盒里的 rb 客户端——docker 模式执行镜像里的 `rb`，host 模式执行仓库里的 docker/rb.mjs。
+ */
+export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): Promise<SandboxShellResult> {
+  if (!argv.length) throw new Error("argv 不能为空");
+  const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
+
+  if ((opts.mode ?? "docker") === "host") {
+    const [bin, ...prefix] = opts.hostPrefix ?? [];
+    if (!bin) throw new Error("host 模式需要 hostPrefix（rb 客户端入口）");
+    // hostPrefix 顶替 argv[0]（容器里是 /usr/local/bin/rb，宿主上是 node docker/rb.mjs）
+    const r = await run(bin, [...prefix, ...argv.slice(1)], opts.timeoutMs, hostCwd(opts), hostEnv(opts, opts.execEnv));
+    const timedOut = r.killed === true || r.signal === "SIGKILL";
+    return {
+      ok: r.code === 0 && !timedOut,
+      code: r.code,
+      output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+    };
+  }
+
+  const ready = await ensureSandboxContainer(opts);
+  if (!ready.ok) throw new Error(ready.message);
+
+  const envArgs = Object.entries(opts.execEnv ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  const r = await run(
+    "docker",
+    ["exec", ...envArgs, opts.container, "timeout", "-s", "KILL", String(secs), ...argv],
+    opts.timeoutMs + 5000,
+  );
+  const timedOut = r.code === 137 || r.code === 124;
+  return {
+    ok: r.code === 0,
     code: r.code,
     output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
   };

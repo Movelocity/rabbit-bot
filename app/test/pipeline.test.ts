@@ -11,11 +11,14 @@ import { MockAdapter } from "../src/adapters/mock.ts";
 import { createFauxModel } from "../src/agent/faux.ts";
 import { FakeClock } from "../src/core/clock.ts";
 import { Logger } from "../src/core/logger.ts";
+import { addPlan } from "../src/ops/plans.ts";
+import { addMemory } from "../src/ops/memories.ts";
 
 async function setup(over: any = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-test-"));
   const cfg = loadConfig({
     dataDir, logDir: path.join(dataDir, "logs"),
+    sandbox: { dir: path.join(dataDir, "sandbox") },
     send: { confirmWaitMs: 30 }, llm: { provider: "faux", model: "faux-brain" },
     emoji: { map: { 微笑: { text: "🙂" } } }, ...over,
   });
@@ -31,7 +34,38 @@ async function setup(over: any = {}) {
   }
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
-  const app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true });
+  // rb 工具在线上走容器里的客户端；这里注入进程内实现（plan-add / mem-add），
+  // 只测调度和 agent 流程，HTTP 传输由 test/rb-client.test.ts 单独锁。
+  let appRef: App | undefined;
+  const rbExec = async (argv: string[]): Promise<{ ok: boolean; code: number; output: string }> => {
+    const pos: string[] = [];
+    const flags: Record<string, string> = {};
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (!a.startsWith("--")) { pos.push(a); continue; }
+      const k = a.slice(2);
+      const v = argv[i + 1];
+      if (v !== undefined && !v.startsWith("--")) { flags[k] = v; i++; } else flags[k] = "";
+    }
+    try {
+      if (pos[0] === "plan-add") {
+        const data = addPlan(appRef!.store, cfg.timezone, {
+          title: flags.title, content: flags.content, kind: flags.kind as any, when: flags.when,
+          pool: flags.pool, anchor: (flags.anchor as any) ?? null, why: flags.why ?? null, expires: flags.expires,
+        }, clock.now());
+        return { ok: true, code: 0, output: JSON.stringify({ ok: true, data }) };
+      }
+      if (pos[0] === "mem-add") {
+        const data = addMemory(appRef!.store, { user: flags.user, content: flags.content, pool: flags.pool, kind: flags.kind, scope: flags.scope as any });
+        return { ok: true, code: 0, output: JSON.stringify({ ok: true, data }) };
+      }
+      return { ok: false, code: 1, output: JSON.stringify({ ok: false, error: `测试未实现：${pos[0]}` }) };
+    } catch (e) {
+      return { ok: false, code: 1, output: JSON.stringify({ ok: false, error: (e as Error).message }) };
+    }
+  };
+  const app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true, rbExec });
+  appRef = app;
   const mock = new MockAdapter();
   app.hub.addAdapter(mock);
   const wakes: any[] = [];

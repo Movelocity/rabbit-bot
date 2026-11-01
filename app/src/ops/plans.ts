@@ -1,4 +1,4 @@
-/** 计划：查、写、改状态。CLI（scripts/plan-*.ts）和 API 都走这里。 */
+/** 计划：查、写、改状态。宿主 API 和沙盒 rb 客户端共用。 */
 import type { Store } from "../core/db.ts";
 import type { AnchorKind, PlanStatus } from "../types.ts";
 import { validateSchedule } from "../core/plans.ts";
