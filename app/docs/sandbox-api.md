@@ -43,7 +43,7 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 | POST | `/v1/plans` `{title,kind,when,pool,anchor,why,expires}` | `plan-add` |
 | PATCH | `/v1/plans/:id` `{status}` | `plan-update` |
 | GET | `/v1/memories?user=u1&pool=p1&limit=20` | `mem-search` |
-| POST | `/v1/memories` `{user,content,pool,kind,scope}` | `mem-add` |
+| POST | `/v1/memories` `{user,content,pool,kind,scope,from,until,supersede}` | `mem-add`（**只给运维**）|
 | GET | `/v1/images?source=media\|inbox\|all&page=1&size=20` | `img-list` |
 | GET | `/v1/images/file?path=media/x.jpg` | `img-get`（下载到 /work） |
 | GET | `/v1/web/search?q=…&count=6&content=1` | `web-search` |
@@ -87,3 +87,9 @@ TOKEN=$(cat data/run/api.token)
 curl -s -H "Authorization: Bearer $TOKEN" localhost:3738/v1/pools
 npm run sbx -- status                # 容器里是否拿到了 RB_API_URL / RB_API_TOKEN
 ```
+
+## 写入命令只给运维
+
+模型侧不再用 `rb` 做写入：记忆走 `memory` 工具、计划走 `plan` 工具、文件走
+`read_file` / `write_file`。`rb mem-add` / `mem-close` / `plan-add` / `plan-update` / `sb`
+在 Agent 的工具层会被挡住，返回「改用 X」——留在 CLI 里是为了人和运维脚本能用。

@@ -21,7 +21,7 @@ description: 一句话写清楚什么时候该用这个技能（模型靠这句�
    mkdir -p data
    echo "..." > data/state.json
    ```
-4. 最终只通过 `send` 说话。
+4. 最终只通过 `chat`（action=send）说话。
 
 ## 边界
 

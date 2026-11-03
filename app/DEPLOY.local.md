@@ -105,8 +105,8 @@ node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # �
 ## 自驱机制（2026-10-22 加）
 
 - 人格、目标、诉求写在 `data/pi-cwd/AGENTS.md`：pi 会自动从 cwd 加载 `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md`。**改这个文件要走用户批准**，被保护机制拦过一次。
-- 机制缺口：`app.ts` 里「没有未读、也没有到点计划」时直接 `skipped:nothing-new`，LLM 都不调用——所以它只能靠 `plan_add` 自己排节奏，光写 prompt 它不一定记得。
-- 兜底：`src/core/nudge.ts` 的 `needsPlanNudge()`（纯函数，7 个单测）。计划唤醒里「说了话但没 `plan_add`」时补一次极短的自我决定（排下一次 / 明说不排），明确不用 `send`。**沉默不劝**——那是合法选择。触发写进 wake_log 的 `nudged` 字段。
+- 机制缺口：`app.ts` 里「没有未读、也没有到点计划」时直接 `skipped:nothing-new`，LLM 都不调用——所以它只能靠 `plan`（action=add）自己排节奏，光写 prompt 它不一定记得。
+- 兜底：`src/core/nudge.ts` 的 `needsPlanNudge()`（纯函数，7 个单测）。计划唤醒里「说了话但没排下次（`plan` action=add）」时补一次极短的自我决定（排下一次 / 明说不排），明确不用 `chat` 发消息。**沉默不劝**——那是合法选择。触发写进 wake_log 的 `nudged` 字段。
 
 ## 话题（记忆 + 计划）
 

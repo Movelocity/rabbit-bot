@@ -32,8 +32,9 @@ mock 适配器(模拟) ──┘        │
 | `src/core/plans.ts` / `time.ts` | 计划校验（ISO / cron，Asia/Shanghai）、到点匹配、同点只触发一次、停机补发/跳过、过期 |
 | `src/core/emoji.ts` | 表情映射表加载；出站 `[emoji:中文id]` 解析（匹配不上原样输出，普通 `[xxx]` 不处理）；入站 `[名字]` → `[emoji:中文id]` |
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
+| `src/core/tool-call.ts` | 工具调用的判定（`didSend` / `didSkip` / `didPlanAdd` / `didPlanDone`）：二级入口看名字不够，还要看 action |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
-| `src/agent/tools.ts` | 工具：`send`（唯一输出）、`list_pools`、`read_pool`、`plan_add/plan_update/plan_list`、`memory_add/memory_search` |
+| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（add/done/list）、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
 | `src/agent/faux.ts` | 桩 LLM（pi 自带 faux provider + 确定性脚本），用于模拟器/测试 |
 | `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`qq.ts`（空实现）；`mock.ts` |

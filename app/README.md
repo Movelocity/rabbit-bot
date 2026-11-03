@@ -44,13 +44,21 @@ test/            257 条，node --test
 data/            运行时数据（db / media / sandbox / 会话），.gitignore
 ```
 
-## 工具清单（模型能调的 4 个）
+## 工具清单（模型能调的 7 个）
 
-`send` `stay_silent` `view_image` `rb`
+| 工具 | 干什么 |
+|---|---|
+| `chat` | `send` 发消息（唯一对外出口）/ `skip` 这轮不回 / `view` 读图进上下文 / `list` 有哪些池 / `search` 翻原话 |
+| `memory` | `recent` / `search` / `add` / `expire`（不再成立，关掉）/ `update`（就地订正）/ `help` |
+| `plan` | `add` / `done` / `list` / `help` |
+| `read_file` / `write_file` | 读写 `/work` 里的文件（整份覆盖；追加走 `terminal` 的 `>>`） |
+| `terminal` | 在 Docker 沙盒里跑命令：列目录、`rg` 搜内容、算数（碰不到宿主文件系统） |
+| `rb` | 只给运维和查询：`pool-*` / `plan-list` / `mem-search` / `img-*` / `web-*` / `skills`；业务写入会被挡住并指向对应工具 |
 
-`send` 是唯一对外出口。`rb` 是唯一的业务通道：命令在 Docker 沙盒里跑（`/usr/local/bin/rb`），
-业务数据（池/计划/记忆/图片/联网/技能）走宿主 REST API，文件和 shell 直接操作 `/work`，
-碰不到宿主文件系统。见 [docs/sandbox-api.md](docs/sandbox-api.md)。
+业务数据（池/计划/记忆/图片/联网/技能）走宿主 REST API，文件和 shell 落在 `/work`。
+见 [docs/sandbox-api.md](docs/sandbox-api.md)。
+
+命令在 Docker 沙盒里跑（`/usr/local/bin/rb`）。
 
 ## 文档
 

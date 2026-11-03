@@ -8,6 +8,7 @@ import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { searchMemories } from "../src/ops/memories.ts";
+import { addPlan } from "../src/ops/plans.ts";
 
 function setup(opts: { withUser?: boolean } = {}) {
   const cfg = loadConfig();
@@ -303,4 +304,48 @@ test("chat：没搜到就说没搜到，别沉默", async () => {
   const r: any = await get("chat").execute("id", { action: "search", q: "量子力学" });
   assert.equal(r.details?.hits, 0);
   assert.match(r.content.map((c: any) => c.text ?? "").join(""), /没搜到/);
+});
+
+// ---------- 这一轮到底是哪个池：计划唤醒没有 pools ----------
+
+import { resolvePrimaryPool } from "../src/core/primary-pool.ts";
+
+test("计划唤醒：pools 是空的，也要能从 planFires 找到这条计划排给谁", async () => {
+  const { store, pool } = setup();
+  const p = addPlan(store, loadConfig().timezone, {
+    title: "提醒他喝水", pool: pool!, kind: "once", when: "2026-11-04T09:00:00+08:00",
+  }, Date.now()) as any;
+  const wake: any = { type: "plan", pools: new Set(), planFires: [{ planId: p.id, fireTs: Date.now() }], proactive: [], reasons: [], enqueuedAt: Date.now() };
+  assert.equal(resolvePrimaryPool(store, wake), pool, "排计划的时候要知道排给哪个池");
+});
+
+test("消息唤醒：多个池同时触发时，选有未读的那个", async () => {
+  const { store, pool } = setup();
+  store.insertMessage({
+    platform: "feishu", external_chat_id: "oc_t2", pool_kind: "private", msg_id: "m9",
+    sender_id: "ou_9", sender_name: "另一个人", ts: Date.now(), text: "在吗",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
+  const other = store.listPools().find((x) => x.pool_id !== pool)!.pool_id;
+  // 第一个池的消息已经读过了，只有新池有未读
+  const last = store.unread(pool!).at(-1);
+  if (last) store.advanceCursor(pool!, last.seq);
+  const wake: any = { type: "message", pools: new Set([pool, other]), planFires: [], proactive: [], reasons: [], enqueuedAt: Date.now() };
+  assert.equal(resolvePrimaryPool(store, wake), other);
+});
+
+test("纯 tick：什么都没有就退回最近有消息的池，实在没有才给 null", async () => {
+  const { store, pool } = setup();
+  const wake: any = { type: "tick", pools: new Set(), planFires: [], proactive: [], reasons: [], enqueuedAt: Date.now() };
+  assert.equal(resolvePrimaryPool(store, wake), pool);
+  assert.equal(resolvePrimaryPool(new Store(":memory:"), wake), null);
+});
+
+test("plan add：同一条没停之前不会排第二遍", async () => {
+  const { get } = setup();
+  const a: any = await get("plan").execute("id", { action: "add", title: "每周聊聊你自己", when: "0 21 * * 2,5" });
+  const b: any = await get("plan").execute("id", { action: "add", title: "每周聊聊你自己", when: "0 21 * * 2,5" });
+  assert.equal(a.details?.ok, true);
+  assert.equal(b.details?.duplicate, true, "第二条该被认成重复");
+  assert.match(b.content.map((c: any) => c.text ?? "").join(""), /已经有一条一样的/);
 });

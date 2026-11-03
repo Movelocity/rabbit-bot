@@ -331,6 +331,13 @@ export function createTools(d: ToolDeps) {
           case "add": {
             if (!p.title) return txt("add 要 title（提醒什么）。", { ok: false });
             const isCron = !!p.when && p.when.trim().split(/\s+/).length >= 5;
+            // 同一条没停之前别再排一遍：重复的计划会在同一分钟唤醒她两次，
+            // 而她看到的只是「计划到点了」，不会知道是自己排了两遍。
+            const dup = d.store.listPlans("pending").find((x: any) =>
+              String(x.title).trim() === p.title!.trim() && String(x.schedule ?? "") === String(p.when ?? ""));
+            if (dup) {
+              return txt(`已经有一条一样的了（#${dup.id} ${dup.title}，${dup.schedule_kind === "cron" ? `cron ${dup.schedule}` : dup.schedule}），没重复加。要改就先把那条 done 掉。`, { ok: true, plan: dup, duplicate: true });
+            }
             const r = addPlan(d.store, d.cfg.timezone, {
               title: p.title, content: p.content, why: p.why, pool: poolOf(),
               kind: isCron ? "cron" : "once", when: p.when,

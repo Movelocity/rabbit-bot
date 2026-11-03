@@ -20,7 +20,7 @@ test("内置：连续 10 次一模一样（工具+参数+结果）→ 第 10 次
 test("参数顺序无关；结果变化（轮询）不算循环；换参数重置", () => {
   assert.equal(callKey("t", { a: 1, b: { c: 2, d: 3 } }), callKey("t", { b: { d: 3, c: 2 }, a: 1 }));
   const g = new LoopGuardCore(cfg);
-  const k = callKey("send", { pool: "p1", content: "hi" });
+  const k = callKey("chat", { action: "send", pool: "p1", content: "hi" });
   for (let i = 0; i < 30; i++) { assert.equal(g.check(k).block, false); g.record(k, resultFp([{ type: "text", text: `r${i}` }])); }
   const g2 = new LoopGuardCore(cfg);
   for (let i = 0; i < 30; i++) {
