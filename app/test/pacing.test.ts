@@ -73,6 +73,8 @@ function hubWith(pacingEnabled: boolean) {
     sender_id: "u1", sender_name: "他", ts: Date.now(), text: "在吗",
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   });
+  // 唤醒时未读已经被抽走了：这里补上，否则第一次 send 会被「压住」判定拦下
+  hub.takeUnread();
   return { hub, store, hits };
 }
 

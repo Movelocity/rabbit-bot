@@ -15,6 +15,10 @@ import type { InboundMessage, StoredMessage } from "../types.ts";
 export interface SendOutcome {
   ok: boolean;
   error?: string;
+  /** true = 没发出去，因为发之前来了新消息，把话原样退回去让她重新判断 */
+  held?: boolean;
+  /** held 时被压住的那句（原样） */
+  heldText?: string;
   sentParts: { kind: "text" | "sticker"; content: string; msgId: string; confirmed: boolean }[];
   newMessages: StoredMessage[];
 }
@@ -98,6 +102,16 @@ export class Hub {
     if (!opts.internal && this.cfg.send.pacing?.enabled) {
       const wait = waitBefore(this.lastSendLen, this.lastSendAt, Date.now());
       if (wait > 0) await sleep(wait);
+    }
+
+    // 这期间他要是又说话了，这一句就先压住不发。
+    // 她是在「上一条消息」的基础上想好这几句的；人已经补了新信息，
+    // 照着旧前提继续说是最像机器的一件事。原话退回去，让她看完再决定发不发、改不改。
+    if (!opts.internal) {
+      const fresh = this.takeUnread();
+      if (fresh.length) {
+        return { ok: false, held: true, heldText: content, error: "发之前来了新消息", sentParts: [], newMessages: fresh };
+      }
     }
 
     const parts: SendOutcome["sentParts"] = [];

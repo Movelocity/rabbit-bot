@@ -79,6 +79,15 @@ export function createTools(d: ToolDeps) {
         if (!v.ok) return txt(v.hint ?? "这句别发，换你自己的说法。", { ok: false, blocked: v.reason });
       }
       const r = await d.hub.send(p.pool, p.content);
+      // 被压住：他在这几秒里又说话了。先把新消息给她看，那句原样退回——发不发、怎么改，她重新定
+      if (r.held) {
+        return txt(
+          `先别发，这句给你压住了：「${r.heldText ?? ""}」\n`
+          + `因为你说这话的时候他刚好又发来消息：\n${fmtGrouped(d.store, r.newMessages)}\n`
+          + "先看他新说了什么，再决定原来那句还要不要发、要不要改。别当没看见照样发。",
+          { ok: false, held: true, newCount: r.newMessages.length },
+        );
+      }
       if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });
       const unconfirmed = r.sentParts.filter((x) => !x.confirmed).length;
       const head = unconfirmed ? `已发送，但有 ${unconfirmed} 段暂未确认出现在聊天里` : "已发送并确认";
