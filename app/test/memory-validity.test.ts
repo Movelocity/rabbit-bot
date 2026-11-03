@@ -92,9 +92,10 @@ test("until 早于 from 报错", () => {
   );
 });
 
-test("kind 只认 fact / plan / alias", () => {
+test("kind 只认 fact / plan / alias / topic", () => {
   const { store, pool } = setup();
   assert.doesNotThrow(() => addMemory(store, { user: "u1", content: "「那个项目」= 电商 Agent", pool, kind: "alias" }));
+  assert.doesNotThrow(() => addMemory(store, { user: "u1", content: "他聊过的话题", pool, kind: "topic" }), "库里早就有 topic，别把老数据挡住");
   assert.throws(() => addMemory(store, { user: "u1", content: "x", pool, kind: "随便" }), /kind 只能是/);
 });
 

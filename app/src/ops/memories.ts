@@ -5,7 +5,7 @@ import { clampInt, resolvePool } from "./common.ts";
 import { findAliases, parseAliasContent } from "../core/alias.ts";
 
 const SCOPES: MemoryScope[] = ["pool", "private", "group", "all"];
-const KINDS = ["fact", "plan", "alias"] as const;
+const KINDS = ["fact", "plan", "alias", "topic"] as const;
 
 export interface AddMemoryInput {
   user?: string;
