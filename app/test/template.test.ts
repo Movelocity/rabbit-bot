@@ -9,6 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { render, setTemplateDir, templateDir, listTemplates } from "../src/agent/template.ts";
 
+/** 真模板目录：别的用例会把它指到临时夹具上，这条要自己拨回来 */
+const REAL_DIR = templateDir();
+
 test("真实模板都在：主提示词 + 三份场景 + 三个附件", () => {
   const names = listTemplates();
   for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-plan", "handoff", "part-topics"]) {
@@ -56,4 +59,25 @@ test("同一文件改了就重新读，没改就用缓存", () => {
     setTemplateDir(path.resolve(import.meta.dirname, "..", "config", "prompt"));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("每个 {{变量}} 都在调用处真的供上了", () => {
+  // 这条守的是「加了新变量忘传」：render 会在运行时抛错，但只有走到那条路径才发现。
+  // 这里改成静态对账——模板里出现的每个变量名，必须在渲染方源码里出现过。
+  setTemplateDir(REAL_DIR);
+  const src = ["src/agent/prompt.ts", "src/app.ts"]
+    .map((f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))
+    .join("\n");
+  const files = listTemplates();
+  assert.ok(files.length > 0);
+  const missing: string[] = [];
+  for (const name of files) {
+    const raw = fs.readFileSync(path.join(templateDir(), `${name}.md`), "utf8");
+    for (const m of raw.matchAll(/\{\{(\w+)\}\}/g)) {
+      const v = m[1];
+      // 变量名要么以标识符出现在源码里，要么以字符串键出现
+      if (!new RegExp(`\\b${v}\\b`).test(src)) missing.push(`${name}.md: ${v}`);
+    }
+  }
+  assert.deepEqual(missing, [], `这些变量模板里用了但没人供：${missing.join(", ")}`);
 });

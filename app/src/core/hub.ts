@@ -6,6 +6,7 @@ import type { IMAdapter } from "../adapters/types.ts";
 import type { Config } from "../config.ts";
 import type { Store } from "./db.ts";
 import { parseEmoji, type EmojiTable } from "./emoji.ts";
+import { waitBefore, visibleLen } from "./pacing.ts";
 import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -22,6 +23,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Hub {
   private adapters = new Map<string, IMAdapter>();
+  /** 投递节奏的基准：上一条发出的时刻和可见字数（见 core/pacing.ts） */
+  private lastSendAt = 0;
+  private lastSendLen = 0;
   scheduler: Scheduler | null = null;
   /** 每次 send 的回调（日志/测试） */
   onSent?: (poolId: string, text: string) => void;
@@ -90,6 +94,12 @@ export class Hub {
     if (!adapter) return { ok: false, error: `平台 ${pool.platform} 没有可用的适配器`, sentParts: [], newMessages: [] };
     if (!content.trim()) return { ok: false, error: "内容为空", sentParts: [], newMessages: [] };
 
+    // 节奏：想是一次想完的，发要一条一条发。系统提示不排队（那是通知，不是她说话）
+    if (!opts.internal && this.cfg.send.pacing?.enabled) {
+      const wait = waitBefore(this.lastSendLen, this.lastSendAt, Date.now());
+      if (wait > 0) await sleep(wait);
+    }
+
     const parts: SendOutcome["sentParts"] = [];
     // 把片段组装成消息：文字+内置表情合成一条（富文本），表情包单独一条
     let rich: RichPart[] = [];
@@ -119,6 +129,11 @@ export class Hub {
     } catch (e) {
       this.log.error(`发送失败 ${pool.pool_id}`, e);
       return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread() };
+    }
+    // 节奏的基准：这一条发出去的时刻和长度，决定下一条要等多久
+    if (!opts.internal && parts.length) {
+      this.lastSendAt = Date.now();
+      this.lastSendLen = visibleLen(content);
     }
 
     await sleep(this.cfg.send.confirmWaitMs);

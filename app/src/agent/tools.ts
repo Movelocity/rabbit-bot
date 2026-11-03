@@ -12,6 +12,7 @@ import { resolveImagePath } from "../ops/images.ts";
 import { sandboxShellOptions } from "../ops/sandbox.ts";
 import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
+import { checkStyle } from "../core/style-gate.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
 
@@ -67,6 +68,15 @@ export function createTools(d: ToolDeps) {
       if (d.currentWake?.()?.type === "plan") {
         const why = coerciveHit(p.content);
         if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
+      }
+      // 风格闸：客服腔、七天内的原样重复，提示词管不住，只有代码管得住（拦下来让她重写）
+      const poolRow = d.store.resolvePool(p.pool);
+      if (poolRow) {
+        const recentSelf = d.store.messagesForReflection(poolRow.pool_id, 60)
+          .filter((m) => m.from_self)
+          .map((m) => ({ text: m.text, ts: m.ts }));
+        const v = checkStyle({ text: p.content, recentSelf, maxChars: d.cfg.send.maxChars });
+        if (!v.ok) return txt(v.hint ?? "这句别发，换你自己的说法。", { ok: false, blocked: v.reason });
       }
       const r = await d.hub.send(p.pool, p.content);
       if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });

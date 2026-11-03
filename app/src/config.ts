@@ -16,7 +16,13 @@ export interface Config {
   dataDir: string;
   logDir: string;
   scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
-  send: { confirmWaitMs: number; confirmViaApi: boolean };
+  send: {
+    confirmWaitMs: number; confirmViaApi: boolean;
+    /** 分条投递的间隔（按上一条长度缩放，见 core/pacing.ts）。关掉=所有句子立刻连发 */
+    pacing: { enabled: boolean };
+    /** 单条消息字数上限，超了只提醒不拦。默认 160 */
+    maxChars?: number;
+  };
   context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
   handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };

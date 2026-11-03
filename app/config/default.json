@@ -14,7 +14,10 @@
   },
   "send": {
     "confirmWaitMs": 1000,
-    "confirmViaApi": false
+    "confirmViaApi": false,
+    "pacing": {
+      "enabled": true
+    }
   },
   "context": {
     "recentContextMessages": 8,

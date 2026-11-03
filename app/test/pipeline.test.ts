@@ -24,6 +24,8 @@ async function setup(over: any = {}) {
   });
   // 默认按「每条消息各自去抖唤醒」跑（老链路），要测 tick 批处理的那条自己打开
   if (over.batchToTick === undefined) cfg.scheduler.batchToTick = false;
+  // 分条节奏默认关掉：这层测的是链路，不该每条之间都真等一秒
+  if (cfg.send.pacing === undefined) cfg.send.pacing = { enabled: false };
   // 主动开口默认关掉：这层用例守的是「别把用户晾着」「别每 3 分钟叫一次」这类链路行为，
   // 不该被「她现在想不想说话」左右。专测主动的用例自己传 proactive 打开。
   if ((over as any).proactive === undefined) {
