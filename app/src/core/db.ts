@@ -550,6 +550,19 @@ export class Store {
     return (this.db.prepare("SELECT * FROM memories WHERE id=?").get(id) as any) ?? null;
   }
 
+  /** 就地改一条记忆的正文（订正错字、补细节）。不碰有效期——改「什么时候的事」走 valid_from */
+  updateMemoryRow(id: number, patch: { content?: string; valid_from?: number | null; valid_to?: number | null }): boolean {
+    const sets: string[] = [];
+    const args: any[] = [];
+    if (patch.content !== undefined) { sets.push("content=?"); args.push(patch.content); }
+    if (patch.valid_from !== undefined) { sets.push("valid_from=?"); args.push(patch.valid_from); }
+    if (patch.valid_to !== undefined) { sets.push("valid_to=?"); args.push(patch.valid_to); }
+    if (!sets.length) return false;
+    args.push(id);
+    const r = this.db.prepare(`UPDATE memories SET ${sets.join(",")} WHERE id=?`).run(...args);
+    return Number(r.changes) > 0;
+  }
+
   /** 只关闭一条记忆（没有新事实顶替）：valid_to 设上，superseded_by 保持空 */
   closeMemoryRow(id: number, at = Date.now()): boolean {
     const r = this.db.prepare("UPDATE memories SET valid_to = COALESCE(valid_to, ?) WHERE id=?").run(at, id);
@@ -575,7 +588,7 @@ export class Store {
    */
   visibleMemories(
     userId: string, viewingPool: Pool, limit: number,
-    opts: { at?: number; includeExpired?: boolean; kinds?: string[] } = {},
+    opts: { at?: number; includeExpired?: boolean; kinds?: string[]; q?: string } = {},
   ): any[] {
     const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by
       FROM memories WHERE user_id=? AND (
@@ -588,6 +601,10 @@ export class Store {
       args.push(opts.at, opts.at);
     } else if (!opts.includeExpired) {
       valid = " AND valid_to IS NULL";
+    }
+    if (opts.q) {
+      valid += " AND content LIKE ? ESCAPE '\\'";
+      args.push(`%${opts.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
     }
     if (opts.kinds?.length) {
       valid += ` AND kind IN (${opts.kinds.map(() => "?").join(",")})`;

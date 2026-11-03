@@ -68,9 +68,9 @@ function respond(context: any): any {
       if (p.text.includes("/plan") && nowStr) {
         const d = new Date(Date.parse(nowStr.replace(" ", "T") + ":00+08:00") + 60_000);
         const when = new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 16);
-        calls.push(fauxToolCall("plan_add", { title: "一分钟后提醒", when }));
+        calls.push(fauxToolCall("plan", { action: "add", title: "一分钟后提醒", when }));
       }
-      if (p.text.includes("记住")) calls.push(fauxToolCall("remember", { content: p.text }));
+      if (p.text.includes("记住")) calls.push(fauxToolCall("memory", { action: "add", content: p.text }));
     }
     if (!calls.length) return fauxAssistantMessage(parsed.length ? "群里没人@我，先不说话。" : "无事可做。");
     return fauxAssistantMessage(calls);

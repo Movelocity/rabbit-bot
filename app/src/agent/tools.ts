@@ -13,7 +13,7 @@ import { sandboxShellOptions, readSandboxFile, writeSandboxFile, runSandboxShell
 import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
-import { addMemory, closeMemory } from "../ops/memories.ts";
+import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
@@ -35,6 +35,15 @@ export interface ToolDeps {
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
+
+/** 记忆列表的显示格式：带上 #id 和有效期，她才知道改哪条 */
+function fmtMemories(list: { id: number; kind: string; content: string; from: number; to: number | null; replaced_by: number | null }[]): string {
+  if (!list.length) return "（没有匹配的记忆）";
+  const day = (ts: number) => new Date(ts).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" });
+  return list
+    .map((m) => `#${m.id} [${m.kind}] ${m.content}` + (m.to ? `（${day(m.from)} 起，${day(m.to)} 已失效${m.replaced_by ? `，被 #${m.replaced_by} 顶掉` : ""}）` : ""))
+    .join("\n");
+}
 
 export function createTools(d: ToolDeps) {
   /**
@@ -142,11 +151,15 @@ export function createTools(d: ToolDeps) {
   };
 
   /**
-   * 记忆与计划的四件事做成原生工具。
+   * 记忆：一个工具，action 分六件事。
    *
-   * 为什么不再走 `rb mem-add --content "…"`：记忆内容是自由文本，穿过 shell 要过引号、
-   * 全角符号、箭头、换行，少一个转义就静默写坏一条——而写坏的记忆没人看得见，
-   * 不像消息发错了立刻能发现。工具拿的是结构化参数，不进 shell，失败会当场报错。
+   * 为什么不做成六个工具：它们共用同一套参数（id / content / 时间），拆开就是六份 schema、
+   * 六次「她该点哪个」的判断。二级入口把成本摊到一次，代价是 action 写错要重来——
+   * 所以每个 action 的必填项在描述里逐条写清，出错时把可选项原样回给她。
+   *
+   * 为什么记忆该走工具而不是 `rb mem-add --content "…"`：记忆内容是自由文本，
+   * 穿过 shell 要过引号、全角符号、箭头、换行，少一个转义就静默写坏一条——
+   * 写坏的记忆没人看得见，不像消息发错了立刻能发现。
    */
   const poolOf = (): string => {
     const p = d.primaryPool?.();
@@ -160,104 +173,145 @@ export function createTools(d: ToolDeps) {
     return uid;
   };
 
-  const remember = defineTool({
-    name: "remember",
-    label: "remember",
+  const MEMORY_HELP = [
+    "memory 的用法（action 必填）：",
+    "  recent  [limit]                          最近记下的（默认 20 条，只给还生效的）",
+    "  search  q? at? all? limit?               按关键词翻，all=1 连失效的也翻",
+    "  add     content kind? supersede? from? until?   记一条",
+    "  expire  id                               这条不再成立了，关掉（不写新的）",
+    "  update  id content? from?                就地订正正文/起始时间，不动时间线",
+    "  help                                     看这份说明",
+    "",
+    "只记对方明说过的具体事实，不记推断和总结。说变了的事用 add + supersede 顶掉旧的；",
+    "事实没变只是不再成立（「他这周在出差」回来了）用 expire。",
+  ].join("\n");
+
+  const memory = defineTool({
+    name: "memory",
+    label: "memory",
     executionMode: "sequential",
     description:
-      "记一条长期记忆。只记对方明说过的具体事实（他说了什么、答应过什么、发生了什么），不记你的推断和总结。"
-      + "他说变了的事，用 supersede 传旧条目的 #id 顶掉旧的——不顶的话你会同时相信两件矛盾的事。"
-      + "没有新事实、只是不再成立（「他这周在出差」回来了），别硬编一条新的，用 forget 关掉。"
-      + "别名也用这个记：kind=alias，content 写成「那个项目 → 电商 AI Agent」。",
+      "长期记忆。action 决定做什么：recent（最近记下的）/ search（按关键词翻，all=1 连失效的）/ "
+      + "add（记一条）/ expire（不再成立，关掉）/ update（就地订正）/ help。"
+      + "记的是对方明说过的具体事实，不是你的推断。他说变了的事，add 时把旧条目的 #id 填进 supersede；"
+      + "没有新事实、只是不再成立，用 expire。别名也走 add：kind=alias，content 写「那个项目 → 电商 AI Agent」。"
+      + "拿不准就先 memory action=help。",
     parameters: Type.Object({
-      content: Type.String({ description: "要记的原话或事实，带日期更好：『11-03 钥匙弄好了，楼下五金店打的』" }),
-      kind: Type.Optional(Type.String({ description: "fact（默认）/ plan / alias / topic" })),
-      supersede: Type.Optional(Type.Number({ description: "被这条顶掉的旧记忆 id（提示词里记忆前的 #号）" })),
-      from: Type.Optional(Type.String({ description: "这件事从什么时候开始成立，ISO 时间；不传就是现在" })),
-      until: Type.Optional(Type.String({ description: "到期时间，ISO；只在那之前成立" })),
+      action: Type.String({ description: "recent / search / add / expire / update / help" }),
+      id: Type.Optional(Type.Number({ description: "expire、update 用：记忆 id（提示词里记忆前的 #号）" })),
+      content: Type.Optional(Type.String({ description: "add、update 用：正文，带日期更好" })),
+      kind: Type.Optional(Type.String({ description: "add 用：fact（默认）/ plan / alias / topic" })),
+      supersede: Type.Optional(Type.Number({ description: "add 用：被这条顶掉的旧记忆 id" })),
+      from: Type.Optional(Type.String({ description: "add、update 用：从什么时候起成立，ISO" })),
+      until: Type.Optional(Type.String({ description: "add 用：到期时间，ISO" })),
+      q: Type.Optional(Type.String({ description: "search 用：关键词" })),
+      at: Type.Optional(Type.String({ description: "search 用：查那一刻有效，ISO" })),
+      all: Type.Optional(Type.Boolean({ description: "search 用：连失效的一起给" })),
+      limit: Type.Optional(Type.Number({ description: "recent、search 用：条数，默认 20" })),
       user: Type.Optional(Type.String({ description: "一般不用填，默认是当前对话的人" })),
     }),
     async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
       try {
-        const r = addMemory(d.store, {
-          user: userOf(p.user), content: p.content, pool: poolOf(), kind: p.kind,
-          from: p.from, until: p.until, supersede: p.supersede,
-        });
-        return txt(
-          r.superseded
-            ? `记下了（#${r.id}），原来 #${r.superseded} 那条已经失效。`
-            : `记下了（#${r.id}）。`,
-          { ok: true, id: r.id },
-        );
+        switch (action) {
+          case "help":
+            return txt(MEMORY_HELP, { ok: true });
+          case "recent": {
+            const list = searchMemories(d.store, { user: userOf(p.user), pool: poolOf(), limit: p.limit });
+            return txt(fmtMemories(list), { ok: true, count: list.length });
+          }
+          case "search": {
+            const list = searchMemories(d.store, {
+              user: userOf(p.user), pool: poolOf(), limit: p.limit, q: p.q, at: p.at, all: p.all,
+            });
+            return txt(fmtMemories(list), { ok: true, count: list.length });
+          }
+          case "add": {
+            if (!p.content) return txt("add 要 content（记什么）。用 memory action=help 看说明。", { ok: false });
+            const r = addMemory(d.store, {
+              user: userOf(p.user), content: p.content, pool: poolOf(), kind: p.kind,
+              from: p.from, until: p.until, supersede: p.supersede,
+            });
+            return txt(r.superseded ? `记下了（#${r.id}），原来 #${r.superseded} 那条已经失效。` : `记下了（#${r.id}）。`, { ok: true, id: r.id });
+          }
+          case "expire": {
+            if (p.id === undefined) return txt("expire 要 id（提示词里记忆前的 #号）。", { ok: false });
+            const r = closeMemory(d.store, { user: userOf(p.user), id: p.id });
+            return txt(r.already ? `#${p.id} 早就失效了，没动它。` : `#${p.id} 关掉了。`, { ok: true });
+          }
+          case "update": {
+            if (p.id === undefined) return txt("update 要 id。", { ok: false });
+            const r = updateMemory(d.store, { user: userOf(p.user), id: p.id, content: p.content, from: p.from });
+            return txt(`#${r.id} 改好了：${r.content}`, { ok: true });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${MEMORY_HELP}`, { ok: false });
+        }
       } catch (e) {
-        return txt(`没记成：${(e as Error).message}`, { ok: false });
+        return txt(`没成：${(e as Error).message}`, { ok: false });
       }
     },
   });
 
-  const forget = defineTool({
-    name: "forget",
-    label: "forget",
-    executionMode: "sequential",
-    description:
-      "把一条记忆标成失效，不写新的。用在：这件事不再成立了，但没有新事实可写"
-      + "（「他这周在出差」回来了、「我在减肥」不打算减了）。已经失效的再关一次不会改时间。",
-    parameters: Type.Object({
-      id: Type.Number({ description: "记忆 id（提示词里记忆前的 #号）" }),
-      user: Type.Optional(Type.String({ description: "一般不用填，默认是当前对话的人" })),
-    }),
-    async execute(_id, p) {
-      try {
-        const r = closeMemory(d.store, { user: userOf(p.user), id: p.id });
-        return txt(r.already ? `#${p.id} 早就失效了（${new Date(r.closed_at).toLocaleString("zh-CN")}），没动它。` : `#${p.id} 关掉了。`, { ok: true });
-      } catch (e) {
-        return txt(`没关成：${(e as Error).message}`, { ok: false });
-      }
-    },
-  });
+  /**
+   * 计划：一个工具，action 分四件事（add / done / list / help）。
+   * 口头的承诺不落库等于没答应——他说「到点提醒我」、或者你答应了到点说一声，就是 add。
+   */
+  const PLAN_HELP = [
+    "plan 的用法（action 必填）：",
+    "  add    title when? content? why?   加一条到点提醒（when 给 ISO；重复就给 cron「分 时 日 月 周」）",
+    "  done   id status?                 标完成（默认 done，作废用 status=cancelled）",
+    "  list   status?                    看计划，默认 pending",
+    "  help                              看这份说明",
+  ].join("\n");
 
-  const planAdd = defineTool({
-    name: "plan_add",
-    label: "plan_add",
+  const plan = defineTool({
+    name: "plan",
+    label: "plan",
     executionMode: "sequential",
     description:
-      "加一条到点提醒。他让你几点提醒他什么、或者你答应了到点说一声，就记下来——口头的承诺不落库等于没答应。",
+      "到点提醒的计划。action 决定做什么：add（加一条）/ done（标完成或作废）/ list（看有哪些）/ help。"
+      + "他说「几点提醒我」、或者你答应了到点说一声，就 add——口头的承诺不落库等于没答应。"
+      + "他说某件事办完了，先 done 标完成，再 memory add 记一条带日期的事实。",
     parameters: Type.Object({
-      title: Type.String({ description: "提醒什么，一句话" }),
-      when: Type.Optional(Type.String({ description: "什么时候：ISO 时间，或者 cron 表达式（每天的就用 cron）" })),
-      content: Type.Optional(Type.String({ description: "到点要说的话或细节" })),
-      why: Type.Optional(Type.String({ description: "为什么记这条，一句话" })),
+      action: Type.String({ description: "add / done / list / help" }),
+      id: Type.Optional(Type.Number({ description: "done 用：计划 id（plan action=list 里那个）" })),
+      title: Type.Optional(Type.String({ description: "add 用：提醒什么，一句话" })),
+      when: Type.Optional(Type.String({ description: "add 用：ISO 时间，或 cron「分 时 日 月 周」" })),
+      content: Type.Optional(Type.String({ description: "add 用：到点要说的话或细节" })),
+      why: Type.Optional(Type.String({ description: "add 用：为什么记这条" })),
+      status: Type.Optional(Type.String({ description: "done 用：done（默认）/ cancelled；list 用：按状态筛" })),
     }),
     async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
       try {
-        const r = addPlan(d.store, d.cfg.timezone, {
-          title: p.title, content: p.content, why: p.why, pool: poolOf(),
-          kind: p.when && /^[\d*\/, -]+$/.test(p.when) && p.when.trim().split(/\s+/).length >= 5 ? "cron" : "once",
-          when: p.when,
-        }, d.now());
-        return txt(`记下了，到点会提醒（#${(r as any).id ?? "?"}）。`, { ok: true });
+        switch (action) {
+          case "help":
+            return txt(PLAN_HELP, { ok: true });
+          case "add": {
+            if (!p.title) return txt("add 要 title（提醒什么）。", { ok: false });
+            const isCron = !!p.when && p.when.trim().split(/\s+/).length >= 5;
+            const r = addPlan(d.store, d.cfg.timezone, {
+              title: p.title, content: p.content, why: p.why, pool: poolOf(),
+              kind: isCron ? "cron" : "once", when: p.when,
+            }, d.now());
+            return txt(`记下了，到点会提醒（#${(r as any).id ?? "?"}）。`, { ok: true, plan: r });
+          }
+          case "done": {
+            if (p.id === undefined) return txt("done 要 id。", { ok: false });
+            const r = updatePlan(d.store, p.id, p.status ?? "done");
+            return txt(`#${p.id} 标成 ${p.status ?? "done"} 了。`, { ok: true, plan: r });
+          }
+          case "list": {
+            const list = d.store.listPlans((p.status as any) ?? "pending");
+            if (!list.length) return txt(`没有 ${p.status ?? "pending"} 的计划。`, { ok: true, count: 0 });
+            return txt(list.map((x: any) => `#${x.id} ${x.title}${x.status ? `（${x.status}）` : ""}`).join("\n"), { ok: true, count: list.length });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${PLAN_HELP}`, { ok: false });
+        }
       } catch (e) {
-        return txt(`没记成：${(e as Error).message}`, { ok: false });
-      }
-    },
-  });
-
-  const planDone = defineTool({
-    name: "plan_done",
-    label: "plan_done",
-    executionMode: "sequential",
-    description:
-      "某事办完了就把它标成 done，别再提。他说「弄好了」「办完了」的时候，先标这个，再用 remember 记一条带日期的事实。",
-    parameters: Type.Object({
-      id: Type.Number({ description: "计划 id（rb \"plan-list\" 里那个）" }),
-      status: Type.Optional(Type.String({ description: "done（默认）/ cancelled" })),
-    }),
-    async execute(_id, p) {
-      try {
-        const r = updatePlan(d.store, p.id, p.status ?? "done");
-        return txt(`#${p.id} 标成 ${p.status ?? "done"} 了。`, { ok: true, plan: r });
-      } catch (e) {
-        return txt(`没标成：${(e as Error).message}`, { ok: false });
+        return txt(`没成：${(e as Error).message}`, { ok: false });
       }
     },
   });
@@ -294,7 +348,7 @@ export function createTools(d: ToolDeps) {
     executionMode: "sequential",
     description:
       "写沙盒里的文件（整份覆盖，不是追加）。笔记、话题库条目、技能运行时产物都写这里。"
-      + "要追加就别用这个：用 run_shell 里的 printf >> 。",
+      + "要追加就别用这个：用 terminal 里的 printf >> 。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，比如 topics/life/话题.md" }),
       content: Type.String({ description: "完整内容" }),
@@ -310,8 +364,8 @@ export function createTools(d: ToolDeps) {
   });
 
   const runShellTool = defineTool({
-    name: "run_shell",
-    label: "run_shell",
+    name: "terminal",
+    label: "terminal",
     executionMode: "sequential",
     description:
       "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。用来列目录（ls、rg --files）、搜内容、算数、批量处理；"
@@ -339,8 +393,8 @@ export function createTools(d: ToolDeps) {
       "运维与查询用：翻历史、看池、列计划、读图片、搜网页、在沙盒里跑命令。"
       + "命令：pool-list / pool-read / pool-search / plan-list / mem-search / img-list / img-get / "
       + "web-search / web-fetch / skills。"
-      + "记事、改记忆、加计划、标完成、读写文件、跑命令都有专门的工具（remember / forget / plan_add / plan_done / "
-      + "read_file / write_file / run_shell），别用 rb 做这些。"
+      + "记事、改记忆、加计划、标完成、读写文件、跑命令都有专门的工具（memory / plan / "
+      + "read_file / write_file / terminal），别用 rb 做这些。"
       + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
       + "args=\"sb run \\\"ls -la\\\"\"。不确定就 args=\"help\"。",
     parameters: Type.Object({ args: Type.String({ description: "命令 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
@@ -349,11 +403,11 @@ export function createTools(d: ToolDeps) {
       if (!parts.length) return txt("缺少命令。用 args=\"help\" 看清单", { ok: false });
       // 业务写入从这里挪走了：记忆和计划走结构化工具，rb 只管运维和查询
       const moved: Record<string, string> = {
-        "mem-add": "remember",
-        "mem-close": "forget",
-        "plan-add": "plan_add",
-        "plan-update": "plan_done",
-        sb: "read_file / write_file / run_shell",
+        "mem-add": "memory action=add",
+        "mem-close": "memory action=expire",
+        "plan-add": "plan action=add",
+        "plan-update": "plan action=done",
+        sb: "read_file / write_file / terminal",
       };
       if (moved[parts[0]]) {
         return txt(`\`rb ${parts[0]}\` 已经不在这里用了，改用 ${moved[parts[0]]}（结构化参数，路径不用拼）。`, { ok: false, useTool: moved[parts[0]] });
@@ -370,5 +424,5 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  return [send, staySilent, viewImage, remember, forget, planAdd, planDone, readFile, writeFile, runShellTool, rb];
+  return [send, staySilent, viewImage, memory, plan, readFile, writeFile, runShellTool, rb];
 }

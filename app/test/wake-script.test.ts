@@ -69,7 +69,7 @@ test("plan 剧本：带上当时排它的理由，并允许作废", () => {
   assert.match(p, /当初排它的理由：他周三说今天出结果/);
 
   const script = render("scene-plan", {});
-  assert.match(script, /plan_done/);   // 作废也走工具了，rb 只管运维
+  assert.match(script, /status=cancelled/);   // 作废走 plan action=done
   assert.match(script, /别念计划/);
 });
 

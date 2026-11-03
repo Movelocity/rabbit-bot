@@ -1,4 +1,4 @@
-/** 记忆与计划：原生工具（remember / forget / plan_add / plan_done），以及 rb 只留运维。 */
+/** 记忆与计划：二级入口工具（memory / plan），以及 rb 只留运维。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -41,31 +41,31 @@ const run = async (tool: any, params: any) => {
   return { ...r, text };
 };
 
-test("remember：自动落到这一轮的池和人，不用模型填 user", async () => {
+test("memory add：自动落到这一轮的池和人，不用模型填 user", async () => {
   const { store, pool, get } = setup();
-  const r = await run(get("remember"), { content: "11-03 钥匙弄好了，楼下五金店打的" });
+  const r = await run(get("memory"), { action: "add", content: "11-03 钥匙弄好了，楼下五金店打的" });
   assert.equal(r.details?.ok, true, JSON.stringify(r));
   const got = searchMemories(store, { user: store.lastUserId(pool!)!, pool: pool! });
   assert.equal(got.length, 1);
   assert.match(got[0].content, /五金店/);
 });
 
-test("remember：supersede 顶掉旧的，旧的那条查不到", async () => {
+test("memory add：supersede 顶掉旧的，旧的那条查不到", async () => {
   const { store, pool, get } = setup();
-  const a = await run(get("remember"), { content: "他想辞职" });
+  const a = await run(get("memory"), { action: "add", content: "他想辞职" });
   const id = Number(/（#(\d+)）/.exec(a.text)?.[1]);
   assert.ok(id > 0, a.text);
-  const b = await run(get("remember"), { content: "他不想辞了，想升职", supersede: id });
+  const b = await run(get("memory"), { action: "add", content: "他不想辞了，想升职", supersede: id });
   assert.equal(b.details?.ok, true);
   const cur = searchMemories(store, { user: store.lastUserId(pool!)!, pool: pool! });
   assert.equal(cur.length, 1);
   assert.match(cur[0].content, /升职/);
 });
 
-test("remember：自由文本里的引号和箭头不会被 shell 吃掉", async () => {
+test("memory add：自由文本里的引号和箭头不会被 shell 吃掉", async () => {
   const { store, pool, get } = createAndSeed();
   const content = '他说"那个项目"→ 电商 AI Agent；别记错';
-  const r = await run(get("remember"), { content, kind: "alias" });
+  const r = await run(get("memory"), { action: "add", content, kind: "alias" });
   assert.equal(r.details?.ok, true);
   const got = searchMemories(store, { user: store.lastUserId(pool!)!, pool: pool!, all: true });
   assert.equal(got[0].content, content, "一个字符都不该变");
@@ -75,57 +75,57 @@ function createAndSeed() {
   return setup();
 }
 
-test("remember：坏时间格式当场报错，不静默写坏", async () => {
+test("memory add：坏时间格式当场报错，不静默写坏", async () => {
   const { get } = setup();
-  const r = await run(get("remember"), { content: "x", from: "后天下午" });
+  const r = await run(get("memory"), { action: "add", content: "x", from: "后天下午" });
   assert.equal(r.details?.ok, false);
   assert.match(String(r.text), /看不懂的时间/);
 });
 
-test("forget：只关掉，不写新的", async () => {
+test("memory expire：只关掉，不写新的", async () => {
   const { store, pool, get } = setup();
-  const a = await run(get("remember"), { content: "他这周在出差" });
+  const a = await run(get("memory"), { action: "add", content: "他这周在出差" });
   const id = Number(/（#(\d+)）/.exec(a.text)?.[1]);
-  const r = await run(get("forget"), { id });
+  const r = await run(get("memory"), { action: "expire", id });
   assert.equal(r.details?.ok, true);
   const uid = store.lastUserId(pool!)!;
   assert.equal(searchMemories(store, { user: uid, pool: pool! }).length, 0);
   assert.equal(searchMemories(store, { user: uid, pool: pool!, all: true }).length, 1);
 });
 
-test("forget：关别人的记忆会被挡住", async () => {
+test("memory expire：关别人的记忆会被挡住", async () => {
   const { store, get } = setup();
-  const a = await run(get("remember"), { content: "他这周在出差" });
+  const a = await run(get("memory"), { action: "add", content: "他这周在出差" });
   const id = Number(/（#(\d+)）/.exec(a.text)?.[1]);
-  const r = await run(get("forget"), { id, user: "u_someone_else" });
+  const r = await run(get("memory"), { action: "expire", id, user: "u_someone_else" });
   assert.equal(r.details?.ok, false);
   assert.match(String(r.text), /不是 u_someone_else 的记忆/);
 });
 
-test("plan_add / plan_done：一件事从记下到标完成", async () => {
+test("plan add / plan done：一件事从记下到标完成", async () => {
   const { store, get } = setup();
-  const a = await run(get("plan_add"), { title: "提醒他带钥匙", when: "2026-11-04T09:00:00+08:00" });
+  const a = await run(get("plan"), { action: "add", title: "提醒他带钥匙", when: "2026-11-04T09:00:00+08:00" });
   assert.equal(a.details?.ok, true, JSON.stringify(a));
   const plans = store.listPlans("pending");
   assert.ok(plans.length >= 1, "计划要真的进库");
   const id = plans[0].id;
-  const b = await run(get("plan_done"), { id });
+  const b = await run(get("plan"), { action: "done", id });
   assert.equal(b.details?.ok, true);
 });
 
 test("没有对应池时明确报错，别写到一个空池里", async () => {
   const { get } = setup({ withUser: false });
-  const r = await run(get("remember"), { content: "x" });
+  const r = await run(get("memory"), { action: "add", content: "x" });
   assert.equal(r.details?.ok, false);
   assert.match(String(r.text), /没有对方的消息|没有对应的池/);
 });
 
 test("rb 不再接受业务写入，改成指向对应工具", async () => {
   const { get, calls } = setup();
-  for (const [cmd, tool] of [["mem-add", "remember"], ["mem-close", "forget"], ["plan-add", "plan_add"], ["plan-update", "plan_done"]]) {
+  for (const [cmd, tool] of [["mem-add", "memory"], ["mem-close", "memory"], ["plan-add", "plan"], ["plan-update", "plan"]]) {
     const r = await run(get("rb"), { args: `${cmd} --user u1 --content x --pool p1` });
     assert.equal(r.details?.ok, false, `${cmd} 该被挡下`);
-    assert.equal(r.details?.useTool, tool, `${cmd} 该指向 ${tool}`);
+    assert.match(String(r.details?.useTool), new RegExp(tool), `${cmd} 该指向 ${tool}`);
   }
   assert.deepEqual(calls, [], "被挡下的命令不该真的进沙盒");
 });
@@ -192,4 +192,61 @@ test("rb sb 也被挡了，指向文件工具", async () => {
   const r: any = await get("rb").execute("id", { args: "sb read topics/INDEX.md" });
   assert.equal(r.details?.ok, false);
   assert.match(String(r.details?.useTool), /read_file/);
+});
+
+// ---------- 二级入口：action 的边界 ----------
+
+test("memory：action 写错就把可选动作列出来，不假装成功", async () => {
+  const { get } = setup();
+  const r: any = await get("memory").execute("id", { action: "记一下" });
+  assert.equal(r.details?.ok, false);
+  const text = r.content.map((c: any) => c.text ?? "").join("");
+  assert.match(text, /recent[\s\S]*search[\s\S]*add[\s\S]*expire[\s\S]*update/, "该把六个动作列全");
+});
+
+test("memory：add 缺 content 直接说缺什么", async () => {
+  const { get } = setup();
+  const r: any = await get("memory").execute("id", { action: "add" });
+  assert.equal(r.details?.ok, false);
+  assert.match(r.content.map((c: any) => c.text ?? "").join(""), /要 content/);
+});
+
+test("memory：update 订正正文，时间线不动", async () => {
+  const { store, pool, get } = setup();
+  const a: any = await get("memory").execute("id", { action: "add", content: "钥匙在楼下打的" });
+  const id = Number(/（#(\d+)）/.exec(a.content.map((c: any) => c.text ?? "").join(""))?.[1]);
+  const b: any = await get("memory").execute("id", { action: "update", id, content: "钥匙在楼下五金店打的，20 块" });
+  assert.equal(b.details?.ok, true);
+  const got = searchMemories(store, { user: store.lastUserId(pool!)!, pool: pool! });
+  assert.equal(got.length, 1, "改内容不该多出一条");
+  assert.match(got[0].content, /20 块/);
+});
+
+test("memory：search 能按关键词翻，recent 给最近的", async () => {
+  const { get } = setup();
+  await get("memory").execute("id", { action: "add", content: "他周日约人吃潮汕火锅" });
+  await get("memory").execute("id", { action: "add", content: "他在用 Cursor 会员" });
+  const hit: any = await get("memory").execute("id", { action: "search", q: "火锅" });
+  const text = hit.content.map((c: any) => c.text ?? "").join("");
+  assert.match(text, /潮汕/);
+  assert.doesNotMatch(text, /Cursor/);
+  const recent: any = await get("memory").execute("id", { action: "recent", limit: 5 });
+  assert.equal(recent.details?.count, 2);
+});
+
+test("plan：list 给得出刚加的，help 列出四个动作", async () => {
+  const { get } = setup();
+  await get("plan").execute("id", { action: "add", title: "提醒他开会", when: "2026-11-04T09:00:00+08:00" });
+  const l: any = await get("plan").execute("id", { action: "list" });
+  assert.match(l.content.map((c: any) => c.text ?? "").join(""), /提醒他开会/);
+  const h: any = await get("plan").execute("id", { action: "help" });
+  assert.match(h.content.map((c: any) => c.text ?? "").join(""), /add[\s\S]*done[\s\S]*list/);
+});
+
+test("terminal：名字换了，描述里说清列目录也走它", async () => {
+  const { tools } = setup();
+  const t = tools.find((x: any) => x.name === "terminal");
+  assert.ok(t, "工具名该是 terminal");
+  assert.match(t.description, /列目录/);
+  assert.ok(!tools.some((x: any) => x.name === "run_shell"), "旧名字该没了");
 });

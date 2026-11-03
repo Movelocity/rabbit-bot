@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { needsPlanNudge } from "../src/core/nudge.ts";
 
 const send = { name: "send" };
-const planAdd = { name: "plan_add" };
+const planAdd = { name: "plan", args: { action: "add" } };
 
 test("计划唤醒：说了话但没排下次 → 要补提醒", () => {
   assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [send] }), true);
@@ -32,6 +32,6 @@ test("send 失败不算说过话", () => {
   assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [{ name: "send", isError: true }] }), false);
 });
 
-test("plan_add 失败不算排上了", () => {
-  assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [send, { name: "plan_add", isError: true }] }), true);
+test("plan action=add 失败不算排上了", () => {
+  assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [send, { name: "plan", args: { action: "add" }, isError: true }] }), true);
 });

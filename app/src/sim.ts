@@ -64,7 +64,7 @@ async function main() {
     say("@", "grp-1", "帮我看下这个 [普通方括号] [emoji:666]", "carol");
     await sleep(3000); await app.queue.idle();
 
-    console.log("\n=== 3. 写计划（LLM 工具 plan_add）+ 程序侧计划到点唤醒 ===");
+    console.log("\n=== 3. 写计划（LLM 工具 plan action=add）+ 程序侧计划到点唤醒 ===");
     say("p", "dm-alice", "/plan 一分钟后提醒我喝水，记住我喜欢喝茶");
     await sleep(3000); await app.queue.idle();
     const pool = app.store.resolvePool("p1")!;

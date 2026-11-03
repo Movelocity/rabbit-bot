@@ -184,7 +184,7 @@ test("暂停开关：暂停时不唤醒，恢复后 tick 处理积压", async ()
   await t.done();
 });
 
-test("计划：Agent 用 plan_add 写计划 → 到点 tick 命中 → 走队列唤醒并提醒", async () => {
+test("计划：Agent 用 plan 工具写计划 → 到点 tick 命中 → 走队列唤醒并提醒", async () => {
   // 这条测的是「计划链路」，不是时机
   const t = await setup();
   t.dm("/plan 提醒我");

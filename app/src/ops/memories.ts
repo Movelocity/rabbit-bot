@@ -79,6 +79,8 @@ export interface SearchMemoryInput {
   user?: string;
   pool?: string;
   limit?: number;
+  /** 正文关键词（LIKE） */
+  q?: string;
   /** 查「那一刻」有效的记忆（不传 = 此刻） */
   at?: string | number;
   /** 连失效的一起给 */
@@ -92,6 +94,7 @@ export function searchMemories(store: Store, input: SearchMemoryInput) {
   const ms = store.visibleMemories(input.user, pool, clampInt(input.limit, 1, 200, 20), {
     at: at ?? undefined,
     includeExpired: !!input.all,
+    q: input.q?.trim() || undefined,
   }) as any[];
   return ms.map((m) => ({
     id: m.id,
@@ -140,4 +143,28 @@ export function closeMemory(store: Store, input: { user?: string; id?: string | 
   if (already && already <= at) return { id, closed_at: already, already: true };
   store.closeMemoryRow(id, at);
   return { id, closed_at: at, already: false };
+}
+
+/**
+ * 就地改一条记忆的正文：订正错字、补上细节。
+ *
+ * 和「写新的顶掉旧的」不同——这个不动时间线，是「还是同一件事，之前记岔了」。
+ * 事实真的变了（想辞职 → 想升职）就别用这个，那是有先后顺序的两件事。
+ */
+export function updateMemory(store: Store, input: { user?: string; id?: string | number; content?: string; from?: string | number }) {
+  if (!input.user) throw new Error("缺少 user");
+  const id = Number(input.id);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`要的是记忆 id（整数），收到 ${input.id}`);
+  if (input.content === undefined && input.from === undefined) throw new Error("要改什么？给 content（正文）或 from（从什么时候起）");
+  const m = store.getMemory(id);
+  if (!m) throw new Error(`没有 id=${id} 这条记忆`);
+  if (m.user_id !== input.user) throw new Error(`id=${id} 不是 ${input.user} 的记忆，不能替他改`);
+  const patch: { content?: string; valid_from?: number | null } = {};
+  if (input.content !== undefined) {
+    if (!String(input.content).trim()) throw new Error("正文不能改成空的——不想留了就用 expire 关掉");
+    patch.content = String(input.content);
+  }
+  if (input.from !== undefined) patch.valid_from = parseTs(input.from);
+  store.updateMemoryRow(id, patch);
+  return { id, content: patch.content ?? m.content, from: patch.valid_from ?? m.valid_from ?? m.created_at };
 }

@@ -510,7 +510,7 @@ export class App {
       if (left.callsLeft > 0 && left.tokensLeft > 0) {
         try {
           const r2 = await this.engine.run(
-            "你刚才是照自己排的计划开口的，说完了。现在做决定：还想接着聊，就用 plan_add 给自己排下一次（content 写清到点要说什么）；不想，就只回一句「不排」。别用 send，这条不发出去。",
+            "你刚才是照自己排的计划开口的，说完了。现在做决定：还想接着聊，就用 plan 工具（action=add）给自己排下一次（content 写清到点要说什么）；不想，就只回一句「不排」。别用 send，这条不发出去。",
             left,
           );
           this.store.addUsage(day, r2.llmCalls, r2.tokens, 0);
@@ -518,7 +518,7 @@ export class App {
           res.tokens += r2.tokens;
           res.llmCalls += r2.llmCalls;
           entry.nudged = true;
-          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => c.name === "plan_add" && !c.isError) ? "排上了" : "它说不排"}）`);
+          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => c.name === "plan" && (c.args as any)?.action === "add" && !c.isError) ? "排上了" : "它说不排"}）`);
         } catch (e) {
           this.log.warn(`补提醒失败：${(e as Error).message}`);
         }
