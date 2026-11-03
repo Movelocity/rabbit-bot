@@ -1,5 +1,6 @@
-/** 运维命令：pause / resume / status / usage / wakes / plans / handoffs / identities / link / models */
+/** 运维命令：pause / resume / fresh / status / usage / wakes / plans / handoffs / identities / link / models */
 import "./env-defaults.ts";
+import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.ts";
 import { Store } from "./core/db.ts";
@@ -23,6 +24,14 @@ async function main() {
   switch (cmd) {
     case "pause": store.setPaused(true); out("已暂停（消息仍会入池，但不会唤醒 Agent）"); break;
     case "resume": store.setPaused(false); out("已恢复"); break;
+    case "fresh": {
+      // 下次唤醒换新会话：改完 prompt / 换了人设 / 工具大改之后，让她别带着旧上下文继续
+      const flag = path.join(cfg.dataDir, "run", "fresh-session");
+      fs.mkdirSync(path.dirname(flag), { recursive: true });
+      fs.writeFileSync(flag, new Date().toISOString());
+      out("已标记：下一次唤醒会开新会话（不用重启）");
+      break;
+    }
     case "status": {
       const day = dayKey(Date.now());
       out({ paused: store.isPaused(), today: day, usage: store.getUsage(day), limits: cfg.limits, pools: store.listPools().length, unreadPools: store.poolsWithUnread(), pendingPlans: store.listPlans("pending").length, handoffs: store.listHandoffs().length });

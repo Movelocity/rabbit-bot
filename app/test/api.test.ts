@@ -119,7 +119,7 @@ test("记忆：写、查；scope 按池类型推导", async () => {
 test("技能：列出设计文件和数据目录", async () => {
   const r = await call("/v1/skills");
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.data, [{ name: "demo", skill: "skills/demo/SKILL.md", data: "skills/demo/data", has_data: false }]);
+  assert.deepEqual(r.body.data, [{ name: "demo", description: "", skill: "skills/demo/SKILL.md", data: "skills/demo/data", has_data: false }]);
 });
 
 test("沙盒文件：写读、越界拒绝", async () => {

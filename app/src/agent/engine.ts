@@ -120,7 +120,30 @@ export class PiEngine implements AgentEngine {
     return { loader, community: !!communityPath };
   }
 
+  /**
+   * 「刷新会话」的开关文件：`npm run ctl -- fresh` 写下它，下一次唤醒就换新会话。
+   *
+   * 为什么用文件而不是内存标志：ctl 是另一个进程，碰不到正在跑的 Agent；
+   * 而这个动作本来也不急，下一轮再换正好，不用为了它重启。
+   */
+  private takeFreshFlag(): boolean {
+    const p = path.join(this.d.cfg.dataDir, "run", "fresh-session");
+    try {
+      if (!fs.existsSync(p)) return false;
+      fs.rmSync(p, { force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async ensureSession(): Promise<AgentSession> {
+    if (this.takeFreshFlag()) {
+      // 丢掉手里的会话引用，但不动磁盘上的旧会话文件（复盘时还要看）
+      this.session = null;
+      this.freshNext = true;
+      this.d.log.info("收到刷新标记：下一轮开新会话");
+    }
     if (this.session) return this.session;
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false }, // 需求 §9：关闭 pi 自带的自动压缩
