@@ -114,41 +114,17 @@
     "dailyCap": {
       "L1": 2,
       "L2": 1
-    },
-    "wave": {
-      "enabled": false,
-      "delayMin": 10,
-      "peakMin": 20,
-      "thr": 0.5,
-      "wUser": 0.4,
-      "wSelf": 0.25,
-      "wIdle": 0.55,
-      "idleRampH": 24,
-      "idleStartH": 6,
-      "horizonH": 24,
-      "idleExemptMin": 180,
-      "ratio": 0.5,
-      "maxStages": 3,
-      "maxWakesPerDay": 8,
-      "dailyTokens": 300000,
-      "quietStart": "00:30",
-      "quietEnd": "08:00"
-    },
-    "energy": {
-      "enabled": true,
-      "cap": 8,
-      "floor": 1,
-      "halfH": 8,
-      "restH": 1,
-      "costInit": 1.0,
-      "costAnswer": 0.1,
-      "gain": 1.0,
-      "mid": 3.8,
-      "scale": 0.9,
-      "activeStartH": 8,
-      "activeEndH": 24,
-      "hotMin": 3,
-      "coldMin": 240
     }
+  },
+  "proactive": {
+    "enabled": true,
+    "reflectionDelayMs": 300000,
+    "urgencyThreshold": 0.35,
+    "minSilentMs": 300000,
+    "minIntervalMs": 600000,
+    "maxPerDay": 6,
+    "maxConsecutive": 3,
+    "quietStart": "23:30",
+    "quietEnd": "08:00"
   }
 }

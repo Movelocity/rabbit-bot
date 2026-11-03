@@ -24,13 +24,10 @@ async function setup(over: any = {}) {
   });
   // 默认按「每条消息各自去抖唤醒」跑（老链路），要测 tick 批处理的那条自己打开
   if (over.batchToTick === undefined) cfg.scheduler.batchToTick = false;
-  // 默认跑水位（老契约），充能模型只在专用用例里打开——否则这里的断言全都要重写，
-  // 而它们守的是「别把用户晾着 / 别每 3 分钟叫一次」这些不该随模型变的行为。
-  if ((over.tide as any)?.energy === undefined) {
-    cfg.tide.energy = { ...(cfg.tide.energy ?? {}), enabled: false };
-  }
-  if ((over.tide as any)?.wave?.enabled === undefined) {
-    cfg.tide.wave = { ...(cfg.tide.wave ?? {}), enabled: true };
+  // 主动开口默认关掉：这层用例守的是「别把用户晾着」「别每 3 分钟叫一次」这类链路行为，
+  // 不该被「她现在想不想说话」左右。专测主动的用例自己传 proactive 打开。
+  if ((over as any).proactive === undefined) {
+    cfg.proactive = { ...(cfg.proactive ?? {}), enabled: false };
   }
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
@@ -184,8 +181,8 @@ test("暂停开关：暂停时不唤醒，恢复后 tick 处理积压", async ()
 });
 
 test("计划：Agent 用 plan_add 写计划 → 到点 tick 命中 → 走队列唤醒并提醒", async () => {
-  // 这条测的是「计划链路」，不是时机：关掉水位判定，否则刚聊完 30 秒的 L2 计划会被拦下
-  const t = await setup({ tide: { wave: { enabled: false } } });
+  // 这条测的是「计划链路」，不是时机
+  const t = await setup();
   t.dm("/plan 提醒我");
   await t.settle(30_000);
   const plans = t.app.store.listPlans();
@@ -199,21 +196,30 @@ test("计划：Agent 用 plan_add 写计划 → 到点 tick 命中 → 走队列
   await t.done();
 });
 
-test("L2 计划到点但刚聊完：被水位拦下，记 skip（带水位），不弹计划", async () => {
+test("L2 计划到点就弹：提醒是她答应的，不再被聊天时机挡下", async () => {
+  // 旧的「水位」会把刚聊完的 L2 计划拦下来，理由是「刚说过话别再打扰」。
+  // 但计划是用户自己要的提醒，到点不弹才是 bug。时间敏感的计划不该排在时机后面。
   const t = await setup();
   t.dm("/plan 提醒我");
   await t.settle(30_000);
   await t.settle(120_000);
-  assert.equal(t.wakes.some((w) => w.type === "plan"), false, "聊完 30 秒就弹计划，正是水位要挡的");
-  const ev = t.app.store.recentTideEvents(5).find((e) => e.kind === "skip");
-  assert.ok(ev, "该记一条 skip");
-  assert.match(String(ev.reason), /水位/);
-  assert.equal(typeof ev.wave_a, "number", "水位要落库，调参只看这列");
+  assert.equal(t.wakes.some((w) => w.type === "plan"), true, "计划到点就该弹");
+  assert.ok(t.mock.sent.some((s) => s.content.startsWith("⏰ 提醒")));
   await t.done();
 });
 
-test("tick：没有未读，但水位退到档 → 仍然给 agent 一次自己找话题的机会", async () => {
-  const t = await setup();
+/** 塞一条「她想说话了」的自省结果，让门控有分可判 */
+function seedReflection(t: any, poolId: string, over: Record<string, unknown> = {}) {
+  const now = t.clock.now();
+  t.app.store.saveReflection({
+    user_id: "mia", pool_id: poolId, thought: "想问问他吃饭没", style_hint: "随口问一句",
+    urgency: 0.9, topic_pick: "晚饭", topic_angle: "别像在检查", next_at: now + 3600_000, created_at: now,
+    ...over,
+  });
+}
+
+test("tick：没有未读，但自省说她想说 → 仍然给一次自己找话题的机会", async () => {
+  const t = await setup({ proactive: { enabled: true } });
   const now = t.clock.now();
   // 三轮对话，都直接入库（不进未读队列），模拟「聊完了、人没再说话」
   let lastMsg: any = null;
@@ -225,11 +231,11 @@ test("tick：没有未读，但水位退到档 → 仍然给 agent 一次自己�
       reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
     });
   }
-  // 这些消息「已经被读过了」：把游标推到最后，留出「没未读但水位还高」的局面
   t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
   assert.equal(t.app.store.poolsWithUnread().length, 0, "前提：没有未读");
-  const enqueued = t.app.scheduler.tick();
-  assert.equal(enqueued, true, "水位到档时 tick 必须入队");
+  seedReflection(t, lastMsg.pool_id);
+
+  assert.equal(t.app.scheduler.tick(), true, "自省过了门控，tick 必须入队");
   await t.settle(0);
   const last = t.wakes[t.wakes.length - 1];
   assert.equal(last.type, "tick");
@@ -237,8 +243,8 @@ test("tick：没有未读，但水位退到档 → 仍然给 agent 一次自己�
   await t.done();
 });
 
-test("tick 主动：问过一档就不再重复问（不发也不该每 3 分钟叫一次）", async () => {
-  const t = await setup();
+test("tick 主动：说过一次之后，冷却期内不再问（也别每 3 分钟问一次）", async () => {
+  const t = await setup({ proactive: { enabled: true } });
   const now = t.clock.now();
   let lastMsg: any = null;
   for (const [i, min] of [40, 37, 34].entries()) {
@@ -250,14 +256,34 @@ test("tick 主动：问过一档就不再重复问（不发也不该每 3 分钟
     });
   }
   t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
+  seedReflection(t, lastMsg.pool_id, { urgency: 0.4 });
 
   assert.equal(t.app.scheduler.tick(), true, "第一次该叫醒她");
   await t.settle(0);
-  // 同一档：无论她发没发，都不该再叫
+  // 真的说出去了：冷却从这一刻开始算
+  t.app.store.logProactive({
+    user_id: "mia", pool_id: lastMsg.pool_id, ts: t.clock.now(), decision: "speak", reason: "ok", urgency: 0.4,
+  });
   t.clock.advance(3 * 60_000);
-  assert.equal(t.app.scheduler.tick(), false, "同一档不能每 3 分钟重问一次");
-  t.clock.advance(3 * 60_000);
-  assert.equal(t.app.scheduler.tick(), false);
+  assert.equal(t.app.scheduler.tick(), false, "urgency 0.4 要等约 6.6 分钟，3 分钟不该重问");
+  await t.done();
+});
+
+test("tick 主动：她想了但决定不说，也会留一行账（agent_silent）", async () => {
+  const t = await setup({ proactive: { enabled: true } });
+  const now = t.clock.now();
+  const m = t.app.store.insertMessage({
+    platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "s1",
+    sender_id: "mia", sender_name: "mia", ts: now - 40 * 60_000, text: "睡了",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  t.app.store.setCursor(m.pool_id, m.seq);
+  seedReflection(t, m.pool_id);
+  assert.equal(t.app.scheduler.tick(), true);
+  await t.settle(0);
+  const rows = t.app.store.recentProactive(10);
+  assert.ok(rows.length > 0, "开口与否都要记账，否则查不出「她今天为什么没说话」");
+  assert.ok(rows.every((r: any) => typeof r.reason === "string" && r.reason.length > 0));
   await t.done();
 });
 
@@ -358,28 +384,6 @@ test("没人等着的时候报错：不发系统提示，避免打扰", async ()
     id: "w1", type: "tick", reasons: ["定时检查"], pools: [], planFires: [], wakeAt: t.clock.now(),
   });
   assert.equal(t.mock.sent.length, 0, "没人在等就别发");
-  await t.done();
-});
-
-test("判定：她主动说完没人回，要等三倍间隔（接线层，不是纯函数）", async () => {
-  const t = await setup();
-  const now = t.clock.now();
-  // 他的消息会顺带建池
-  const m = t.app.store.insertMessage({
-    platform: "feishu", external_chat_id: "c1", pool_kind: "private", msg_id: "m1",
-    sender_id: "u1", sender_name: "他", ts: now - 60 * 60e3, text: "嗯",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  })!;
-  const pool = m.pool_id;
-  // 20 分钟前她自己起了个话头，用户一直没回
-  t.app.store.db.prepare(
-    "INSERT INTO messages(pool_id,platform,msg_id,sender_id,sender_name,ts,text,from_self) VALUES(?,?,?,?,?,?,?,?)")
-    .run(pool, "feishu", "m2", "bot", "她", now - 20 * 60e3, "今天风挺大", 1);
-  t.app.store.setKv(`energy.${pool}`, JSON.stringify({ E: 7, ts: now - 5 * 60e3, day: "x" }));
-
-  const got = (t.app as any).energyTick(pool, now, { ...(t.app as any).o.cfg.tide.energy, enabled: true });
-  // I(7) ≈ 9.6 分钟 < 20 分钟，但她说完没人回要三倍 ≈ 28.7 分钟，所以不能放行
-  assert.ok(!got || !got.pool, `她说完没人回，20 分钟不该放行（实际 ${JSON.stringify(got)}）`);
   await t.done();
 });
 

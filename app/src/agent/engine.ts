@@ -50,6 +50,12 @@ export interface AgentEngine {
   /** 新会话首轮需要带上的交接文档 */
   takePendingHandoff(): string | null;
   run(prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult>;
+  /**
+   * 自省：独立会话、无工具、独立 system prompt，不污染主对话。
+   * 主动机制靠它拿 urgency——「她想不想说话」必须由模型自己判断，
+   * 在会话里问会被前面的聊天带偏，所以另起一个。
+   */
+  reflect(prompt: string, limits: RunLimits, systemPrompt: string): Promise<RunResult>;
   dispose(): Promise<void>;
 }
 
@@ -73,6 +79,7 @@ const preview = (r: any): string => {
 export class PiEngine implements AgentEngine {
   readonly seenPools = new Set<string>();
   private session: AgentSession | null = null;
+  private reflectSession: AgentSession | null = null;
   private pendingHandoff: string | null = null;
   private loopGuardImpl: "pi-death-loop-guard" | "builtin" = "builtin";
   private readonly piDir: string;
@@ -93,14 +100,14 @@ export class PiEngine implements AgentEngine {
 
   takePendingHandoff() { const h = this.pendingHandoff; this.pendingHandoff = null; return h; }
 
-  private async buildLoader(settingsManager: SettingsManager, useCommunity: boolean) {
+  private async buildLoader(settingsManager: SettingsManager, useCommunity: boolean, systemPrompt?: string) {
     const lg = this.d.cfg.loopGuard;
     const communityPath = useCommunity ? communityLoopGuardPath() : null;
     if (communityPath) applyCommunityLoopGuardEnv(lg);
     const loader = new DefaultResourceLoader({
       cwd: this.cwd, agentDir: this.piDir, settingsManager,
       noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      systemPrompt: this.d.systemPrompt,
+      systemPrompt: systemPrompt ?? this.d.systemPrompt,
       additionalExtensionPaths: communityPath ? [communityPath] : [],
       // codemode：模型写的 JS 跑在 QuickJS(WASM) 里，唯一能力是调用这些工具。
       // SDK 不会自动加载内置扩展，必须自己注册；不注册的话 tools 里写 codemode 只是个空名字。
@@ -155,6 +162,35 @@ export class PiEngine implements AgentEngine {
       res.tokens += h.tokens; res.llmCalls += h.llmCalls; res.handoffId = h.id ?? undefined;
     }
     return res;
+  }
+
+  /**
+   * 自省调用：另起一个无工具会话。
+   *
+   * 为什么不复用主会话：
+   * 1) 主会话有完整的聊天上下文，问「你现在想说什么」会被前面的话带跑；
+   * 2) 自省的输出不该出现在聊天历史里——那是她心里的念头，不是她说的话。
+   *
+   * 会话常驻（不每轮重建），这样她的「想事情」有连续性；新建时用 in-memory session，
+   * 不落盘，重启就忘——自省本来就只需要看当下。
+   */
+  async reflect(prompt: string, limits: RunLimits, systemPrompt: string): Promise<RunResult> {
+    if (!this.reflectSession) {
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, maxRetries: this.d.cfg.llm.maxRetries },
+      } as any);
+      const { loader } = await this.buildLoader(settingsManager, false, systemPrompt);
+      const { session } = await createAgentSession({
+        cwd: this.cwd, agentDir: this.piDir, model: this.d.model, thinkingLevel: this.d.cfg.llm.thinkingLevel,
+        modelRuntime: this.d.modelRuntime, resourceLoader: loader, settingsManager,
+        sessionManager: SessionManager.inMemory(this.cwd),
+        noTools: "builtin", tools: [], customTools: [],
+      });
+      this.reflectSession = session;
+      this.d.log.info("自省会话就绪（无工具、独立 system prompt）");
+    }
+    return this.runPrompt(this.reflectSession, prompt, limits);
   }
 
   private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
@@ -233,7 +269,7 @@ export class PiEngine implements AgentEngine {
     return { id, tokens: r.tokens, llmCalls: r.llmCalls };
   }
 
-  async dispose() { this.session?.dispose(); this.session = null; }
+  async dispose() { this.session?.dispose(); this.session = null; this.reflectSession?.dispose(); this.reflectSession = null; }
 }
 
 /** 解析模型：真实 provider 需对应环境变量里的 API key（pi 自己读取）。 */

@@ -1,7 +1,6 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
-import type { WaveConfig } from "./core/wave.ts";
-import type { EnergyConfig } from "./core/energy.ts";
+import type { GateConfig } from "./core/gate.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,9 +33,14 @@ export interface Config {
   tide: {
     enabled: boolean;
     dailyCap: { L1: number; L2: number };
-    wave?: Partial<WaveConfig>;
-    /** 充能模型：一个状态量 E + 一个函数 I(E)。开了就替代 wave，可随时关掉回退 */
-    energy?: Partial<EnergyConfig>;
+  };
+  /**
+   * 主动开口：自省（模型自己判断有多想说）+ 六道门。
+   * 取代旧的 tide.wave / tide.energy——那两套都是拿代码拍概率，跟「她想不想说」无关。
+   */
+  proactive: { enabled: boolean } & Partial<GateConfig> & {
+    /** 用户最后一条消息之后多久开始自省 */
+    reflectionDelayMs?: number;
   };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
@@ -136,24 +140,21 @@ export function validateConfig(cfg: Config): void {
     if (!(Number.isInteger(L1) && L1 >= 0)) throw new Error("config: tide.dailyCap.L1 必须是 >=0 的整数");
     if (!(Number.isInteger(L2) && L2 >= 0)) throw new Error("config: tide.dailyCap.L2 必须是 >=0 的整数");
   }
-  // 水位场定标：wUser 必须 < thr，否则单条孤立消息就能过阈值，整套机制退化成定时开口
-  const wv = cfg.tide?.wave;
-  if (cfg.tide?.enabled && wv?.enabled) {
-    const d = wv.delayMin ?? 30, p = wv.peakMin ?? 45;
-    const thr = wv.thr ?? 0.5, wu = wv.wUser ?? 0.4;
-    if (!(p > d)) throw new Error("config: tide.wave.peakMin 必须大于 delayMin（峰要落在不打扰期之后）");
-    if (!(thr > 0 && thr <= 1)) throw new Error("config: tide.wave.thr 必须在 (0,1]");
-    if (!(wu < thr)) throw new Error("config: tide.wave.wUser 必须小于 thr，否则阈值形同虚设");
-    const wi = wv.wIdle ?? 0.25, ramp = wv.idleRampH ?? 24;
-    if (!(wi >= 0 && wi <= 1)) throw new Error("config: tide.wave.wIdle 必须在 [0,1]");
-    if (!(typeof ramp === "number" && ramp > 0)) throw new Error("config: tide.wave.idleRampH 必须是正数");
-    const start = wv.idleStartH ?? 6;
-    if (!(typeof start === "number" && start >= 0 && start < ramp)) {
-      throw new Error("config: tide.wave.idleStartH 必须 >=0 且小于 idleRampH");
+  // 主动开口：门控参数定标。定错了不是不开口就是话痨，两头都难看
+  const pr = cfg.proactive;
+  if (pr?.enabled) {
+    const thr = pr.urgencyThreshold;
+    if (thr !== undefined && !(thr > 0 && thr < 1)) throw new Error("config: proactive.urgencyThreshold 必须在 (0,1) 开区间");
+    for (const k of ["minSilentMs", "minIntervalMs", "reflectionDelayMs"] as const) {
+      const v = pr[k];
+      if (v !== undefined && !(Number.isFinite(v) && v >= 0)) throw new Error(`config: proactive.${k} 必须是非负数`);
     }
-    const ratio = wv.ratio ?? 0.5, stages = wv.maxStages ?? 3;
-    if (!(ratio > 0 && ratio < 1)) throw new Error("config: tide.wave.ratio 必须在 (0,1)，每退一半给一档就是 0.5");
-    if (!(Number.isInteger(stages) && stages >= 1)) throw new Error("config: tide.wave.maxStages 必须是 >=1 的整数");
+    if (pr.maxPerDay !== undefined && !(Number.isInteger(pr.maxPerDay) && pr.maxPerDay > 0)) {
+      throw new Error("config: proactive.maxPerDay 必须是正数（0 次等于关掉，请用 enabled=false）");
+    }
+    if (pr.maxConsecutive !== undefined && !(Number.isInteger(pr.maxConsecutive) && pr.maxConsecutive > 0)) {
+      throw new Error("config: proactive.maxConsecutive 必须是正整数");
+    }
   }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");

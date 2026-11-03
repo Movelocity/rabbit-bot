@@ -27,6 +27,8 @@ mock 适配器(模拟) ──┘        │
 | `src/core/hub.ts` | 入池、未读收集与游标推进、send（表情解析/确认等待/收集新消息） |
 | `src/core/scheduler.ts` | tick、活跃期短 tick、去抖（含最长等待）、群未@只等 tick |
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
+| `src/core/reflection.ts` | 自省：没人说话时让模型想一下，输出 `urgency`（有多想说）+ 念头 |
+| `src/core/gate.ts` | 主动开口的六道门：低分 / 刚聊完 / 夜间 / 冷却 / 日上限 / 连说没人回 |
 | `src/core/plans.ts` / `time.ts` | 计划校验（ISO / cron，Asia/Shanghai）、到点匹配、同点只触发一次、停机补发/跳过、过期 |
 | `src/core/emoji.ts` | 表情映射表加载；出站 `[emoji:中文id]` 解析（匹配不上原样输出，普通 `[xxx]` 不处理）；入站 `[名字]` → `[emoji:中文id]` |
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
@@ -129,3 +131,8 @@ npm run ctl -- models [provider]                 # pi 支持的模型、当前�
 6. **游标**：把消息交给 Agent 时推进；若 LLM 调用失败且一条都没发出，游标回滚，下次 tick 重试。
 7. **“必要的近期上下文”**：只在某个池第一次出现在当前 pi 会话里时附带最近 N 条（之后会话里已有）；记忆同理每会话每人只注入一次。
 8. **每日 token 上限**按 provider 报告的 totalTokens（含缓存读）计算，偏保守；超过时当前轮中止、后续唤醒跳过（消息保留未读）。
+
+## 借鉴
+
+- **主动开口机制参考 [Shikigami Protocol](https://github.com/Shikigami-Lab/Shikigami-Protocol)（AGPL-3.0）**：自省（模型自填 `urgency`）→ 六道门 → 开口 这条链路，以及「冷却随 urgency 缩放」「连续说了没人回就收」「每次决策记 `skip_reason`」三个做法，思路来自它的 ASE（Autonomous Self-Expression）。**只借鉴思路，没有复制代码**（对方 AGPL-3.0，本仓库不复用其任何源文件）。
+- 领域契约（`TURN_STATES` / `ACTIONS` / `SEGMENT_MODES`、决策次数与投递次数分账）参考 [astrbot_plugin_private_companion](https://github.com/menglimi/astrbot_plugin_private_companion) 的 `decision/contract.py` 与 `proactive/budget.py`，同样只取概念。

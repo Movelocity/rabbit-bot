@@ -77,7 +77,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
   const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
-  const silentN = primaryPool ? store.silentWaveStreak(primaryPool) : 0;
+  const silentN = primaryPool ? store.silentStreak(primaryPool) : 0;
   const last = store.lastTideFired(primaryPool);
   const day = localDay(x.now, "Asia/Shanghai");
   const firedL2 = store.countTideFired(day, primaryPool, "L2");
@@ -91,7 +91,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   state.push(`- 今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`);
   state.push(`- 距上次对话：${lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）"}`);
   if (x.wake.proactive?.length) {
-    state.push(`- 水位：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮是退到这一档给的机会，不是有人找你）`);
+    state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你，是你自己想说话。确实没话说就 stay_silent，别硬找）`);
   }
   if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来又什么都没说，这次别再挑`);
   if (plan0) {

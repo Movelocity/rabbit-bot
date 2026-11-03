@@ -38,6 +38,19 @@ CREATE TABLE IF NOT EXISTS tide_events (
   stage INTEGER -- 退潮第几档：0 = 首档，1.. = 每退一半一档
 );
 CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
+CREATE TABLE IF NOT EXISTS reflections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, pool_id TEXT NOT NULL,
+  thought TEXT NOT NULL DEFAULT '', style_hint TEXT NOT NULL DEFAULT '',
+  urgency REAL NOT NULL DEFAULT 0, topic_pick TEXT NOT NULL DEFAULT '', topic_angle TEXT NOT NULL DEFAULT '',
+  next_at INTEGER, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reflections_pool ON reflections(pool_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS proactive_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, pool_id TEXT NOT NULL,
+  ts INTEGER NOT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL,
+  urgency REAL, silent_sec INTEGER, cooldown_req INTEGER, msg_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_proactive_ts ON proactive_log(ts DESC);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fact', content TEXT NOT NULL,
@@ -248,78 +261,29 @@ export class Store {
   }
 
   /**
-   * 当天主动唤醒的用量：叫了几次、烧了多少 token。
-   * 只统计带 proactive 的 tick（wake_log 里 reasons 提到水位），不含用户消息那一类。
+   * 这段沉默里她「醒过来了又决定不说」连了几次。
+   *
+   * 用途：她连着憋几次就别再惯着——提示词里点一句「这轮必须说」。
+   * 旧实现数的是 tide_events 的 wave 档，那套已经删了，所以改数 proactive_log 的 agent_silent。
+   * 遇到第一条真正说出口的就断，因为「憋」只对连续的沉默有意义。
    */
-  proactiveUsage(fromTs: number, toTs: number): { wakes: number; tokens: number } {
-    const rows = this.db.prepare("SELECT json FROM wake_log WHERE ts >= ? AND ts < ?").all(
-      new Date(fromTs).toISOString(), new Date(toTs).toISOString(),
-    ) as { json: string }[];
-    let wakes = 0, tokens = 0;
+  silentStreak(poolId: string, limit = 5): number {
+    const rows = this.db.prepare(
+      "SELECT decision, reason FROM proactive_log WHERE pool_id=? ORDER BY ts DESC LIMIT ?").all(poolId, limit) as any[];
+    let n = 0;
     for (const r of rows) {
-      try {
-        const e = JSON.parse(r.json);
-        const isProactive = e.type === "tick" && (e.reasons ?? []).some((x: string) => String(x).includes("水位"));
-        if (!isProactive) continue;
-        wakes += 1;
-        tokens += Number(e.tokens ?? 0);
-      } catch { /* 坏行跳过 */ }
+      if (r.decision === "skip" && String(r.reason).startsWith("agent_silent")) n++;
+      else break;
     }
-    return { wakes, tokens };
-  }
-
-  /**
-   * 这段沉默里**问过**的档位（不管是发了还是没发）。
-   *
-   * 用途只有一个：同一档不要再问第二遍。少了这条，水位停在某一档时每个 tick
-   * 都会再问一次——3 分钟一叫，10-27 夜里就是这么烧掉 200 万 token 的。
-   */
-  usedWaveStages(poolId: string | null, sinceTs: number): number[] {
-    const rows = poolId === null
-      ? this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave')`).all(sinceTs)
-      : this.db.prepare(`SELECT DISTINCT stage FROM tide_events WHERE stage IS NOT NULL AND ts >= ? AND pool_id = ? AND kind IN ('fired','wave')`).all(sinceTs, poolId);
-    return (rows as { stage: number }[]).map((r) => r.stage);
-  }
-
-  /**
-   * 这段沉默里**真的开口过**几次（「没发」不算）。
-   *
-   * 用途：要不要继续给机会，看的是她开过几次口，不是水位退了几档。
-   * 早先用「退到第几档 > maxStages」当上限，结果她连着憋几次、水位退到第 4 档后
-   * 机制就再也不叫她（10-29 下午，从此四小时静默）——用「不主动」惩罚「不主动」。
-   */
-  firedWaveCount(poolId: string | null, sinceTs: number): number {
-    const where =
-      "stage IS NOT NULL AND ts >= ? AND kind IN ('fired','wave') AND COALESCE(reason,'') NOT LIKE '%没发%'";
-    const row = poolId === null
-      ? this.db.prepare(`SELECT COUNT(DISTINCT stage) AS n FROM tide_events WHERE ${where}`).get(sinceTs)
-      : this.db.prepare(`SELECT COUNT(DISTINCT stage) AS n FROM tide_events WHERE ${where} AND pool_id = ?`).get(sinceTs, poolId);
-    return Number((row as { n: number } | undefined)?.n ?? 0);
-  }
-  /** 水位场用：某池（null=跨池）在 [fromTs, toTs] 内的消息骨架，不含正文 */
-  messagesForWave(poolId: string | null, fromTs: number, toTs: number): { ts: number; from_self: number }[] {
-    if (poolId === null) {
-      return this.db.prepare("SELECT ts, from_self FROM messages WHERE ts >= ? AND ts <= ? ORDER BY ts")
-        .all(fromTs, toTs) as any[];
-    }
-    return this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id = ? AND ts >= ? AND ts <= ? ORDER BY ts")
-      .all(poolId, fromTs, toTs) as any[];
-  }
-  /** ts 之前的最后一条消息。跨 tick 增量记账时要用它当「上一句是谁说的」，
-   *  否则每个 tick 窗口里她说的第一条都会被当成「自己起的话头」扣 1 点而不是 0.1 */
-  messageBefore(poolId: string | null, ts: number): { ts: number; from_self: number } | null {
-    if (poolId === null) return null;
-    const row = this.db.prepare(
-      "SELECT ts, from_self FROM messages WHERE pool_id=? AND ts<? ORDER BY ts DESC LIMIT 1").get(poolId, ts);
-    return (row as any) ?? null;
+    return n;
   }
 
   /** 池里她说的最后一条。主动判定拿它当基准：她一答完时钟就重新起步，
    *  用「任何人最后说话」的话，热聊时永远差几分钟，聊得越热主动机制越死 */
-  lastSelfMessage(poolId: string | null): { ts: number } | null {
+  lastSelfMessage(poolId: string | null): { ts: number; text: string } | null {
     if (poolId === null) return null;
     const row = this.db.prepare(
-      "SELECT ts FROM messages WHERE pool_id=? AND from_self=1 ORDER BY ts DESC LIMIT 1").get(poolId);
+      "SELECT ts, text FROM messages WHERE pool_id=? AND from_self=1 ORDER BY ts DESC LIMIT 1").get(poolId);
     return (row as any) ?? null;
   }
 
@@ -329,6 +293,94 @@ export class Store {
       ? this.db.prepare("SELECT ts, from_self FROM messages ORDER BY ts DESC LIMIT 1").get()
       : this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT 1").get(poolId);
     return (row as any) ?? null;
+  }
+
+  // ---------- 自省 / 主动门控 ----------
+
+  saveReflection(r: {
+    user_id: string; pool_id: string; thought: string; style_hint: string;
+    urgency: number; topic_pick: string; topic_angle: string; next_at: number | null; created_at: number;
+  }): number {
+    const info = this.db.prepare(
+      `INSERT INTO reflections(user_id,pool_id,thought,style_hint,urgency,topic_pick,topic_angle,next_at,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+    ).run(r.user_id, r.pool_id, r.thought, r.style_hint, r.urgency, r.topic_pick, r.topic_angle, r.next_at ?? null, r.created_at);
+    return Number(info.lastInsertRowid);
+  }
+
+  /** 这个池最新的一条自省。没有就 null */
+  latestReflection(poolId: string): any | null {
+    const row = this.db.prepare(
+      "SELECT * FROM reflections WHERE pool_id=? ORDER BY created_at DESC LIMIT 1").get(poolId);
+    return (row as any) ?? null;
+  }
+
+  /** 清掉过期自省，别让它一直长。返回删了几条 */
+  pruneReflections(beforeTs: number): number {
+    return Number(this.db.prepare("DELETE FROM reflections WHERE created_at < ?").run(beforeTs).changes);
+  }
+
+  /** 最后一条用户消息的时间戳；poolId=null 时跨池取最大。0 = 从没说过话 */
+  lastUserMessageTs(poolId?: string | null): number {
+    const row = poolId
+      ? this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE pool_id=? AND from_self=0").get(poolId)
+      : this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE from_self=0").get();
+    return Number((row as any)?.t ?? 0) || 0;
+  }
+
+  /**
+   * 给自省看的最近一段消息：只取 user/self 的正文，按时间正序。
+   * 只给最近 N 条——自省是判断「现在该不该开口」，不是复盘，给太多她会写读后感。
+   */
+  messagesForReflection(poolId: string, limit = 10): { ts: number; from_self: number; text: string }[] {
+    const rows = this.db.prepare(
+      "SELECT ts, from_self, text FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT ?").all(poolId, limit) as any[];
+    return rows.reverse().map((r) => ({ ts: r.ts, from_self: r.from_self, text: String(r.text ?? "") }));
+  }
+
+  logProactive(e: {
+    user_id: string; pool_id: string; ts: number; decision: "speak" | "skip"; reason: string;
+    urgency?: number | null; silent_sec?: number | null; cooldown_req?: number | null; msg_id?: number | null;
+  }): void {
+    this.db.prepare(
+      `INSERT INTO proactive_log(user_id,pool_id,ts,decision,reason,urgency,silent_sec,cooldown_req,msg_id)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+    ).run(e.user_id, e.pool_id, e.ts, e.decision, e.reason,
+      e.urgency ?? null, e.silent_sec ?? null, e.cooldown_req ?? null, e.msg_id ?? null);
+  }
+
+  /** 时间窗内主动开口了几次（decision='speak'） */
+  countProactiveSpeaks(fromTs: number, toTs: number, poolId?: string | null): number {
+    const row = poolId
+      ? this.db.prepare("SELECT COUNT(*) AS n FROM proactive_log WHERE decision='speak' AND pool_id=? AND ts>=? AND ts<?").get(poolId, fromTs, toTs)
+      : this.db.prepare("SELECT COUNT(*) AS n FROM proactive_log WHERE decision='speak' AND ts>=? AND ts<?").get(fromTs, toTs);
+    return Number((row as any)?.n ?? 0);
+  }
+
+  /** 上次主动开口的时间戳（0 = 从没主动说过） */
+  lastProactiveSpeakTs(poolId: string): number {
+    const row = this.db.prepare(
+      "SELECT MAX(ts) AS t FROM proactive_log WHERE decision='speak' AND pool_id=?").get(poolId);
+    return Number((row as any)?.t ?? 0) || 0;
+  }
+
+  /** 最近 N 条主动决策，调试用：查「她为什么今天没说话」 */
+  recentProactive(limit = 40): any[] {
+    return this.db.prepare("SELECT * FROM proactive_log ORDER BY ts DESC LIMIT ?").all(limit) as any[];
+  }
+
+  /** 这个池最近一条主动决策（skip 记账节流用） */
+  lastProactiveLog(poolId: string): { ts: number; reason: string } | null {
+    const row = this.db.prepare(
+      "SELECT ts, reason FROM proactive_log WHERE pool_id=? ORDER BY ts DESC LIMIT 1").get(poolId);
+    return (row as any) ?? null;
+  }
+
+  /** 这个池最近说话的真人是谁（主动日志要记 user_id，没有就空串） */
+  lastUserId(poolId: string): string {
+    const row = this.db.prepare(
+      "SELECT user_id FROM messages WHERE pool_id=? AND user_id IS NOT NULL ORDER BY ts DESC LIMIT 1").get(poolId);
+    return String((row as any)?.user_id ?? "");
   }
 
   /** 今天某个池、某一档已经真发了几条（L0 不占额度，不会问到这里） */

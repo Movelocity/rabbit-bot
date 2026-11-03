@@ -153,11 +153,11 @@ export class Scheduler {
       this.d.queue.enqueue(makeWake("plan", [], `计划到点 #${fires.map((f) => f.planId).join(",#")}`, fires, now));
       enqueued = true;
     }
-    // 水位退潮到档：即使没有未读也要给 agent 一次「要不要自己开口」的机会
+    // 自省 + 门控都过了：即使没有未读也要给 agent 一次「要不要自己开口」的机会
     const pro = this.d.proactivePools?.(now) ?? [];
     if (pro.length) {
       const proPools = pro.map((x) => x.pool).filter((x): x is string => !!x);
-      this.d.queue.enqueue(makeWake("tick", proPools, `水位到档：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
+      this.d.queue.enqueue(makeWake("tick", proPools, `她想说话了：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
       enqueued = true;
     }
     // 正在去抖的池交给去抖处理，tick 不重复唤醒
