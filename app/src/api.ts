@@ -121,7 +121,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }));
           }
           if (parts.length === 4 && parts[3] === "search" && method === "GET") {
-            return reply(200, searchPool(d.store, url.searchParams.get("q") ?? "", parts[2], qInt(url.searchParams.get("limit"))));
+            return reply(200, searchPool(
+              d.store, url.searchParams.get("q") ?? "", parts[2], qInt(url.searchParams.get("limit")),
+              (url.searchParams.get("only") as "self" | "other" | null) ?? undefined,
+            ));
           }
           throw new HttpError(404, "用法：GET /v1/pools、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=");
         }

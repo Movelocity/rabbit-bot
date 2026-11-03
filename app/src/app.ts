@@ -248,7 +248,9 @@ export class App {
     // 自省是「想一想」，不是干活。额度见底就别想了，把额度留给真正的对话
     if (tokensLeft < 2000 || usage.llm_calls >= cfg.limits.dailyLlmCalls) return;
 
-    const rows = this.store.messagesForReflection(poolId, 10);
+    // 按时间跨度取，不是死数 10 条：话密的时候 10 条只够二十分钟，
+    // 他早先说过的事实落在窗口外，她自己刚说错的话却在窗口里，越滚越像真的
+    const rows = this.store.messagesForReflection(poolId, 12, { sinceMs: now - 90 * 60e3, cap: 40 });
     const nameOf = (r: { from_self: number }) => (r.from_self ? cfg.agent.name : "对方");
     const recentLines = rows.map((r) => {
       const t = new Intl.DateTimeFormat("zh-CN", {

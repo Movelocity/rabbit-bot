@@ -216,11 +216,15 @@ export class Store {
     return { total, first: first ? rowToMsg(first) : null, last: last ? rowToMsg(last) : null };
   }
   /** 在池的历史消息里按关键词搜（LIKE，% 和 _ 已转义），新的在前。 */
-  searchMessages(poolId: string, keyword: string, limit = 20, sender?: string): StoredMessage[] {
+  /**
+   * 关键词搜历史。who 用来挑半边：查「他到底说没说」的时候只看他说的，
+   * 因为按最新 N 条截断时，自己反复催问的话会把他的回答挤出去（这就是「翻了确实没有」的来源）。
+   */
+  searchMessages(poolId: string, keyword: string, limit = 20, who?: "self" | "other"): StoredMessage[] {
     const kw = `%${keyword.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const sql = `SELECT * FROM messages WHERE pool_id=? AND text LIKE ? ESCAPE '\\'${sender ? " AND sender_name=?" : ""} ORDER BY seq DESC LIMIT ?`;
-    const args = sender ? [poolId, kw, sender, limit] : [poolId, kw, limit];
-    return (this.db.prepare(sql).all(...args) as any[]).map(rowToMsg).reverse();
+    const side = who === "self" ? " AND from_self=1" : who === "other" ? " AND from_self=0" : "";
+    const sql = `SELECT * FROM messages WHERE pool_id=? AND text LIKE ? ESCAPE '\\'${side} ORDER BY seq DESC LIMIT ?`;
+    return (this.db.prepare(sql).all(poolId, kw, limit) as any[]).map(rowToMsg).reverse();
   }
 
   // ---------- 游标 ----------
@@ -340,10 +344,36 @@ export class Store {
    * 给自省看的最近一段消息：只取 user/self 的正文，按时间正序。
    * 只给最近 N 条——自省是判断「现在该不该开口」，不是复盘，给太多她会写读后感。
    */
-  messagesForReflection(poolId: string, limit = 10): { ts: number; from_self: number; text: string }[] {
-    const rows = this.db.prepare(
-      "SELECT ts, from_self, text FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT ?").all(poolId, limit) as any[];
-    return rows.reverse().map((r) => ({ ts: r.ts, from_self: r.from_self, text: String(r.text ?? "") }));
+  /**
+   * 自省看到的最近对话。
+   *
+   * 只给「最近 10 条」会出大问题：话密的晚上 10 条可能只覆盖二十分钟，
+   * 真正的事实（他早就答过的那句）落在十条之外，而她自己刚说的错误结论正好在里面，
+   * 于是念头越滚越像真的（2026-11-03 钥匙那回就是这样）。
+   * 所以按「时间跨度 + 条数」双下限取：至少覆盖 recentMs，至少 limit 条，总量封顶 cap。
+   */
+  messagesForReflection(
+    poolId: string, limit = 10, opts: { sinceMs?: number; cap?: number } = {},
+  ): { seq: number; ts: number; from_self: number; text: string }[] {
+    const cap = Math.max(opts.cap ?? 40, limit);
+    const cols = "seq, ts, from_self, text";
+    let rows = opts.sinceMs
+      ? this.db.prepare(`SELECT ${cols} FROM messages WHERE pool_id=? AND ts>=? ORDER BY ts DESC LIMIT ?`)
+        .all(poolId, opts.sinceMs, cap) as any[]
+      : [];
+    if (rows.length < limit) {
+      const have = new Set(rows.map((r) => r.seq));
+      const more = this.db.prepare(`SELECT ${cols} FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT ?`)
+        .all(poolId, cap) as any[];
+      for (const r of more) {
+        if (rows.length >= cap) break;
+        if (have.has(r.seq)) continue;
+        have.add(r.seq);
+        rows.push(r);
+      }
+    }
+    rows.sort((a, b) => a.ts - b.ts);
+    return rows.map((r) => ({ seq: Number(r.seq), ts: Number(r.ts), from_self: r.from_self, text: String(r.text ?? "") }));
   }
 
   logProactive(e: {

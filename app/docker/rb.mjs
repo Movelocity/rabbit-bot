@@ -112,7 +112,7 @@ const HELP = `用法：rb <命令> [参数…]
 业务（走宿主 API）：
   pool-list
   pool-read <池> [--limit 15] [--before-seq N]
-  pool-search <关键词> --pool <池> [--limit 15]
+  pool-search <关键词> --pool <池> [--limit 20] [--only-other|--only-self]
   plan-list [--status pending|done|cancelled]
   plan-add --title T [--kind once|cron|none] [--when V] [--pool P] [--anchor L0|L1|L2] [--why W] [--expires ISO]
   plan-update <id> --status pending|done|cancelled
@@ -145,7 +145,10 @@ async function main() {
       });
     case "pool-search":
       return api("GET", `/v1/pools/${encodeURIComponent(str(flags, "pool") ?? pos[2] ?? "")}/search`, {
-        query: { q: pos[1] ?? str(flags, "keyword"), limit: num(flags, "limit") },
+        query: {
+          q: pos[1] ?? str(flags, "keyword"), limit: num(flags, "limit"),
+          only: flags["only-other"] ? "other" : flags["only-self"] ? "self" : undefined,
+        },
       });
     case "plan-list":
       return api("GET", "/v1/plans", { query: { status: str(flags, "status") ?? "pending" } });

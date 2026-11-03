@@ -59,10 +59,11 @@ test("pool-search：_ 被当字面量而不是通配符", () => {
   assert.doesNotMatch(JSON.stringify(r.messages), /axb/);
 });
 
-test("pool-search：limit 夹到 1-30", () => {
+test("pool-search：limit 夹到 1-50", () => {
   const store = setup(Array.from({ length: 40 }, (_, i) => `第${i}条加班记录`));
-  assert.equal(searchPool(store, "加班", "p1", 999).hits, 30);
+  assert.equal(searchPool(store, "加班", "p1", 999).hits, 40);   // 只有 40 条，全给
   assert.equal(searchPool(store, "加班", "p1", 0).hits, 1);
+  assert.equal(searchPool(store, "加班", "p1", 999).truncated, false);
 });
 
 test("pool-search：未知池报错", () => {

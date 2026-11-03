@@ -42,15 +42,26 @@ export function readPool(store: Store, ref: string | undefined, opts: ReadPoolOp
   };
 }
 
-export function searchPool(store: Store, keyword: string, ref: string | undefined, limit?: number) {
+export function searchPool(
+  store: Store, keyword: string, ref: string | undefined, limit?: number, only?: "self" | "other",
+) {
   const kw = String(keyword ?? "").trim().slice(0, 30);
   if (kw.length < 2) throw new Error("关键词至少两个字，太短会把整个池捞出来");
   const pool = resolvePool(store, ref);
-  const hits = store.searchMessages(pool.pool_id, kw, clampInt(limit, 1, 30, 15));
+  const n = clampInt(limit, 1, 50, 20);
+  const who = only === "self" || only === "other" ? only : undefined;
+  const hits = store.searchMessages(pool.pool_id, kw, n, who);
   return {
     pool: store.poolAlias(pool.pool_id),
     keyword: kw,
     hits: hits.length,
+    only: who ?? "both",
+    // 只给了最近 n 条：关键词说得多的时候，最早那条真相往往被挤掉。
+    // 明说「被截断了」而不是让她以为「就这些」，否则她会拿「没有」当结论。
+    truncated: hits.length >= n,
+    hint: hits.length >= n
+      ? `结果按最新 ${n} 条截断，更早的可能没给。查「他说没说」加 --only-other 只看他发的。`
+      : undefined,
     total: store.poolSpan(pool.pool_id).total,
     messages: hits.map((m) => ({
       seq: m.seq,

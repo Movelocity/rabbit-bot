@@ -158,6 +158,7 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
   }
   if (i.prevThought) {
     parts.push(`上一次你在想：${i.prevThought.slice(0, 160)}`);
+    parts.push("（那是你当时自己的想法，不是事实。上面最近对话里如果找不到支撑它的原话，就别拿它当证据继续往下推——换个方向想。）");
     parts.push("");
   }
   if (i.consecutiveSpeaks > 0) {
