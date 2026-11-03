@@ -200,6 +200,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 2 && method === "GET") {
             return reply(200, listSkills(d.cfg).map((s) => ({
               name: s.name,
+              description: s.description,
               skill: `skills/${s.name}/SKILL.md`,
               data: `skills/${s.name}/data`,
               has_data: s.hasData,
