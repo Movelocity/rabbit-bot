@@ -172,15 +172,6 @@ test("write_file → read_file：中文和空格路径都原样", async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test("list_files：看得到刚写的文件", async () => {
-  const { dataDir, run } = setupFs();
-  await run("write_file", { path: "notes/a.md", content: "x" });
-  const r = await run("list_files", { dir: "notes" });
-  assert.equal(r.details?.ok, true, r.text);
-  assert.match(r.text, /a\.md/);
-  fs.rmSync(dataDir, { recursive: true, force: true });
-});
-
 test("read_file：文件不存在就报错，不返回空字符串", async () => {
   const { dataDir, run } = setupFs();
   const r = await run("read_file", { path: "没有这个.md" });

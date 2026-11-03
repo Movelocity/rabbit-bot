@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
-import { sandboxShellOptions, listSandboxFiles, readSandboxFile, writeSandboxFile, runSandboxShell } from "../ops/sandbox.ts";
+import { sandboxShellOptions, readSandboxFile, writeSandboxFile, runSandboxShell } from "../ops/sandbox.ts";
 import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
@@ -268,25 +268,6 @@ export function createTools(d: ToolDeps) {
    * 原来这三件事挂在 `read_file|write|run` 上——那等于用一条字符串命令模拟文件读写，
    * 路径里带空格或中文就得赌拼参数的那一段。工具拿的是结构化参数，路径不经过切词。
    */
-  const listFiles = defineTool({
-    name: "list_files",
-    label: "list_files",
-    executionMode: "sequential",
-    description: "列沙盒 /work 下的文件。不传 dir 就是根目录。用来找东西在哪，别靠猜路径。",
-    parameters: Type.Object({
-      dir: Type.Optional(Type.String({ description: "相对路径，比如 topics、skills、prompt；不传是根" })),
-    }),
-    async execute(_id, p) {
-      try {
-        const items = listSandboxFiles(d.cfg, p.dir ?? "");
-        if (!items.length) return txt(`（${p.dir || "/"} 下是空的）`, { ok: true });
-        return txt(items.map((f: any) => (f.dir ? `${f.path}/` : `${f.path}  ${f.bytes ?? ""}`)).join("\n"), { ok: true, count: items.length });
-      } catch (e) {
-        return txt(`列不出来：${(e as Error).message}`, { ok: false });
-      }
-    },
-  });
-
   const readFile = defineTool({
     name: "read_file",
     label: "read_file",
@@ -333,7 +314,7 @@ export function createTools(d: ToolDeps) {
     label: "run_shell",
     executionMode: "sequential",
     description:
-      "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。用来搜文件、算数、批量处理；"
+      "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。用来列目录（ls、rg --files）、搜内容、算数、批量处理；"
       + "单次最多 30 秒。只读文件就别用这个，read_file 更快。",
     parameters: Type.Object({
       cmd: Type.String({ description: "完整命令行，例如 rg -n '关键词' topics" }),
@@ -359,7 +340,7 @@ export function createTools(d: ToolDeps) {
       + "命令：pool-list / pool-read / pool-search / plan-list / mem-search / img-list / img-get / "
       + "web-search / web-fetch / skills。"
       + "记事、改记忆、加计划、标完成、读写文件、跑命令都有专门的工具（remember / forget / plan_add / plan_done / "
-      + "read_file / write_file / list_files / run_shell），别用 rb 做这些。"
+      + "read_file / write_file / run_shell），别用 rb 做这些。"
       + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
       + "args=\"sb run \\\"ls -la\\\"\"。不确定就 args=\"help\"。",
     parameters: Type.Object({ args: Type.String({ description: "命令 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
@@ -372,7 +353,7 @@ export function createTools(d: ToolDeps) {
         "mem-close": "forget",
         "plan-add": "plan_add",
         "plan-update": "plan_done",
-        sb: "read_file / write_file / list_files / run_shell",
+        sb: "read_file / write_file / run_shell",
       };
       if (moved[parts[0]]) {
         return txt(`\`rb ${parts[0]}\` 已经不在这里用了，改用 ${moved[parts[0]]}（结构化参数，路径不用拼）。`, { ok: false, useTool: moved[parts[0]] });
@@ -389,5 +370,5 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  return [send, staySilent, viewImage, remember, forget, planAdd, planDone, readFile, writeFile, listFiles, runShellTool, rb];
+  return [send, staySilent, viewImage, remember, forget, planAdd, planDone, readFile, writeFile, runShellTool, rb];
 }
