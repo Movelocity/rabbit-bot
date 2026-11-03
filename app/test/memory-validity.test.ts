@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
-import { addMemory, searchMemories, parseTs } from "../src/ops/memories.ts";
+import { addMemory, closeMemory, searchMemories, parseTs } from "../src/ops/memories.ts";
 
 function setup() {
   const store = new Store(":memory:");
@@ -104,4 +104,31 @@ test("时间格式只认 ISO 和毫秒时间戳", () => {
   assert.equal(parseTs("1793707200000"), 1793707200000);
   assert.equal(parseTs(undefined), null);
   assert.throws(() => parseTs("后天下午"), /看不懂的时间/);
+});
+
+test("只关掉、不写新的：事实过期但没有替代", () => {
+  const { store, pool } = setup();
+  const m = addMemory(store, { user: "u1", content: "他这周在出差", pool });
+  const r = closeMemory(store, { user: "u1", id: m.id });
+  assert.equal(r.already, false);
+  assert.equal(searchMemories(store, { user: "u1", pool }).length, 0, "关掉就查不到了");
+  const all = searchMemories(store, { user: "u1", pool, all: true });
+  assert.equal(all.length, 1);
+  assert.equal(all[0].replaced_by, null, "没有谁顶替它");
+  assert.ok(all[0].to, "但要留下失效时间");
+});
+
+test("重复关同一个东西不报错，也不改时间", () => {
+  const { store, pool } = setup();
+  const m = addMemory(store, { user: "u1", content: "他在减肥", pool });
+  const a = closeMemory(store, { user: "u1", id: m.id, at: "2026-11-01" });
+  const b = closeMemory(store, { user: "u1", id: m.id, at: "2026-11-05" });
+  assert.equal(b.already, true);
+  assert.equal(b.closed_at, a.closed_at, "第一次的失效时间算数");
+});
+
+test("不许关别人的记忆", () => {
+  const { store, pool } = setup();
+  const m = addMemory(store, { user: "u1", content: "他在减肥", pool });
+  assert.throws(() => closeMemory(store, { user: "u2", id: m.id }), /不是 u2 的记忆/);
 });

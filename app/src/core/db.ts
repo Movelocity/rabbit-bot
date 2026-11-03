@@ -550,6 +550,12 @@ export class Store {
     return (this.db.prepare("SELECT * FROM memories WHERE id=?").get(id) as any) ?? null;
   }
 
+  /** 只关闭一条记忆（没有新事实顶替）：valid_to 设上，superseded_by 保持空 */
+  closeMemoryRow(id: number, at = Date.now()): boolean {
+    const r = this.db.prepare("UPDATE memories SET valid_to = COALESCE(valid_to, ?) WHERE id=?").run(at, id);
+    return Number(r.changes) > 0;
+  }
+
   /**
    * 把一条记忆标成「到此为止」。
    * COALESCE 保证已经失效的不被后来的时间覆盖——失效时刻只有第一次算数。

@@ -77,6 +77,14 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     if (!a.hits.length) continue;
     blocks.push(`说法对照 ${a.user_id}（他这么说的时候指的就是这个，别反问）：${a.hits.map((h) => `「${h.alias}」= ${h.target}`).join("；")}`);
   }
+  // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
+  const people = new Map<string, string>();
+  for (const m of x.unread) {
+    if (!m.from_self && m.user_id) people.set(m.user_id, m.sender_name);
+  }
+  if (people.size) {
+    blocks.push(`正在跟你说话的人：${[...people].map(([id, n]) => `${n}（user_id=${id}）`).join("、")}——记记忆、关记忆都要用这个 id`);
+  }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
   // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这几行直接决定该不该开口

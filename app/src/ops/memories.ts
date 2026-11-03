@@ -121,3 +121,23 @@ export function resolveAliases(store: Store, input: { user?: string; pool?: stri
     .filter((x): x is { id: number; alias: string; target: string } => !!x);
   return findAliases(input.text ?? "", aliases);
 }
+
+/**
+ * 只关掉一条记忆，不写新的。
+ *
+ * 有些事不是被新事实顶掉，而是本来就不再成立（「他这周在出差」回来了、「我在减肥」没减了）。
+ * 逼着人写一条新事实来顶，等于让她自己编一句废话——编出来的那句下次又变成事实。
+ */
+export function closeMemory(store: Store, input: { user?: string; id?: string | number; at?: string | number }) {
+  if (!input.user) throw new Error("缺少 user");
+  const id = Number(input.id);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`要的是记忆 id（整数），收到 ${input.id}`);
+  const m = store.getMemory(id);
+  if (!m) throw new Error(`没有 id=${id} 这条记忆`);
+  if (m.user_id !== input.user) throw new Error(`id=${id} 不是 ${input.user} 的记忆，不能替他关`);
+  const at = parseTs(input.at) ?? Date.now();
+  const already = m.valid_to ? Number(m.valid_to) : null;
+  if (already && already <= at) return { id, closed_at: already, already: true };
+  store.closeMemoryRow(id, at);
+  return { id, closed_at: at, already: false };
+}

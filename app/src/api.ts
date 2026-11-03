@@ -16,7 +16,7 @@ import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { listPools, readPool, searchPool } from "./ops/pools.ts";
 import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
-import { addMemory, searchMemories } from "./ops/memories.ts";
+import { addMemory, closeMemory, searchMemories } from "./ops/memories.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/sandbox.ts";
@@ -158,7 +158,11 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               from: body.from, until: body.until, supersede: body.supersede,
             }));
           }
-          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories");
+          if (parts.length === 3 && method === "PATCH") {
+            // 只关掉，不写新的：事实过期但没有替代的说法时用这个
+            return reply(200, closeMemory(d.store, { user: body.user, id: parts[2], at: body.at }));
+          }
+          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories、PATCH /v1/memories/:id");
         }
         case "images": {
           if (parts.length === 2 && method === "GET") {
