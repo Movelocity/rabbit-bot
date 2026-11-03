@@ -22,7 +22,7 @@ let n = 0;
 function mkMsg(store: Store, ts: number, self: boolean) {
   store.insertMessage({
     platform: "mock", msg_id: `m${++n}`, external_chat_id: "chat1", pool_kind: "private",
-    sender_id: self ? "me" : "u1", sender_name: self ? "莫小鲸" : "主人", ts, text: "x",
+    sender_id: self ? "me" : "u1", sender_name: self ? "小鲸" : "主人", ts, text: "x",
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text", from_self: self,
   } as any);
 }

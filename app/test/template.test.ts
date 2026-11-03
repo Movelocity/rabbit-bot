@@ -34,7 +34,7 @@ test("handoff 渲染出来是那段交接要求", () => {
 test("缺变量直接抛错，并说清缺了哪个", () => {
   assert.throws(() => render("system", {}), /缺少变量.*agent_name/);
   // 少一个也报
-  assert.throws(() => render("system", { agent_name: "莫小鲸", persona: "人设" }), /emoji_block/);
+  assert.throws(() => render("system", { agent_name: "小鲸", persona: "人设" }), /emoji_block/);
 });
 
 test("多传变量不报错（代码可以先传着，模板后加）", () => {
