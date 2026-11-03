@@ -1,6 +1,9 @@
 /** 记忆与计划：原生工具（remember / forget / plan_add / plan_done），以及 rb 只留运维。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
@@ -132,4 +135,70 @@ test("rb 的运维查询照旧能跑", async () => {
   const r = await run(get("rb"), { args: "pool-search 钥匙 --pool p1 --only-other" });
   assert.equal(r.details?.ok, true);
   assert.deepEqual(calls[0], ["pool-search", "钥匙", "--pool", "p1", "--only-other"]);
+});
+
+// ---------- 文件工具：对齐 hermes 的 read_file / write_file ----------
+
+function setupFs() {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-fs-"));
+  const base = loadConfig();
+  const cfg = { ...base, dataDir, sandbox: { ...base.sandbox, dir: path.join(dataDir, "sandbox") } };
+  fs.mkdirSync(cfg.sandbox.dir, { recursive: true });
+  const store = new Store(":memory:");
+  store.insertMessage({
+    platform: "feishu", external_chat_id: "oc_fs", pool_kind: "private", msg_id: "f1",
+    sender_id: "ou_1", sender_name: "他", ts: Date.now(), text: "在吗",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
+  const pool = store.listPools()[0].pool_id;
+  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), primaryPool: () => pool }) as any[];
+  const get = (n: string) => tools.find((t) => t.name === n)!;
+  const run = async (n: string, params: any) => {
+    const r = await get(n).execute("id", params);
+    const raw = (r as any).content;
+    const text = Array.isArray(raw) ? raw.map((c: any) => (typeof c === "string" ? c : c?.text ?? "")).join("") : String(raw ?? "");
+    return { ...r, text };
+  };
+  return { cfg, dataDir, run };
+}
+
+test("write_file → read_file：中文和空格路径都原样", async () => {
+  const { dataDir, run } = setupFs();
+  const w = await run("write_file", { path: "topics/生活 杂记.md", content: "今天吃了米饭" });
+  assert.equal(w.details?.ok, true, w.text);
+  const r = await run("read_file", { path: "topics/生活 杂记.md" });
+  assert.equal(r.details?.ok, true, r.text);
+  assert.equal(r.text, "今天吃了米饭");
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("list_files：看得到刚写的文件", async () => {
+  const { dataDir, run } = setupFs();
+  await run("write_file", { path: "notes/a.md", content: "x" });
+  const r = await run("list_files", { dir: "notes" });
+  assert.equal(r.details?.ok, true, r.text);
+  assert.match(r.text, /a\.md/);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("read_file：文件不存在就报错，不返回空字符串", async () => {
+  const { dataDir, run } = setupFs();
+  const r = await run("read_file", { path: "没有这个.md" });
+  assert.equal(r.details?.ok, false);
+  assert.ok(r.text.length > 0, "要有错误说明");
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("write_file：不许跳出沙盒", async () => {
+  const { dataDir, run } = setupFs();
+  const r = await run("write_file", { path: "../../escape.md", content: "x" });
+  assert.equal(r.details?.ok, false, "越界路径该被挡住");
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("rb sb 也被挡了，指向文件工具", async () => {
+  const { get } = setup();
+  const r: any = await get("rb").execute("id", { args: "sb read topics/INDEX.md" });
+  assert.equal(r.details?.ok, false);
+  assert.match(String(r.details?.useTool), /read_file/);
 });

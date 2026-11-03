@@ -25,7 +25,7 @@ test("tick 剧本：路由指向 scene-tick，文案里许空手开口、不许�
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map(), memories: new Map(), plans: [] });
   assert.match(p, /【这一轮：tick】/, "第一行要给信号");
-  assert.match(p, /rb sb read prompt\/scene-tick\.md/, "要指路，不然她不知道读哪份");
+  assert.match(p, /read_file prompt\/scene-tick\.md/, "要指路，不然她不知道读哪份");
 
   const script = render("scene-tick", {});
   // 默认动作是「说」，不是「想清楚再说」——旧文案到处都是免责句，把它养成了不敢开口
@@ -44,7 +44,7 @@ test("message 剧本：路由指向 scene-message，先读懂再说", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("message"), now: Date.now(), unread: [], context: new Map(), memories: new Map(), plans: [] });
   assert.match(p, /【这一轮：message】/);
-  assert.match(p, /rb sb read prompt\/scene-message\.md/);
+  assert.match(p, /read_file prompt\/scene-message\.md/);
 
   const script = render("scene-message", {});
   assert.match(script, /有人刚说了话/);
@@ -63,7 +63,7 @@ test("plan 剧本：带上当时排它的理由，并允许作废", () => {
   } as any);
   const p = wakePrompt(s, { wake: mkWake("plan"), now: Date.now(), unread: [], context: new Map(), memories: new Map(), plans: [plan] });
   assert.match(p, /【这一轮：plan】/);
-  assert.match(p, /rb sb read prompt\/scene-plan\.md/);
+  assert.match(p, /read_file prompt\/scene-plan\.md/);
   // 计划本身是数据，还在唤醒消息里
   assert.match(p, /问他面试结果/);
   assert.match(p, /当初排它的理由：他周三说今天出结果/);
