@@ -29,26 +29,26 @@ function setup() {
     markSilent: (r: string) => { silent = r; },
   });
   const get = (n: string) => (tools as any[]).find((t) => t.name === n);
-  return { send: get("send"), staySilent: get("stay_silent"), sent, silent: () => silent };
+  return { send: get("chat"), staySilent: get("chat"), sent, silent: () => silent };
 }
 
 test("stay_silent：存在，且不发送任何消息", async () => {
   const { staySilent, sent } = setup();
   assert.ok(staySilent, "工具必须存在——它是唯一能表达「不回」的方式");
-  const r = await staySilent.execute("c", { reason: "他说了不用回" });
+  const r = await staySilent.execute("c", { action: "skip", reason: "他说了不用回" });
   assert.equal(r.details.ok, true);
   assert.equal(sent.length, 0, "沉默不该产生任何消息");
 });
 
 test("stay_silent：理由被记下来（日志里能看到它为什么沉默）", async () => {
   const { staySilent, silent } = setup();
-  await staySilent.execute("c", { reason: "只是个表情" });
+  await staySilent.execute("c", { action: "skip", reason: "只是个表情" });
   assert.equal(silent(), "只是个表情");
 });
 
 test("正常回复流程不受影响", async () => {
   const { send, sent } = setup();
-  const r = await send.execute("c", { pool: "p1", content: "在的" });
+  const r = await send.execute("c", { action: "send", pool: "p1", content: "在的" });
   assert.equal(r.details.ok, true);
   assert.equal(sent.length, 1);
 });

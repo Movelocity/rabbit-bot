@@ -14,6 +14,7 @@ import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
+import { listPools, readPool, searchPool } from "../ops/pools.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
@@ -25,7 +26,7 @@ export interface ToolDeps {
   now: () => number;
   /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏 */
   currentWake?: () => { type: string } | null;
-  /** 本轮决定不回时的理由（stay_silent）；非空就是已决定不回 */
+  /** 本轮决定不回时的理由（chat action=skip）；非空就是已决定不回 */
   silenceReason?: () => string | null;
   /** 测试注入：用进程内实现替代沙盒 rb（生产走 docker）。 */
   rbExec?: RbExec;
@@ -45,110 +46,149 @@ function fmtMemories(list: { id: number; kind: string; content: string; from: nu
     .join("\n");
 }
 
+/** 把 "a 'b c' d" 切成 ["a", "b c", "d"]：rb 的 args 是一条命令行字符串 */
+function splitArgs(s: string): string[] {
+  const out: string[] = [];
+  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
 export function createTools(d: ToolDeps) {
   /**
-   * 这一轮不回。它是 send 的反面，也是唯一能让「不说话」成为一个明确决定的方式——
-   * 没有它，模型只能靠「什么都不调用」来表达沉默，而它倾向于用发一条消息来收尾。
+   * 说话这一件事收成一个工具：action=send / skip / view / list / search / help。
+   *
+   * send 和 skip 必须成对出现——没有 skip，模型只能用「什么都不调用」表达沉默，
+   * 而它倾向于拿发一条消息收尾。两个动作放在同一个入口里，沉默才是一个显式决定。
+   * list / search 是翻历史，view 是把图片读进上下文。
    */
-  const staySilent = defineTool({
-    name: "stay_silent",
-    label: "stay_silent",
-    executionMode: "sequential",
-    description:
-      "这一轮不回，什么都不发。用在：对方明确说了不用回/晚点说、他只是发了个表情或语气词、到点的计划已经作废、"
-      + "或者定时唤醒时你确实没有具体的事要说。调用后本轮结束，对方收不到任何消息。"
-      + "这不是偷懒的借口：有具体的话要说时仍然要 send。reason 写一句话说明为什么这轮不用回（会记进日志，用来复盘）。",
-    parameters: Type.Object({
-      reason: Type.String({ description: "一句话：为什么这一轮不用回" }),
-    }),
-    async execute(_id, p) {
-      d.markSilent?.(p.reason);
-      return txt(`已标记：这一轮不回（${p.reason}）。什么都不用再做了，结束这一轮。`, { ok: true, silent: true });
-    },
-  });
-
-  const send = defineTool({
-    name: "send",
-    label: "send",
-    executionMode: "sequential",
-    description: "向聊天池发一条消息（唯一会被用户看到的输出）。返回发送确认和这期间的新消息。",
-    parameters: Type.Object({
-      pool: Type.String({ description: "池别名，如 p1" }),
-      content: Type.String({ description: "一条短消息；表情包写 [emoji:中文id]" }),
-    }),
-    async execute(_id, p) {
-      // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
-      if (d.currentWake?.()?.type === "plan") {
-        const why = coerciveHit(p.content);
-        if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
-      }
-      // 风格闸：客服腔、七天内的原样重复，提示词管不住，只有代码管得住（拦下来让她重写）
-      const poolRow = d.store.resolvePool(p.pool);
-      if (poolRow) {
-        const recentSelf = d.store.messagesForReflection(poolRow.pool_id, 60)
-          .filter((m) => m.from_self)
-          .map((m) => ({ text: m.text, ts: m.ts }));
-        const v = checkStyle({ text: p.content, recentSelf, maxChars: d.cfg.send.maxChars });
-        if (!v.ok) return txt(v.hint ?? "这句别发，换你自己的说法。", { ok: false, blocked: v.reason });
-      }
-      const r = await d.hub.send(p.pool, p.content);
-      // 被压住：他在这几秒里又说话了。先把新消息给她看，那句原样退回——发不发、怎么改，她重新定
-      if (r.held) {
-        return txt(
-          `先别发，这句给你压住了：「${r.heldText ?? ""}」\n`
-          + `因为你说这话的时候他刚好又发来消息：\n${fmtGrouped(d.store, r.newMessages)}\n`
-          + "先看他新说了什么，再决定原来那句还要不要发、要不要改。别当没看见照样发。",
-          { ok: false, held: true, newCount: r.newMessages.length },
-        );
-      }
-      if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });
-      const unconfirmed = r.sentParts.filter((x) => !x.confirmed).length;
-      const head = unconfirmed ? `已发送，但有 ${unconfirmed} 段暂未确认出现在聊天里` : "已发送并确认";
-      const tail = r.newMessages.length ? `\n期间新消息：\n${fmtGrouped(d.store, r.newMessages)}` : "\n期间无新消息";
-      return txt(head + tail, { ok: true, newCount: r.newMessages.length });
-    },
-  });
-
-  // 读本地图片进上下文。只允许两个沙箱目录：data/media/（聊天里收到的图）和 data/inbox/（手动放的）。
-  // rabbit-bot 收的是任意飞书用户消息，一句提示注入就能让它读走 ~/.ssh 或凭据文件，所以路径必须锁死在这两个根下。
   const viewCacheDir = path.join(d.cfg.dataDir, "cache");
 
-  const viewImage = defineTool({
-    name: "view_image",
-    label: "view_image",
+  const CHAT_HELP = [
+    "chat 的用法（action 必填）：",
+    "  send    pool content            发一条消息（唯一会被他看到的输出）",
+    "  skip    reason                   这一轮不回，什么都不发",
+    "  view    path                     把一张图读进上下文（media/… 或 inbox/…）",
+    "  list                             看有哪些池",
+    "  search  q? pool? only? limit?    q 给了就按关键词翻原话；不给 q 就读这个池最近的消息",
+    "  help                             看这份说明",
+  ].join("\n");
+
+  const chat = defineTool({
+    name: "chat",
+    label: "chat",
     executionMode: "sequential",
-    description: "把一张图片加载进上下文（长边压到 1024）。path 用 `rb img-list` 给出的名字，如 media/om_xxx.jpg、inbox/shot.png。一次只加载一张。",
-    parameters: Type.Object({ path: Type.String({ description: "media/… 或 inbox/… 开头的文件名" }) }),
+    description:
+      "跟他说话，以及翻聊天记录。action 决定做什么："
+      + "send（发一条，pool + content，唯一会被他看到的输出）/ skip（这一轮不回，reason 写为什么）/ "
+      + "view（把一张图读进上下文，path 用 img 清单里的名字）/ list（有哪些池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ help。"
+      + "该说话的时候一定要 send——只调用别的工具等于这轮什么都没说。"
+      + "明确不用回的时候用 skip，别用「什么都不调用」来表达沉默。",
+    parameters: Type.Object({
+      action: Type.String({ description: "send / skip / view / list / search / help" }),
+      pool: Type.Optional(Type.String({ description: "send、search 用：池别名，如 p1" })),
+      content: Type.Optional(Type.String({ description: "send 用：一条短消息；表情包写 [emoji:中文id]" })),
+      reason: Type.Optional(Type.String({ description: "skip 用：一句话，为什么这一轮不用回（会记进日志）" })),
+      path: Type.Optional(Type.String({ description: "view 用：media/… 或 inbox/… 开头的文件名" })),
+      q: Type.Optional(Type.String({ description: "search 用：关键词，至少两个字" })),
+      only: Type.Optional(Type.String({ description: "search 用：self 只看自己说的 / other 只看看他说的" })),
+      limit: Type.Optional(Type.Number({ description: "search 用：条数，默认 20" })),
+      before_seq: Type.Optional(Type.Number({ description: "search 不给 q 时翻页：读这个 seq 之前的" })),
+    }),
     async execute(_id, p) {
-      let abs: string;
+      const action = String(p.action ?? "").trim().toLowerCase();
       try {
-        abs = resolveImagePath(d.cfg.dataDir, p.path);
-      } catch {
-        return txt(`没有这张图：${p.path}（先用 rb img-list 看看有哪些）`, { ok: false });
-      }
-      try {
-        const a = saveImage(fs.readFileSync(abs), { dir: viewCacheDir, maxEdge: d.cfg.media.maxEdge, maxBytes: d.cfg.media.maxBytes }, `view-${path.basename(abs)}`);
-        const c = toImageContent(a);
-        if (!c) return txt("这张图打不开（不是图片或格式不支持）", { ok: false });
-        return { content: [{ type: "image" as const, data: c.data, mimeType: c.mimeType }, { type: "text" as const, text: `已加载 ${p.path}（${a.width}×${a.height}）` }], details: { ok: true } };
+        switch (action) {
+          case "help":
+            return txt(CHAT_HELP, { ok: true });
+
+          case "skip": {
+            if (!p.reason) return txt("skip 要 reason：一句话，为什么这一轮不用回。", { ok: false });
+            d.markSilent?.(p.reason);
+            return txt(`已标记：这一轮不回（${p.reason}）。什么都不用再做了，结束这一轮。`, { ok: true, silent: true });
+          }
+
+          case "send": {
+            if (!p.pool || !p.content) return txt("send 要 pool 和 content。", { ok: false });
+            // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
+            if (d.currentWake?.()?.type === "plan") {
+              const why = coerciveHit(p.content);
+              if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
+            }
+            // 风格闸：客服腔、七天内的原样重复，提示词管不住，只有代码管得住（拦下来让她重写）
+            const poolRow = d.store.resolvePool(p.pool);
+            if (poolRow) {
+              const recentSelf = d.store.messagesForReflection(poolRow.pool_id, 60)
+                .filter((m) => m.from_self)
+                .map((m) => ({ text: m.text, ts: m.ts }));
+              const v = checkStyle({ text: p.content, recentSelf, maxChars: d.cfg.send.maxChars });
+              if (!v.ok) return txt(v.hint ?? "这句别发，换你自己的说法。", { ok: false, blocked: v.reason });
+            }
+            const r = await d.hub.send(p.pool, p.content);
+            // 被压住：他在这几秒里又说话了。先把新消息给她看，那句原样退回——发不发、怎么改，她重新定
+            if (r.held) {
+              return txt(
+                `先别发，这句给你压住了：「${r.heldText ?? ""}」\n`
+                + `因为你说这话的时候他刚好又发来消息：\n${fmtGrouped(d.store, r.newMessages)}\n`
+                + "先看他新说了什么，再决定原来那句还要不要发、要不要改。别当没看见照样发。",
+                { ok: false, held: true, newCount: r.newMessages.length },
+              );
+            }
+            if (!r.ok) return txt(`发送失败：${r.error}${r.newMessages.length ? `\n新消息：\n${fmtGrouped(d.store, r.newMessages)}` : ""}`, { ok: false });
+            const unconfirmed = r.sentParts.filter((x) => !x.confirmed).length;
+            const head = unconfirmed ? `已发送，但有 ${unconfirmed} 段暂未确认出现在聊天里` : "已发送并确认";
+            const tail = r.newMessages.length ? `\n期间新消息：\n${fmtGrouped(d.store, r.newMessages)}` : "\n期间无新消息";
+            return txt(head + tail, { ok: true, newCount: r.newMessages.length });
+          }
+
+          case "view": {
+            if (!p.path) return txt("view 要 path（media/… 或 inbox/…）。", { ok: false });
+            let abs: string;
+            try {
+              abs = resolveImagePath(d.cfg.dataDir, p.path);
+            } catch {
+              return txt(`没有这张图：${p.path}（先用 rb img-list 看看有哪些）`, { ok: false });
+            }
+            try {
+              const a = saveImage(fs.readFileSync(abs), { dir: viewCacheDir, maxEdge: d.cfg.media.maxEdge, maxBytes: d.cfg.media.maxBytes }, `view-${path.basename(abs)}`);
+              const c = toImageContent(a);
+              if (!c) return txt("这张图打不开（不是图片或格式不支持）", { ok: false });
+              return { content: [{ type: "image" as const, data: c.data, mimeType: c.mimeType }, { type: "text" as const, text: `已加载 ${p.path}（${a.width}×${a.height}）` }], details: { ok: true } };
+            } catch (e) {
+              return txt(`读图失败：${(e as Error).message}`, { ok: false });
+            }
+          }
+
+          case "list": {
+            const pools = listPools(d.store);
+            if (!pools.length) return txt("（还没有任何池）", { ok: true, count: 0 });
+            const lines = pools.map((x: any) => `[${x.alias}] ${x.kind === "group" ? "群" : "私聊"} ${x.title}　最后 ${x.last_msg_local ?? "—"}　共 ${x.total} 条`);
+            return txt(lines.join("\n"), { ok: true, count: pools.length });
+          }
+
+          case "search": {
+            // 不指定池就是这一轮正在说话的那个
+            const ref = p.pool ?? (d.primaryPool?.() ?? undefined);
+            if (p.q) {
+              const r: any = searchPool(d.store, p.q, ref, p.limit, (p.only as any) ?? undefined);
+              if (!r.hits) return txt(`没搜到「${p.q}」（池 ${r.pool}${r.only !== "both" ? `，只看${r.only === "self" ? "自己" : "他"}说的` : ""}）。换个词或者放宽 only 再试。`, { ok: true, hits: 0 });
+              const body = r.messages.map((m: any) => `[${m.seq}] ${m.local} ${m.from_self ? "我" : m.sender}：${m.text}`).join("\n");
+              return txt(`${body}${r.truncated ? `\n（${r.hint}）` : ""}`, { ok: true, hits: r.hits, truncated: !!r.truncated });
+            }
+            const r: any = readPool(d.store, ref, { limit: p.limit, beforeSeq: p.before_seq });
+            const body = r.messages.map((m: any) => `[${m.seq}] ${m.local} ${m.from_self ? "我" : m.sender}：${m.text}`).join("\n");
+            return txt(`池 ${r.pool}（共 ${r.total} 条）\n${body || "（还没有消息）"}`, { ok: true, count: r.messages.length });
+          }
+
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${CHAT_HELP}`, { ok: false });
+        }
       } catch (e) {
-        return txt(`读图失败：${(e as Error).message}`, { ok: false });
+        return txt(`没成：${(e as Error).message}`, { ok: false });
       }
     },
   });
-
-  /**
-   * 唯一的业务通道：在沙盒里跑 rb 客户端（容器内的 /usr/local/bin/rb）。
-   * 业务数据走宿主 REST API，文件和 shell 直接操作 /work——宿主路径在容器里不存在。
-   * 按 argv 执行、不过 shell，模型拼不出 `; rm -rf`。
-   */
-  const splitArgs = (line: string): string[] => {
-    const out: string[] = [];
-    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(line))) out.push(m[1] ?? m[2] ?? m[3]);
-    return out;
-  };
 
   /**
    * 记忆：一个工具，action 分六件事。
@@ -424,5 +464,5 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  return [send, staySilent, viewImage, memory, plan, readFile, writeFile, runShellTool, rb];
+  return [chat, memory, plan, readFile, writeFile, runShellTool, rb];
 }

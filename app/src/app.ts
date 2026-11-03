@@ -1,6 +1,7 @@
 /** 组装：Store + Hub + Scheduler + RunQueue + PlanEngine + Agent 引擎；处理唤醒。 */
 import path from "node:path";
 import type { Config } from "./config.ts";
+import { isChatCall, didPlanAdd } from "./core/tool-call.ts";
 import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
@@ -69,7 +70,7 @@ export class App {
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: { type: string; pools?: Set<string> } | null = null;
-  /** 本轮是否决定不回（stay_silent）；每轮唤醒重置 */
+  /** 本轮是否决定不回（chat action=skip）；每轮唤醒重置 */
   private silenceReason: string | null = null;
   /** 本轮 send 成功次数 */
   private sendsThisTurn = 0;
@@ -518,13 +519,13 @@ export class App {
           res.tokens += r2.tokens;
           res.llmCalls += r2.llmCalls;
           entry.nudged = true;
-          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => c.name === "plan" && (c.args as any)?.action === "add" && !c.isError) ? "排上了" : "它说不排"}）`);
+          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => didPlanAdd(c)) ? "排上了" : "它说不排"}）`);
         } catch (e) {
           this.log.warn(`补提醒失败：${(e as Error).message}`);
         }
       }
     }
-    const sent = res.toolCalls.filter((c) => c.name === "send" && !c.isError).map((c) => c.args);
+    const sent = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError).map((c) => c.args);
     this.sendsThisTurn = sent.length;
     // 主动这一轮的真实结果：发了才记 speak（连说计数和冷却都靠这张表），
     // 她决定不说也记一行，理由是 agent_silent——这跟「被门控拦下」是两件事，别混

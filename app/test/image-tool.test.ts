@@ -21,7 +21,7 @@ function setup() {
   const store = new Store(":memory:");
   const hub = {} as any;
   const tools = createTools({ store, hub, cfg, now: () => Date.now() }) as any[];
-  const view = tools.find((t) => t.name === "view_image");
+  const view = tools.find((t) => t.name === "chat");
   return { cfg, tools, view, store, dataDir };
 }
 
@@ -35,7 +35,7 @@ test("view_image 把 inbox 里的图作为 image content 返回", async () => {
   const { view, dataDir } = setup();
   fs.mkdirSync(path.join(dataDir, "inbox"), { recursive: true });
   fs.writeFileSync(path.join(dataDir, "inbox", "shot.png"), PNG_1PX);
-  const r: any = await view.execute("t1", { path: "shot.png" });
+  const r: any = await view.execute("t1", { action: "view", path: "shot.png" });
   assert.equal(r.content[0].type, "image");
   assert.equal(r.content[0].mimeType, "image/jpeg");
   assert.ok(r.content[0].data.length > 20);
@@ -47,7 +47,7 @@ test("view_image 拒绝跳出两个沙箱目录的路径", async () => {
   fs.mkdirSync(path.join(dataDir, "inbox"), { recursive: true });
   fs.writeFileSync(path.join(dataDir, "secret.txt"), "tok");
   for (const p of ["../secret.txt", "../../etc/passwd", "/etc/passwd", "media/../../secret.txt"]) {
-    const r: any = await view.execute("t2", { path: p });
+    const r: any = await view.execute("t2", { action: "view", path: p });
     assert.equal(r.content[0].type, "text", `应拒绝 ${p}`);
     assert.match(r.content[0].text, /没有这张图/);
   }
@@ -56,7 +56,7 @@ test("view_image 拒绝跳出两个沙箱目录的路径", async () => {
 test("view_image 对不存在的文件给出提示而不是抛错", async () => {
   const { view, dataDir } = setup();
   fs.mkdirSync(path.join(dataDir, "inbox"), { recursive: true });
-  const r: any = await view.execute("t3", { path: "nope.png" });
+  const r: any = await view.execute("t3", { action: "view", path: "nope.png" });
   assert.equal(r.content[0].type, "text");
   assert.match(r.content[0].text, /没有/);
 });
@@ -95,10 +95,10 @@ test("img-list 能列出聊天里收到的图，view_image 能按 media/ 名字�
   assert.equal(r.items[0].name, "media/om_chat_1.jpg");
   assert.match(r.items[0].note ?? "", /消息#\d+/);
 
-  const v: any = await view.execute("m2", { path: "media/om_chat_1.jpg" });
+  const v: any = await view.execute("m2", { action: "view", path: "media/om_chat_1.jpg" });
   assert.equal(v.content[0].type, "image");
 
-  const v2: any = await view.execute("m3", { path: "om_chat_1.jpg" });
+  const v2: any = await view.execute("m3", { action: "view", path: "om_chat_1.jpg" });
   assert.equal(v2.content[0].type, "image");
 
   // view 的压缩缓存不会混进 media 列表

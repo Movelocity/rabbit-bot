@@ -250,3 +250,57 @@ test("terminal：名字换了，描述里说清列目录也走它", async () => 
   assert.match(t.description, /列目录/);
   assert.ok(!tools.some((x: any) => x.name === "run_shell"), "旧名字该没了");
 });
+
+// ---------- chat：说话与翻记录收成一个入口 ----------
+
+test("chat：action 写错就把六个动作列全", async () => {
+  const { get } = setup();
+  const r: any = await get("chat").execute("id", { action: "说" });
+  assert.equal(r.details?.ok, false);
+  const text = r.content.map((c: any) => c.text ?? "").join("");
+  assert.match(text, /send[\s\S]*skip[\s\S]*view[\s\S]*list[\s\S]*search/, "六个动作该列全");
+});
+
+test("chat：skip 没给理由不算数", async () => {
+  const { get } = setup();
+  const r: any = await get("chat").execute("id", { action: "skip" });
+  assert.equal(r.details?.ok, false);
+  assert.match(r.content.map((c: any) => c.text ?? "").join(""), /要 reason/);
+});
+
+test("chat：skip 把理由交给 markSilent", async () => {
+  const cfg = loadConfig();
+  const store = new Store(":memory:");
+  let silent: string | null = null;
+  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), markSilent: (r) => { silent = r; } }) as any[];
+  const chat = tools.find((t) => t.name === "chat");
+  await chat.execute("id", { action: "skip", reason: "他只是发了个表情" });
+  assert.equal(silent, "他只是发了个表情");
+});
+
+test("chat：list 列出所有池", async () => {
+  const { get } = setup();
+  const r: any = await get("chat").execute("id", { action: "list" });
+  assert.equal(r.details?.ok, true);
+  assert.match(r.content.map((c: any) => c.text ?? "").join(""), /私聊/);
+});
+
+test("chat：search 给了 q 就翻原话，不给 q 就读最近", async () => {
+  const { store, pool, get } = setup();
+  await store.insertMessage({
+    platform: "feishu", external_chat_id: "oc_t", pool_kind: "private", msg_id: "m2",
+    sender_id: "ou_1", sender_name: "他", ts: Date.now(), text: "钥匙在楼下五金店打的",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
+  const hit: any = await get("chat").execute("id", { action: "search", q: "五金店", pool });
+  assert.match(hit.content.map((c: any) => c.text ?? "").join(""), /五金店/);
+  const read: any = await get("chat").execute("id", { action: "search", pool });
+  assert.match(read.content.map((c: any) => c.text ?? "").join(""), /钥匙/);
+});
+
+test("chat：没搜到就说没搜到，别沉默", async () => {
+  const { get } = setup();
+  const r: any = await get("chat").execute("id", { action: "search", q: "量子力学" });
+  assert.equal(r.details?.hits, 0);
+  assert.match(r.content.map((c: any) => c.text ?? "").join(""), /没搜到/);
+});

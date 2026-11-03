@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsPlanNudge } from "../src/core/nudge.ts";
 
-const send = { name: "send" };
+const send = { name: "chat", args: { action: "send" } };
 const planAdd = { name: "plan", args: { action: "add" } };
 
 test("计划唤醒：说了话但没排下次 → 要补提醒", () => {
@@ -29,7 +29,7 @@ test("出错或中断 → 不补", () => {
 });
 
 test("send 失败不算说过话", () => {
-  assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [{ name: "send", isError: true }] }), false);
+  assert.equal(needsPlanNudge({ wakeType: "plan", toolCalls: [{ name: "chat", args: { action: "send" }, isError: true }] }), false);
 });
 
 test("plan action=add 失败不算排上了", () => {

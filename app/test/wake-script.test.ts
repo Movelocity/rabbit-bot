@@ -32,7 +32,7 @@ test("tick 剧本：路由指向 scene-tick，文案里许空手开口、不许�
   assert.match(script, /默认说点什么/, "醒过来默认开口");
   assert.match(script, /不用先证明它值得说/);
   assert.match(script, /别为了「不打扰他」而沉默/, "沉默不是稳，是错过");
-  assert.match(script, /调 stay_silent|stay_silent/, "仍要留闭嘴的口子");
+  assert.match(script, /action=skip|skip/, "仍要留闭嘴的口子");
   assert.match(script, /话题库/);
   // 旧契约是「说不出具体的事，就是没有」——把主动变成了举证责任，已废弃
   assert.doesNotMatch(script, /说不出具体的事，就是没有/);
