@@ -6,11 +6,12 @@
     "tickMs": 180000,
     "activeTickMs": 60000,
     "activeWindowMs": 600000,
-    "debounceMs": 30000,
-    "debounceMaxWaitMs": 120000,
+    "debounceMs": 5000,
+    "debounceMaxWaitMs": 20000,
     "watchdogMs": 5000,
     "overdueGraceMs": 2000,
-    "batchToTick": true
+    "batchToTick": true,
+    "directPrivate": true
   },
   "send": {
     "confirmWaitMs": 1000,

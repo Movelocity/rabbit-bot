@@ -56,7 +56,7 @@ export class Hub {
     // 表情回复不立即唤醒，等 tick（省 token）
     const urgent = saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
     this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${saved.sender_name}: ${saved.text.slice(0, 60)}${urgent ? " [唤醒]" : ""}`);
-    this.scheduler?.onMessage(saved.pool_id, urgent, pool.kind === "private" ? "私聊新消息" : "群聊被@");
+    this.scheduler?.onMessage(saved.pool_id, urgent, pool.kind === "private" ? "私聊新消息" : "群聊被@", pool.kind === "private" ? "private" : "group");
     return saved;
   }
 

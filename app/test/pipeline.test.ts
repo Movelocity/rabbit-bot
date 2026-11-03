@@ -80,11 +80,13 @@ async function setup(over: any = {}) {
 test("私聊连发 → 去抖合并为一次唤醒 → send 发出（含 [emoji:中文id] 解析）", async () => {
   const t = await setup();
   t.dm("你好");
-  t.clock.advance(5_000);
+  t.clock.advance(2_000);
   t.dm("在吗 [emoji:微笑]");
-  await t.settle(29_000);
+  // 去抖窗口从配置里取，别在这里写死：它已经从 30s 降到 5s 过一次
+  const debounce = (t.app as any).o.cfg.scheduler.debounceMs;
+  await t.settle(debounce - 1_000);
   assert.equal(t.wakes.length, 0, "去抖未到不唤醒");
-  await t.settle(1_000);
+  await t.settle(1_500);
   assert.equal(t.wakes.length, 1);
   assert.equal(t.wakes[0].outcome, "ok");
   assert.equal(t.wakes[0].read.length, 2);
@@ -437,17 +439,28 @@ test("谈资：用过进冷却，冷却期内不再推；每天新增有上限",
   await t.done();
 });
 
-test("消息攒给 tick：不单独唤醒，tick 一次把这一分钟的消息全读走", async () => {
+test("群里未@：攒给 tick，tick 一次把这一分钟的消息全读走", async () => {
   const t = await setup({ batchToTick: true });
-  t.dm("在吗");
+  t.grp("大家看这个", false);
   await t.settle(30_000);
-  assert.equal(t.wakes.length, 0, "开了 batchToTick 消息不该自己叫醒");
+  assert.equal(t.wakes.length, 0, "开了 batchToTick 群消息不该自己叫醒");
   // tick 活跃期 60s：到点后 tick 读到未读 → 唤醒
   await t.settle(30_000);
   await t.settle(1_000);
   assert.ok(t.wakes.length >= 1, "tick 应该把未读捡起来");
   assert.equal(t.wakes[0].type, "tick");
   const read = t.wakes[0].read ?? [];
-  assert.ok(read.some((m: any) => m.text.includes("在吗")), "tick 唤醒要把消息读进去");
+  assert.ok(read.some((m: any) => m.text.includes("大家看这个")), "tick 唤醒要把消息读进去");
+  await t.done();
+});
+
+test("私聊不等 tick：batchToTick 开着也走快路（他盯着屏幕等）", async () => {
+  const t = await setup({ batchToTick: true });
+  t.dm("在吗");
+  const debounce = (t.app as any).o.cfg.scheduler.debounceMs;
+  assert.ok(debounce <= 10_000, `私聊的去抖窗口该是几秒级，实际 ${debounce}ms`);
+  await t.settle(debounce + 1_000);
+  assert.equal(t.wakes.length, 1, "私聊该在去抖结束后立刻唤醒，而不是等 60s 的 tick");
+  assert.equal(t.wakes[0].type, "message", "私聊走的是消息唤醒，不是 tick");
   await t.done();
 });

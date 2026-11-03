@@ -37,6 +37,12 @@ export interface SchedulerConfig {
    * 比「一条消息一次唤醒、每次都重发一遍 system + 工具定义」便宜得多。
    */
   batchToTick?: boolean;
+  /**
+   * 私聊仍然立刻去抖唤醒（不等 tick）。默认开。
+   * batchToTick 省的是 token（前缀缓存命中），省下来的时间是他盯着屏幕等 40 秒；
+   * 私聊里这两个代价不对等，所以私聊走快路，群里继续攒给 tick。
+   */
+  directPrivate?: boolean;
 }
 
 interface Debounce { timer: unknown; firstAt: number; dueAt: number; count: number; reason: string }
@@ -85,13 +91,14 @@ export class Scheduler {
   }
 
   /** 新消息入池后调用。urgent = 私聊 或 群里 @我 */
-  onMessage(poolId: string, urgent: boolean, reason: string) {
+  onMessage(poolId: string, urgent: boolean, reason: string, kind?: "private" | "group") {
     this.markActive();
     if (!urgent) return; // 群里未 @：等 tick
     const now = this.d.clock.now();
     // 攒给 tick：不做单独唤醒。tick 会把未读一起读走，上下文还是同一个 session，
     // 前缀缓存命中（pi 报 cacheRead，按 1/10 计价）。
-    if (this.cfg.batchToTick) {
+    const direct = this.cfg.directPrivate !== false && kind === "private";
+    if (this.cfg.batchToTick && !direct) {
       this.d.log?.(`message 攒着等 tick ${poolId}（${reason}）`);
       return;
     }
