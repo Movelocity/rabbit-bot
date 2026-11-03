@@ -2,6 +2,7 @@
 import type { Store } from "../core/db.ts";
 import type { MemoryScope } from "../types.ts";
 import { clampInt, resolvePool } from "./common.ts";
+import { findAliases, parseAliasContent } from "../core/alias.ts";
 
 const SCOPES: MemoryScope[] = ["pool", "private", "group", "all"];
 const KINDS = ["fact", "plan", "alias"] as const;
@@ -102,4 +103,21 @@ export function searchMemories(store: Store, input: SearchMemoryInput) {
     to: m.valid_to ?? null,
     replaced_by: m.superseded_by ?? null,
   }));
+}
+
+/**
+ * 检索前置：先把他这次说的话里出现的别名翻出来。
+ * 每轮唤醒都跑一次（纯本地字符串匹配，不调模型、不花钱）。
+ */
+export function resolveAliases(store: Store, input: { user?: string; pool?: string; text?: string }) {
+  if (!input.user) return [];
+  const pool = resolvePool(store, input.pool);
+  const rows = store.visibleMemories(input.user, pool, 200, { kinds: ["alias"] }) as any[];
+  const aliases = rows
+    .map((r) => {
+      const p = parseAliasContent(r.content);
+      return p ? { id: Number(r.id), alias: p.alias, target: p.target } : null;
+    })
+    .filter((x): x is { id: number; alias: string; target: string } => !!x);
+  return findAliases(input.text ?? "", aliases);
 }

@@ -19,6 +19,7 @@ import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine } from "./agent/engine.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
+import { resolveAliases } from "./ops/memories.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Plan, StoredMessage, Wake } from "./types.ts";
@@ -446,10 +447,23 @@ export class App {
       }
       if (list.length) memories.set(pid, list);
     }
+    // 检索前置：他这次的话里出现「那个项目」这类说法时，先把指向翻出来给她，
+    // 省掉一轮「您说的是哪个」——那是把记忆的活推回给用户
+    const aliases: NonNullable<Parameters<typeof wakePrompt>[1]["aliases"]> = [];
+    for (const pid of involved) {
+      const pool = this.store.getPool(pid);
+      if (!pool) continue;
+      const users = [...new Set(unread.filter((m) => m.pool_id === pid && m.user_id).map((m) => m.user_id!))];
+      for (const u of users) {
+        const said = unread.filter((m) => m.pool_id === pid && m.user_id === u).map((m) => m.text).join("\n");
+        const hits = resolveAliases(this.store, { user: u, pool: pid, text: said });
+        if (hits.length) aliases.push({ pool: pid, user_id: u, hits });
+      }
+    }
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
     // 话题库已经搬进沙盒（/work/topics），她自己去读，这里不再查库。
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, plans, handoff, topics: [] });
+    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, aliases, plans, handoff, topics: [] });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;

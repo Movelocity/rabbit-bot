@@ -539,7 +539,7 @@ export class Store {
    */
   visibleMemories(
     userId: string, viewingPool: Pool, limit: number,
-    opts: { at?: number; includeExpired?: boolean } = {},
+    opts: { at?: number; includeExpired?: boolean; kinds?: string[] } = {},
   ): any[] {
     const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by
       FROM memories WHERE user_id=? AND (
@@ -552,6 +552,10 @@ export class Store {
       args.push(opts.at, opts.at);
     } else if (!opts.includeExpired) {
       valid = " AND valid_to IS NULL";
+    }
+    if (opts.kinds?.length) {
+      valid += ` AND kind IN (${opts.kinds.map(() => "?").join(",")})`;
+      args.push(...opts.kinds);
     }
     args.push(limit);
     return this.db.prepare(`${base}${valid} ORDER BY id DESC LIMIT ?`).all(...args) as any[];
