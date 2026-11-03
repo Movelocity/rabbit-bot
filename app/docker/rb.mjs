@@ -116,8 +116,9 @@ const HELP = `用法：rb <命令> [参数…]
   plan-list [--status pending|done|cancelled]
   plan-add --title T [--kind once|cron|none] [--when V] [--pool P] [--anchor L0|L1|L2] [--why W] [--expires ISO]
   plan-update <id> --status pending|done|cancelled
-  mem-add --user U --content C --pool P [--kind fact|topic] [--scope pool|private|group|all]
-  mem-search --user U --pool P [--limit 20]
+  mem-add --user U --content C --pool P [--kind fact|plan|alias] [--scope pool|private|group|all]
+          [--from ISO] [--until ISO] [--supersede <旧记忆id>]
+  mem-search --user U --pool P [--limit 20] [--at ISO] [--all]
   img-list [--source media|inbox|all] [--page 1] [--size 20]
   img-get <media/…|inbox/…> [--out 文件名]
   web-search <查询> [--count 6] [--content]
@@ -174,11 +175,17 @@ async function main() {
           pool: str(flags, "pool"),
           kind: str(flags, "kind"),
           scope: str(flags, "scope"),
+          from: str(flags, "from"),
+          until: str(flags, "until"),
+          supersede: str(flags, "supersede"),
         },
       });
     case "mem-search":
       return api("GET", "/v1/memories", {
-        query: { user: str(flags, "user"), pool: str(flags, "pool"), limit: num(flags, "limit") },
+        query: {
+          user: str(flags, "user"), pool: str(flags, "pool"), limit: num(flags, "limit"),
+          at: str(flags, "at"), all: flags.all ? "1" : undefined,
+        },
       });
     case "img-list":
       return api("GET", "/v1/images", {

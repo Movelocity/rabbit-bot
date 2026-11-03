@@ -68,7 +68,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   for (const [pid, users] of x.memories) {
     for (const u of users) {
       if (!u.items.length) continue;
-      blocks.push(`记忆 ${u.user_id}（在 ${store.poolAlias(pid)} 可见）：${u.items.map((i) => i.content).join("；")}`);
+      blocks.push(`记忆 ${u.user_id}（在 ${store.poolAlias(pid)} 可见；#号是条目 id，改口时用得上）：${u.items.map((i) => `#${i.id} ${i.content}`).join("；")}`);
     }
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));

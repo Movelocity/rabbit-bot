@@ -140,14 +140,22 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
         }
         case "memories": {
           if (parts.length === 2 && method === "GET") {
-            return reply(200, searchMemories(d.store, url.searchParams.get("user") ?? undefined, url.searchParams.get("pool") ?? undefined, qInt(url.searchParams.get("limit"))));
+            const all = url.searchParams.get("all");
+            return reply(200, searchMemories(d.store, {
+              user: url.searchParams.get("user") ?? undefined,
+              pool: url.searchParams.get("pool") ?? undefined,
+              limit: qInt(url.searchParams.get("limit")),
+              at: url.searchParams.get("at") ?? undefined,
+              all: all === "1" || all === "true",
+            }));
           }
           if (parts.length === 2 && method === "POST") {
             return reply(201, addMemory(d.store, {
               user: body.user, content: body.content, pool: body.pool, kind: body.kind, scope: body.scope,
+              from: body.from, until: body.until, supersede: body.supersede,
             }));
           }
-          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=、POST /v1/memories");
+          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories");
         }
         case "images": {
           if (parts.length === 2 && method === "GET") {

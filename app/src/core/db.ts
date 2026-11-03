@@ -54,7 +54,11 @@ CREATE INDEX IF NOT EXISTS idx_proactive_ts ON proactive_log(ts DESC);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fact', content TEXT NOT NULL,
-  source_pool_id TEXT NOT NULL, source_kind TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL
+  source_pool_id TEXT NOT NULL, source_kind TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL,
+  -- 时间维度：一条记忆说的是「什么时候的事」，不只是「什么时候记下的」
+  valid_from INTEGER,      -- NULL = 从 created_at 开始成立
+  valid_to INTEGER,        -- NULL = 至今有效
+  superseded_by INTEGER    -- 被哪一条顶掉（写法上等价于 valid_to = 那一条的时间）
 );
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
 CREATE TABLE IF NOT EXISTS topics (
@@ -102,6 +106,10 @@ export class Store {
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
+    // 记忆时间维度（2026-11-03）：以前记忆是扁平快照，「想辞职」和「想升职」会一起活着
+    for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
+      try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
   }
   close() { this.db.close(); }
 
@@ -489,15 +497,64 @@ export class Store {
   }
 
   // ---------- 记忆 ----------
-  addMemory(m: { user_id: string; kind?: string; content: string; source_pool_id: string; source_kind: PoolKind; scope: MemoryScope }) {
-    return Number(this.db.prepare("INSERT INTO memories(user_id,kind,content,source_pool_id,source_kind,scope,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(m.user_id, m.kind ?? "fact", m.content, m.source_pool_id, m.source_kind, m.scope, Date.now()).lastInsertRowid);
+  /**
+   * 写一条记忆。supersede 传旧条目 id 时，新条目插入后立刻把旧的标成失效。
+   *
+   * 顺序是有意的：先插新的拿到 id，再回头顶旧的——不然中途失败会留下「旧的已经失效、
+   * 新的却没写进去」的空洞，那比两条并存更糟。
+   */
+  addMemory(m: {
+    user_id: string; kind?: string; content: string; source_pool_id: string; source_kind: PoolKind; scope: MemoryScope;
+    valid_from?: number | null; valid_to?: number | null; supersede?: number | null;
+  }): number {
+    const now = Date.now();
+    const id = Number(this.db.prepare(
+      "INSERT INTO memories(user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to) VALUES(?,?,?,?,?,?,?,?,?)")
+      .run(m.user_id, m.kind ?? "fact", m.content, m.source_pool_id, m.source_kind, m.scope, now,
+        m.valid_from ?? null, m.valid_to ?? null).lastInsertRowid);
+    if (m.supersede) this.supersedeMemory(m.supersede, id, m.valid_from ?? now);
+    return id;
   }
-  /** 在 viewingPool 里能看到的某用户记忆（可见范围过滤） */
-  visibleMemories(userId: string, viewingPool: Pool, limit: number): any[] {
-    return this.db.prepare(`SELECT id,kind,content,source_pool_id,scope,created_at FROM memories WHERE user_id=? AND (
+
+  getMemory(id: number): any | null {
+    return (this.db.prepare("SELECT * FROM memories WHERE id=?").get(id) as any) ?? null;
+  }
+
+  /**
+   * 把一条记忆标成「到此为止」。
+   * COALESCE 保证已经失效的不被后来的时间覆盖——失效时刻只有第一次算数。
+   */
+  supersedeMemory(oldId: number, newId: number, at = Date.now()): boolean {
+    const r = this.db.prepare(
+      "UPDATE memories SET valid_to = COALESCE(valid_to, ?), superseded_by = COALESCE(superseded_by, ?) WHERE id = ?",
+    ).run(at, newId, oldId);
+    return Number(r.changes) > 0;
+  }
+  /**
+   * 在 viewingPool 里能看到的某用户记忆（可见范围过滤 + 时间过滤）。
+   *
+   * 默认只给「此刻有效」的：她要知道的是现在，不是历史快照。
+   *   at  给了就查「那一刻有效」的（人问「我以前说过什么」时才用）
+   *   includeExpired 连失效的一起给（调试 / 她自己想理时间线）
+   */
+  visibleMemories(
+    userId: string, viewingPool: Pool, limit: number,
+    opts: { at?: number; includeExpired?: boolean } = {},
+  ): any[] {
+    const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by
+      FROM memories WHERE user_id=? AND (
         scope='all' OR (scope='pool' AND source_pool_id=?) OR (scope='private' AND ?='private') OR (scope='group' AND ?='group')
-      ) ORDER BY id DESC LIMIT ?`).all(userId, viewingPool.pool_id, viewingPool.kind, viewingPool.kind, limit);
+      )`;
+    const args: any[] = [userId, viewingPool.pool_id, viewingPool.kind, viewingPool.kind];
+    let valid = "";
+    if (opts.at !== undefined) {
+      valid = " AND COALESCE(valid_from, created_at) <= ? AND (valid_to IS NULL OR valid_to > ?)";
+      args.push(opts.at, opts.at);
+    } else if (!opts.includeExpired) {
+      valid = " AND valid_to IS NULL";
+    }
+    args.push(limit);
+    return this.db.prepare(`${base}${valid} ORDER BY id DESC LIMIT ?`).all(...args) as any[];
   }
 
   // ---------- 交接 / 日志 / 用量 ----------

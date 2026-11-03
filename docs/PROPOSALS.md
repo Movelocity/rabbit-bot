@@ -16,7 +16,15 @@ dsh-bili-scroll 养鱼方案、duty.md、以及我们这几天聊出来的最佳
 | 3 | 主动性翻转：默认开口，沉默才需要理由 | 删免责句、加总纲 | `be2d173` |
 | 4 | 沙箱持久化：单 volume 内外 rw，内置 rg | `data/sandbox → /work` | `e211c77` |
 | 5 | 结构断言：路由 + 文案都有测试兜 | `wake-script.test.ts` | 同上 |
-| 6 | 充能模型 E + I(E)：回复及时率驱动冷却 | `core/energy.ts` | `414c223` |
+| 6 | ~~充能模型 E + I(E)~~：已被自省+门控取代，`energy.ts` 已删 | ~~`core/energy.ts`~~ | 删于 `d270764` |
+| 7 | 服务端风格闸：客服腔/八股腔拦截 + 退回重写 | `core/style-gate.ts` | `5d794f6` |
+| 8 | 判重表：七天内原样重复不发（短句不判重） | 同上 | `5d794f6` |
+| 9 | 单条长度上限：超 160 字只提醒不拦 | 同上 | `5d794f6` |
+| 10 | 记忆时间维度：`valid_from`/`valid_to`/`superseded_by` + `--supersede` | `db.ts`、`ops/memories.ts` | 本次 |
+| 11 | 模板变量对账：每个 `{{变量}}` 必须在渲染方出现 | `test/template.test.ts` | `5d794f6` |
+| 12 | 分条投递：间隔按上一条长度缩放 | `core/pacing.ts` | `5d794f6` |
+| 13 | 发到一半他插话：压住这句，退回重新判断 | `core/hub.ts` | `aeffd7b` |
+| 14 | 私聊不等 tick：`directPrivate` + 去抖 30s→5s | `core/scheduler.ts` | `7e06bbc` |
 
 ---
 
