@@ -68,7 +68,7 @@ export class App {
   readonly emoji: EmojiTable;
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
-  private activeWake: { type: string } | null = null;
+  private activeWake: { type: string; pools?: Set<string> } | null = null;
   /** 本轮是否决定不回（stay_silent）；每轮唤醒重置 */
   private silenceReason: string | null = null;
   /** 本轮 send 成功次数 */
@@ -98,6 +98,12 @@ export class App {
       currentWake: () => this.activeWake,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
+      // 记忆/计划落到「这一轮真正在说话的那个池」，多个池同时来的时候优先有未读的
+      primaryPool: () => {
+        const ps = [...(this.activeWake?.pools ?? [])];
+        if (!ps.length) return null;
+        return ps.find((pid) => this.store.unread(pid, 1).length) ?? ps[0];
+      },
       rbExec: o.rbExec,
     });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });

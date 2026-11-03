@@ -83,7 +83,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     if (!m.from_self && m.user_id) people.set(m.user_id, m.sender_name);
   }
   if (people.size) {
-    blocks.push(`正在跟你说话的人：${[...people].map(([id, n]) => `${n}（user_id=${id}）`).join("、")}——记记忆、关记忆都要用这个 id`);
+    blocks.push(`正在跟你说话的人：${[...people].map(([id, n]) => `${n}（user_id=${id}）`).join("、")}——查历史要用的 user_id；记记忆不用填，工具会自己带上`);
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
