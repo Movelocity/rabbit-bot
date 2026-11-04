@@ -1,4 +1,6 @@
 /** 记忆与计划：二级入口工具（memory / plan），以及 rb 只留运维。 */
+/** 一次性计划的时间必须是将来：写死日期，跑到那天之后测试就会红 */
+const hourLater = () => new Date(Date.now() + 3600_000).toISOString();
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -105,7 +107,7 @@ test("memory expire：关别人的记忆会被挡住", async () => {
 
 test("plan add / plan done：一件事从记下到标完成", async () => {
   const { store, get } = setup();
-  const a = await run(get("plan"), { action: "add", title: "提醒他带钥匙", when: "2026-11-04T09:00:00+08:00" });
+  const a = await run(get("plan"), { action: "add", title: "提醒他带钥匙", when: hourLater() });
   assert.equal(a.details?.ok, true, JSON.stringify(a));
   const plans = store.listPlans("pending");
   assert.ok(plans.length >= 1, "计划要真的进库");
@@ -237,7 +239,7 @@ test("memory：search 能按关键词翻，recent 给最近的", async () => {
 
 test("plan：list 给得出刚加的，help 列出四个动作", async () => {
   const { get } = setup();
-  await get("plan").execute("id", { action: "add", title: "提醒他开会", when: "2026-11-04T09:00:00+08:00" });
+  await get("plan").execute("id", { action: "add", title: "提醒他开会", when: hourLater() });
   const l: any = await get("plan").execute("id", { action: "list" });
   assert.match(l.content.map((c: any) => c.text ?? "").join(""), /提醒他开会/);
   const h: any = await get("plan").execute("id", { action: "help" });
@@ -313,7 +315,7 @@ import { resolvePrimaryPool } from "../src/core/primary-pool.ts";
 test("计划唤醒：pools 是空的，也要能从 planFires 找到这条计划排给谁", async () => {
   const { store, pool } = setup();
   const p = addPlan(store, loadConfig().timezone, {
-    title: "提醒他喝水", pool: pool!, kind: "once", when: "2026-11-04T09:00:00+08:00",
+    title: "提醒他喝水", pool: pool!, kind: "once", when: hourLater(),
   }, Date.now()) as any;
   const wake: any = { type: "plan", pools: new Set(), planFires: [{ planId: p.id, fireTs: Date.now() }], proactive: [], reasons: [], enqueuedAt: Date.now() };
   assert.equal(resolvePrimaryPool(store, wake), pool, "排计划的时候要知道排给哪个池");

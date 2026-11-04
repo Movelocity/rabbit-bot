@@ -4,6 +4,7 @@ import { loadConfig, missingEnv } from "./config.ts";
 import { App } from "./app.ts";
 import { resolveModel } from "./agent/engine.ts";
 import { FeishuAdapter } from "./adapters/feishu.ts";
+import { MatrixAdapter } from "./adapters/matrix.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { Logger } from "./core/logger.ts";
 import { startInjectServer } from "./inject.ts";
@@ -45,6 +46,20 @@ async function main() {
   if (madeDirs.length) log.info(`补了 ${madeDirs.length} 个技能 data 目录`);
   if (cfg.adapters.feishu.enabled)
     app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes } }, log));
+  if (cfg.adapters.matrix.enabled && process.env.MATRIX_TOKEN)
+    app.hub.addAdapter(
+      new MatrixAdapter(
+        {
+          homeserver: cfg.adapters.matrix.homeserver,
+          userId: cfg.adapters.matrix.userId,
+          accessToken: process.env.MATRIX_TOKEN,
+          stateFile: path.join(cfg.dataDir, "matrix-sync.json"),
+        },
+        log,
+      ),
+    );
+  else if (cfg.adapters.matrix.enabled) log.warn("adapters.matrix 开着但没有 MATRIX_TOKEN，跳过");
+
   // 测试池（platform=mock）：send 只记在内存里，不发任何真实 IM。
   // 测试注入走 INJECT_POOL=mock:test，这样她的回复不会落到主人的飞书。
   app.hub.addAdapter(new MockAdapter());

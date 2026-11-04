@@ -68,6 +68,11 @@
       "fetchSenderName": true,
       "reactions": true,
       "logRawEmoji": true
+    },
+    "matrix": {
+      "enabled": false,
+      "homeserver": "https://matrix.hollway.top",
+      "userId": "@xiaoyu:matrix.hollway.top"
     }
   },
   "emoji": {

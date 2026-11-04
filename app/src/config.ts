@@ -49,7 +49,11 @@ export interface Config {
     reflectionDelayMs?: number;
   };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
-  adapters: { feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean } };
+  adapters: {
+    feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean };
+    /** 自建 Matrix（Continuwuity）。token 走环境变量 MATRIX_TOKEN，不进配置文件 */
+    matrix: { enabled: boolean; homeserver: string; userId: string };
+  };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
   sandbox: {
