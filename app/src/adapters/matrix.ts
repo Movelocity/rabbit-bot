@@ -10,8 +10,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { IMAdapter, SendResult } from "./types.ts";
-import type { InboundMessage, PoolKind } from "../types.ts";
+import type { Attachment, InboundMessage, MediaType, PoolKind } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
+import { saveFile, saveImage, type MediaOptions } from "../core/media.ts";
 
 export interface MatrixOptions {
   homeserver: string; // https://matrix.hollway.top
@@ -20,6 +21,10 @@ export interface MatrixOptions {
   stateFile: string; // since 令牌落盘的位置
   /** 首次启动不回放历史（默认 true） */
   skipBacklog?: boolean;
+  /** 图片落盘参数；不给就不下图片（只留占位文字） */
+  media?: MediaOptions;
+  /** 非图片附件落盘目录（沙箱内的 data/sandbox/files） */
+  filesDir?: string;
 }
 
 interface MatrixEvent {
@@ -43,6 +48,8 @@ export class MatrixAdapter implements IMAdapter {
   private started = false;
   /** room_id → 是否私聊（成员数 ≤ 2）。首次见到房间时问一次，之后不再问 */
   private kindCache = new Map<string, PoolKind>();
+  /** 事件串行队列：下载附件是异步的，顺序不能在池里错乱 */
+  private queue: Promise<void> = Promise.resolve();
   private titleCache = new Map<string, string>();
   /** 已经问过 /joined_members 的房间，避免每轮 sync 都问一次 */
   private metaAsked = new Set<string>();
@@ -169,11 +176,16 @@ export class MatrixAdapter implements IMAdapter {
         .filter((e) => e.type === "m.room.message" && !this.nameCache.has(e.sender))
         .map((e) => e.sender);
       if (unknown.length) await this.resolveNames([...new Set(unknown)]);
-      for (const ev of events) this.dispatch(roomId, ev, room);
+      for (const ev of events) this.enqueue(() => this.dispatch(roomId, ev, room));
     }
   }
 
-  private dispatch(roomId: string, ev: MatrixEvent, room: any) {
+  /** 事件按到达顺序串行处理：下载附件是异步的，乱序会让池里的图文对不上 */
+  private enqueue(task: () => Promise<void>) {
+    this.queue = this.queue.then(task).catch((e) => this.log.warn(`Matrix 处理事件失败：${String(e).slice(0, 120)}`));
+  }
+
+  private async dispatch(roomId: string, ev: MatrixEvent, room: any): Promise<void> {
     if (!this.sink) return;
     if (this.seenSet.has(ev.event_id)) return;
     this.rememberSeen(ev.event_id);
@@ -197,13 +209,22 @@ export class MatrixAdapter implements IMAdapter {
     if (ev.type !== "m.room.message") return;
     if (ev.unsigned?.redacted_because) return;
     const msgtype = String(ev.content?.msgtype ?? "");
-    if (msgtype !== "m.text" && msgtype !== "m.notice" && msgtype !== "m.image") return;
+    const media: MediaType | null =
+      msgtype === "m.text" || msgtype === "m.notice" ? "text"
+      : msgtype === "m.image" ? "image"
+      : msgtype === "m.file" ? "file"
+      : msgtype === "m.audio" ? "audio"
+      : msgtype === "m.video" ? "video"
+      : null;
+    // 表情、位置、投票之类现在不处理：宁可当没看见，也不要塞一条「[未知消息]」进池
+    if (!media) return;
     const body = String(ev.content?.body ?? "");
+    const url = typeof ev.content?.url === "string" ? ev.content.url : "";
     const fromSelf = this.isSelf(ev.sender);
     const kind = this.kindCache.get(roomId) ?? "group";
-    const media = msgtype === "m.image" ? ("image" as const) : ("text" as const);
     const mentions = (ev.content?.["m.mentions"] as { user_ids?: string[] } | undefined)?.user_ids ?? [];
     const isMentionMe = mentions.includes(this.opts.userId) || body.includes(this.opts.userId);
+    const attachment = await this.attach(ev, media, url, body);
     this.sink({
       platform: "matrix",
       external_chat_id: roomId,
@@ -213,13 +234,83 @@ export class MatrixAdapter implements IMAdapter {
       sender_id: ev.sender,
       sender_name: this.nameCache.get(ev.sender) ?? this.shortName(ev.sender),
       ts: ev.origin_server_ts,
-      text: media === "image" ? `[图片${body ? `：${body}` : ""}]` : body,
+      text: this.textOf(media, body, url, attachment),
       reply_to: (ev.content?.["m.relates_to"] as { "m.in_reply_to"?: { event_id?: string } } | undefined)?.["m.in_reply_to"]?.event_id ?? null,
       mentions,
       is_mention_me: isMentionMe,
       media_type: media,
       from_self: fromSelf,
+      attachment,
     });
+  }
+
+  /** 池里看到的那行字。附件下载成功时顺带给出她在沙箱里的路径。 */
+  private textOf(media: MediaType, body: string, url: string, attachment: Attachment | null): string {
+    const rel = attachment && this.opts.filesDir && media !== "image"
+      ? path.relative(path.dirname(this.opts.filesDir), attachment.path)
+      : "";
+    // 「没下载下来」只在真去下了、且下失败时才说；没配落盘目录是另一回事
+    const suffix = rel ? `（已存到 ${rel}）` : url && this.opts.filesDir ? "（没下载下来）" : "";
+    if (media === "image") return `[图片${body ? `：${body}` : ""}]${url && !attachment && this.opts.media ? "（没下载下来）" : ""}`;
+    if (media === "file") return `[文件：${body || "未命名"}]${suffix}`;
+    if (media === "audio") return `[语音]${suffix}`;
+    if (media === "video") return `[视频]${suffix}`;
+    return body;
+  }
+
+  /**
+   * 把附件从 homeserver 拉下来落盘。图片走 saveImage（压缩、喂模型），
+   * 其它文件原样存进沙箱，她可以自己 read_file / terminal 打开。
+   * 下载失败不算错误：文字里留「没下载下来」，她至少知道有这么个东西。
+   */
+  private async attach(ev: MatrixEvent, media: MediaType, url: string, body: string): Promise<Attachment | null> {
+    if (media === "text" || !url) return null;
+    try {
+      if (media === "image") {
+        if (!this.opts.media) return null;
+        const raw = await this.download(url);
+        return raw ? saveImage(raw, this.opts.media, ev.event_id) : null;
+      }
+      if (!this.opts.filesDir) return null;
+      const raw = await this.download(url);
+      if (!raw) return null;
+      const saved = saveFile(raw, this.opts.filesDir, body || "file", ev.event_id);
+      const mime = String((ev.content as any)?.info?.mimetype ?? "application/octet-stream");
+      return { path: saved.path, mime, width: 0, height: 0, bytes: saved.bytes };
+    } catch (e) {
+      this.log.warn(`Matrix 附件落盘失败 ${url}：${String(e).slice(0, 120)}`);
+      return null;
+    }
+  }
+
+  /** mxc://server/mediaId → 字节。新老两个下载端点都试，老 homeserver 只认 v3。 */
+  private async download(mxc: string): Promise<Buffer | null> {
+    const m = /^mxc:\/\/([^/]+)\/(.+)$/.exec(mxc);
+    if (!m) return null;
+    const [, server, id] = m;
+    const paths = [
+      `/_matrix/client/v1/media/download/${encodeURIComponent(server)}/${encodeURIComponent(id)}`,
+      `/_matrix/media/v3/download/${encodeURIComponent(server)}/${encodeURIComponent(id)}`,
+    ];
+    for (const p of paths) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 60_000);
+      try {
+        const res = await fetch(`${this.opts.homeserver}${p}`, {
+          headers: { Authorization: `Bearer ${this.opts.accessToken}` },
+          signal: ac.signal,
+        });
+        if (!res.ok) continue;
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (!buf.length) continue; // 空响应当失败：0 字节的文件存下来只会骗自己
+        return buf;
+      } catch (e) {
+        this.log.warn(`Matrix 下载 ${p} 失败：${String(e).slice(0, 100)}`);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return null;
   }
 
   /**

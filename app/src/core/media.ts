@@ -56,6 +56,19 @@ export function saveImage(raw: Buffer, opts: MediaOptions, key: string): Attachm
   }
 }
 
+/**
+ * 非图片附件落盘：文件名消毒后保留，前面挂 8 位事件号防重名。
+ * 存到沙箱里（`data/sandbox/files`），这样她能直接用 read_file / terminal 读到。
+ */
+export function saveFile(raw: Buffer, dir: string, name: string, key: string): { path: string; bytes: number } {
+  fs.mkdirSync(dir, { recursive: true });
+  const base = path.basename(name || "file").replace(/[^\p{L}\p{N}._-]/gu, "_").slice(-80) || "file";
+  const prefix = key.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8) || String(Date.now());
+  const out = path.join(dir, `${prefix}-${base}`);
+  fs.writeFileSync(out, raw);
+  return { path: out, bytes: raw.length };
+}
+
 /** 读成 pi-ai 的 ImageContent（base64）。非图片或读失败返回 null。 */
 export function toImageContent(a: Attachment): { type: "image"; data: string; mimeType: string } | null {
   try {

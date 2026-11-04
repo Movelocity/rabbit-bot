@@ -54,6 +54,8 @@ async function main() {
           userId: cfg.adapters.matrix.userId,
           accessToken: process.env.MATRIX_TOKEN,
           stateFile: path.join(cfg.dataDir, "matrix-sync.json"),
+          media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes },
+          filesDir: path.join(cfg.dataDir, "sandbox", "files"),
         },
         log,
       ),
