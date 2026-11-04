@@ -169,7 +169,7 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
   parts.push(`你是${i.agentName}。此刻没人跟你说话，你在想什么？`);
   parts.push("想清楚之后，只输出一个 JSON 对象，六个键，不要别的任何内容：");
   parts.push(`{
-  "thought": "你此刻心里在想什么，一两句话，写具体的，别写空话",
+  "thought": "你此刻的状态和在想的事，一到两句话：先说你此刻的心情、累不累，再说你在想什么。写具体的，别写空话",
   "style_hint": "如果开口，用什么语气（比如：随口问一句，别像在检查）",
   "urgency": 0.0,
   "topic_pick": "想聊的话题，没有就空字符串",
