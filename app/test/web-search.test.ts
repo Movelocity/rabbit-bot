@@ -1,6 +1,9 @@
 /** 联网搜索（ops/web）：API 和沙盒 rb 客户端共用。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { searchWeb } from "../src/ops/web.ts";
 
 // 读 DEEPSEEK_API_KEY；测试不依赖外部 env（有专门用例临时删它）。
@@ -76,12 +79,19 @@ test("web-search：空查询直接拒绝", async () => {
 });
 
 test("web-search：没有 API key 时明确说不可用", async () => {
-  const old = process.env.DEEPSEEK_API_KEY;
+  // 光删 process.env 不够：loadEnvFile() 会去 ~/.config/rabbit-bot/env 把 key 捞回来，
+  // 本机有那份文件的时候这条用例必然失败。把 HOME 指到空目录，才是真的「没有 key」。
+  const oldKey = process.env.DEEPSEEK_API_KEY;
+  const oldHome = process.env.HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rb-nokey-"));
   delete process.env.DEEPSEEK_API_KEY;
+  process.env.HOME = home;
   try {
     await assert.rejects(() => searchWeb("x"), /DEEPSEEK_API_KEY/);
   } finally {
-    if (old !== undefined) process.env.DEEPSEEK_API_KEY = old;
+    if (oldKey !== undefined) process.env.DEEPSEEK_API_KEY = oldKey;
+    if (oldHome !== undefined) process.env.HOME = oldHome;
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
