@@ -4,6 +4,7 @@ import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
 import { localDay } from "../core/tide.ts";
+import { isOwnerId } from "../core/owners.ts";
 import { loadPersona } from "./persona.ts";
 import { render } from "./template.ts";
 
@@ -26,7 +27,8 @@ export function poolLabel(store: Store, p: Pool): string {
 
 export function fmtMsg(m: StoredMessage, withSeq = true): string {
   const who = m.from_self ? "我" : `${m.sender_name}(${m.user_id ?? m.sender_id})`;
-  const tag = m.is_mention_me ? "[@我]" : "";
+  // [主人] 是她判断"这句必须接"的依据：群聊里其他人的话可以不接，主人的不行
+  const tag = `${m.is_mention_me ? "[@我]" : ""}${!m.from_self && isOwnerId(m.sender_id) ? "[主人]" : ""}`;
   return `${withSeq ? `#${m.seq} ` : ""}${fmtShort(m.ts)} ${who}${tag}: ${m.text}`;
 }
 
@@ -78,12 +80,12 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     blocks.push(`说法对照 ${a.user_id}（他这么说的时候指的就是这个，别反问）：${a.hits.map((h) => `「${h.alias}」= ${h.target}`).join("；")}`);
   }
   // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
-  const people = new Map<string, string>();
+  const people = new Map<string, { name: string; owner: boolean }>();
   for (const m of x.unread) {
-    if (!m.from_self && m.user_id) people.set(m.user_id, m.sender_name);
+    if (!m.from_self && m.user_id) people.set(m.user_id, { name: m.sender_name, owner: isOwnerId(m.sender_id) });
   }
   if (people.size) {
-    blocks.push(`正在跟你说话的人：${[...people].map(([id, n]) => `${n}（user_id=${id}）`).join("、")}——查历史要用的 user_id；记记忆不用填，工具会自己带上`);
+    blocks.push(`正在跟你说话的人：${[...people].map(([id, p]) => `${p.name}（user_id=${id}${p.owner ? "，主人" : ""}）`).join("、")}——查历史要用的 user_id；记记忆不用填，工具会自己带上`);
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");

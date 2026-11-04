@@ -90,14 +90,14 @@ export class Scheduler {
     if (wasIdle && this.running && this.cfg.activeTickMs < this.cfg.tickMs) this.scheduleTick(); // 立即切换到短 tick
   }
 
-  /** 新消息入池后调用。urgent = 私聊 或 群里 @我 */
-  onMessage(poolId: string, urgent: boolean, reason: string, kind?: "private" | "group") {
+  /** 新消息入池后调用。urgent = 私聊 / 群里 @我 / 群里主人说话；forceDirect = 别攒到 tick，立刻去抖唤醒 */
+  onMessage(poolId: string, urgent: boolean, reason: string, kind?: "private" | "group", forceDirect = false) {
     this.markActive();
     if (!urgent) return; // 群里未 @：等 tick
     const now = this.d.clock.now();
     // 攒给 tick：不做单独唤醒。tick 会把未读一起读走，上下文还是同一个 session，
     // 前缀缓存命中（pi 报 cacheRead，按 1/10 计价）。
-    const direct = this.cfg.directPrivate !== false && kind === "private";
+    const direct = forceDirect || (this.cfg.directPrivate !== false && kind === "private");
     if (this.cfg.batchToTick && !direct) {
       this.d.log?.(`message 攒着等 tick ${poolId}（${reason}）`);
       return;

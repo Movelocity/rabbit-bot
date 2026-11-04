@@ -161,6 +161,9 @@ export class MatrixAdapter implements IMAdapter {
   }
 
   private async handleSync(data: any) {
+    // 被邀请进新房间走的是 rooms.invite，不是 rooms.join——只遍历 join 会出现
+    // 「拉她进群她没反应」：那些房间她还没加入，事件一条都不会进 timeline。
+    for (const roomId of Object.keys(data?.rooms?.invite ?? {})) this.autoJoin(roomId);
     const rooms = data?.rooms?.join ?? {};
     for (const [roomId, room] of Object.entries<any>(rooms)) {
       const events: MatrixEvent[] = room?.timeline?.events ?? [];

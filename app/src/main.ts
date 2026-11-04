@@ -7,6 +7,7 @@ import { FeishuAdapter } from "./adapters/feishu.ts";
 import { MatrixAdapter } from "./adapters/matrix.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { Logger } from "./core/logger.ts";
+import { setOwnerIds } from "./core/owners.ts";
 import { startInjectServer } from "./inject.ts";
 import { startApiServer } from "./api.ts";
 import { resolveApiToken } from "./api-token.ts";
@@ -19,6 +20,8 @@ import path from "node:path";
 async function main() {
   const cfg = loadConfig();
   const log = new Logger(cfg.logDir);
+  // 主人名单：群聊里他说的话不 @ 也要回（hub 判唤醒、prompt 标 [主人] 都用它）
+  setOwnerIds([...(cfg.adapters.matrix.ownerIds ?? [])]);
   if (cfg.llm.provider === "faux") throw new Error("正式服务不能使用 faux 桩模型；请在 config/local.json 设置 llm.provider/model");
   if (cfg.adapters.feishu.enabled) {
     const miss = missingEnv(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);

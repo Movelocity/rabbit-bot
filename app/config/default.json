@@ -134,6 +134,13 @@
     "maxPerDay": 6,
     "maxConsecutive": 3,
     "quietStart": "23:30",
-    "quietEnd": "08:00"
+    "quietEnd": "08:00",
+    "group": {
+      "urgencyThreshold": 0.6,
+      "minSilentMs": 900000,
+      "minIntervalMs": 1800000,
+      "maxPerDay": 2,
+      "maxConsecutive": 1
+    }
   }
 }

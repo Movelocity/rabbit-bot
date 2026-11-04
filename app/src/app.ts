@@ -137,6 +137,10 @@ export class App {
     // 沉默时长跨池算：切到别的池不代表用户消失了
     const globalLast = this.store.lastUserMessageTs(null);
     const out: NonNullable<Wake["proactive"]> = [];
+    // 群聊比私聊克制得多：门槛更高、间隔更长、一天更少（字段在 config.proactive.group）
+    const { group: groupOverride, ...baseGate } = cfg.proactive ?? ({} as typeof cfg.proactive);
+    const gateFor = (kind: string) =>
+      kind === "group" ? { ...baseGate, ...(groupOverride ?? {}) } : baseGate;
 
     for (const pool of this.store.listPools()) {
       const pid = pool.pool_id;
@@ -158,7 +162,7 @@ export class App {
         consecutiveSpeaks: consecutive,
         chatStreaming: this.queue.isBusy(),
         tz: cfg.timezone,
-        cfg: cfg.proactive,
+        cfg: gateFor(pool.kind),
       });
 
       // 只在「被拦下」时记账：真开口的要等这一轮结束才知道发没发出去（她可能决定不说）

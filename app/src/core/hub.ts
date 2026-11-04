@@ -6,6 +6,7 @@ import type { IMAdapter } from "../adapters/types.ts";
 import type { Config } from "../config.ts";
 import type { Store } from "./db.ts";
 import { parseEmoji, type EmojiTable } from "./emoji.ts";
+import { isOwnerId } from "./owners.ts";
 import { waitBefore, visibleLen } from "./pacing.ts";
 import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
@@ -53,10 +54,21 @@ export class Hub {
     }
     if (saved.from_self) return saved;
     const pool = this.store.getPool(saved.pool_id)!;
-    // 表情回复不立即唤醒，等 tick（省 token）
+    // 群聊和私聊是两种节奏：
+    //   私聊＝对话，消息进来就该醒（表情回复除外，等 tick 省 token）
+    //   群聊＝默认潜水，攒到 tick 周期一起看；只有被 @ 才立刻看这一屏
+    //          （"被点到名"是别人明确在跟你说话，等 tick 就错过了对话时机）
+    //   主人没有特权：谁的消息都一样等 tick，标 [主人] 只是给她一个"这是谁"的线索
     const urgent = saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
-    this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${saved.sender_name}: ${saved.text.slice(0, 60)}${urgent ? " [唤醒]" : ""}`);
-    this.scheduler?.onMessage(saved.pool_id, urgent, pool.kind === "private" ? "私聊新消息" : "群聊被@", pool.kind === "private" ? "private" : "group");
+    const where = pool.kind === "private" ? "私聊" : saved.is_mention_me ? "群聊被@：立刻看" : "群聊：等 tick";
+    this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${saved.sender_name}: ${saved.text.slice(0, 60)}〔${where}〕`);
+    this.scheduler?.onMessage(
+      saved.pool_id,
+      urgent,
+      pool.kind === "private" ? "私聊新消息" : "群聊被@",
+      pool.kind === "private" ? "private" : "group",
+      pool.kind === "group" && saved.is_mention_me,
+    );
     return saved;
   }
 

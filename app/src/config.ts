@@ -47,12 +47,20 @@ export interface Config {
   proactive: { enabled: boolean } & Partial<GateConfig> & {
     /** 用户最后一条消息之后多久开始自省 */
     reflectionDelayMs?: number;
+    /** 群聊池的额外收紧：群里主动开口要更克制，覆盖上面的同名字段 */
+    group?: Partial<GateConfig>;
   };
   llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number };
   adapters: {
     feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean };
     /** 自建 Matrix（Continuwuity）。token 走环境变量 MATRIX_TOKEN，不进配置文件 */
-    matrix: { enabled: boolean; homeserver: string; userId: string };
+    matrix: {
+      enabled: boolean;
+      homeserver: string;
+      userId: string;
+      /** 主人自己的 mxid：群聊里他说的话不 @ 也要回（见 core/owners.ts） */
+      ownerIds?: string[];
+    };
   };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
