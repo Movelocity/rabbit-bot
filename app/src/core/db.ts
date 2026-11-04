@@ -402,6 +402,22 @@ export class Store {
     return Number((row as any)?.t ?? 0) || 0;
   }
 
+  /**
+   * 上一次「真的被唤醒过一次」的时刻：发出去算，醒来了决定不说也算。
+   *
+   * 冷却要挂在这个上，不能挂在「上一次真发」上——她忍住不说的那些轮次以前不留痕迹，
+   * 于是每 tick 门全开、同一个念头被反复唤醒（线上实测一个念头连醒 19 次，只发出 2 条）。
+   *
+   * 只认 agent_silent 开头的 skip：被门拦下也记 skip，那是「没被唤醒」，不能当尝试，
+   * 否则冷却会被自己的拦截不断刷新，她就再也开不了口。
+   */
+  lastProactiveAttemptTs(poolId: string): number {
+    const row = this.db.prepare(
+      `SELECT MAX(ts) AS t FROM proactive_log
+       WHERE pool_id=? AND (decision='speak' OR reason LIKE 'agent_silent%')`).get(poolId);
+    return Number((row as any)?.t ?? 0) || 0;
+  }
+
   /** 最近 N 条主动决策，调试用：查「她为什么今天没说话」 */
   recentProactive(limit = 40): any[] {
     return this.db.prepare("SELECT * FROM proactive_log ORDER BY ts DESC LIMIT ?").all(limit) as any[];

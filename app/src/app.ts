@@ -142,7 +142,6 @@ export class App {
       const pid = pool.pool_id;
       const r = this.store.latestReflection(pid);
       const urgency = r ? Number(r.urgency) : null;
-      const lastSpeak = this.store.lastProactiveSpeakTs(pid);
       // 连说没人回：用户最后一条之后，她主动说了几次。不用存计数器，从库里数出来
       const consecutive = globalLast > 0
         ? this.store.countProactiveSpeaks(globalLast, now + 1, pid)
@@ -153,7 +152,8 @@ export class App {
         urgency,
         lastUserTs: globalLast,
         poolLastUserTs: this.store.lastUserMessageTs(pid),
-        lastSpeakTs: lastSpeak,
+        // 冷却锚点用「上次尝试」而不是「上次真发」：醒了又忍住不说的那轮也得冷静一下
+        lastSpeakTs: this.store.lastProactiveAttemptTs(pid),
         speaksToday: this.store.countProactiveSpeaks(dayStart, dayEnd, pid),
         consecutiveSpeaks: consecutive,
         chatStreaming: this.queue.isBusy(),
