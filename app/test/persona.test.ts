@@ -48,6 +48,22 @@ test("没改文件时走缓存（同一个字符串）", () => {
   assert.equal(a, "缓存测试");
 });
 
-test("真实路径指向 config/persona.md", () => {
-  assert.match(personaPath(), /config[\\/]persona\.md$/);
+test("没有运行时人设时，路径指向仓库里的 config/persona.md", () => {
+  const c = { ...cfg, runtimeDir: path.join(os.tmpdir(), "rabbit-bot-no-runtime") } as any;
+  assert.match(personaPath(c), /config[\\/]persona\.md$/);
+});
+
+test("运行时目录里有人设就优先用它（真身在仓库外）", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-runtime-"));
+  fs.writeFileSync(path.join(dir, "persona.md"), "运行时的人设");
+  const c = { ...cfg, runtimeDir: dir } as any;
+  assert.equal(personaPath(c), path.join(dir, "persona.md"));
+  assert.equal(loadPersona(c), "运行时的人设");
+});
+
+test("运行时目录空着 → 仓库默认份也没有 → 用 config 里那句简单助手", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-runtime-empty-"));
+  const c = { ...cfg, runtimeDir: dir } as any;
+  assert.match(personaPath(c), /config[\\/]persona\.md$/);
+  assert.equal(loadPersona(c), "配置里的人设", "新部署看到的应该是最素的那句，不是某个人的真身");
 });

@@ -63,6 +63,9 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `adapters.feishu.reactions` | true | 处理“表情回复”事件（需在后台订阅，见下） |
 | `adapters.feishu.logRawEmoji` | true | 把含表情的入站原始 content 记到 app.log，便于核对 |
 | `context.recentContextMessages` | 8 | 池首次出现在会话中时附带的近期上下文条数 |
+| `runtimeDir` | `~/.config/rabbit-bot/runtime` | 人设 / 提示词 / 话题库的真身目录（`RABBIT_BOT_RUNTIME` 可改），见 app/README「定制它」 |
+
+**人设默认是简单助手**（`agent.name=小池`），仓库里不含任何人的真身设定：运行时目录有 `persona.md` 就用它，没有就用 `agent.persona` 那一句。想给它性格，照着 `app/config/persona.example.md` 写一份放进运行时目录。
 
 ## 环境变量（只从环境变量读取密钥，代码里没有任何密钥）
 

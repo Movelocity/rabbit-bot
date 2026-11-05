@@ -24,6 +24,30 @@ npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 
 
 缺任一凭据进程会 `exit 2` 不启动；已经有实例在跑会 `exit 3`。
 
+## 定制它（人设 / 提示词 / 话题库）
+
+默认只是个简单助手：`agent.name=小池`，人设一句「你是一个自然、简短、有分寸的聊天伙伴。」
+性格留给玩家自己定——仓库里不存任何人的真身设定。
+
+三样东西都可以换，放运行时目录（默认 `~/.config/rabbit-bot/runtime/`，环境变量 `RABBIT_BOT_RUNTIME` 可改）：
+
+```bash
+mkdir -p ~/.config/rabbit-bot/runtime
+cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改成你要的
+```
+
+| 路径 | 是什么 | 改完要不要重启 |
+|---|---|---|
+| `runtime/persona.md` | 人设正文，进 system prompt 的 `{{persona}}` | 要 |
+| `runtime/prompt/` | 主提示词 + 三种场景剧本（`scene-*.md`） | 剧本不用，`system.md` 要 |
+| `runtime/topics/` | 话题库，按块分（`rg` 搜、`read_file` 读） | 不用 |
+
+规则只有一条：**运行时目录有就用它，没有才用仓库里的默认份。** 没有配置开关。仓库里的
+`config/persona.example.md` 和 `data/sandbox/topics/` 是模板和空架子，clone 下来能直接跑。
+
+容器里路径不变（`/work/prompt`、`/work/topics`），只是挂载源换成了运行时目录；
+挂载变了进程启动时会重建容器。
+
 ## 怎么和它说话
 
 | 方式 | 命令 |
