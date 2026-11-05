@@ -6,7 +6,7 @@ import path from "node:path";
 import { loadPersona, personaPath } from "../src/agent/persona.ts";
 import { loadConfig } from "../src/config.ts";
 
-const cfg = { ...loadConfig(), agent: { name: "小鲸", persona: "配置里的人设" } } as any;
+const cfg = { ...loadConfig(), agent: { name: "小池", persona: "配置里的人设" } } as any;
 
 function tmpFile(name: string): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-persona-")), name);

@@ -25,7 +25,7 @@ test("话很密的时候，自省要看到 90 分钟前的原话，而不是只�
   for (let i = 1; i <= 30; i++) {
     store.insertMessage({
       platform: "feishu", external_chat_id: "oc_r", pool_kind: "private", msg_id: `m${i}`,
-      sender_id: "me", sender_name: "小鲸", from_self: true, ts: t0 - 40 * MIN + i * MIN, text: `第 ${i} 句`,
+      sender_id: "me", sender_name: "小池", from_self: true, ts: t0 - 40 * MIN + i * MIN, text: `第 ${i} 句`,
       reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
     });
   }
@@ -42,7 +42,7 @@ test("冷清的池：时间窗口里没几条，就往前补到下限", () => {
   for (let i = 0; i < 8; i++) {
     store.insertMessage({
       platform: "feishu", external_chat_id: "oc_q", pool_kind: "private", msg_id: `q${i}`,
-      sender_id: i % 2 ? "me" : "u1", sender_name: i % 2 ? "小鲸" : "他", ts: t0 - (30 - i) * 60 * MIN,
+      sender_id: i % 2 ? "me" : "u1", sender_name: i % 2 ? "小池" : "他", ts: t0 - (30 - i) * 60 * MIN,
       text: `旧消息 ${i}`, reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
     });
   }
@@ -63,7 +63,7 @@ function seedKeys(store: Store, t0: number) {
   for (let i = 1; i <= 6; i++) {
     store.insertMessage({
       platform: "feishu", external_chat_id: "oc_s", pool_kind: "private", msg_id: `s${i}`,
-      sender_id: "me", sender_name: "小鲸", from_self: true, ts: t0 - (30 - i) * MIN, text: `钥匙到底弄好了没 ${i}`,
+      sender_id: "me", sender_name: "小池", from_self: true, ts: t0 - (30 - i) * MIN, text: `钥匙到底弄好了没 ${i}`,
       reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
     });
   }
