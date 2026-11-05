@@ -5,7 +5,7 @@ import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
 import { localDay } from "../core/tide.ts";
 import { isOwnerId } from "../core/owners.ts";
-import { loadPersona } from "./persona.ts";
+import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[]): string {
@@ -14,7 +14,7 @@ export function systemPrompt(cfg: Config, emojis: string[]): string {
   // 文案本身在 config/prompt/system.md，改它不用动这里。
   return render("system", {
     agent_name: cfg.agent.name,
-    persona: loadPersona(cfg),
+    persona: loadPersona(cfg, personaPath(cfg)),
     emoji_block: emojis.length
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",

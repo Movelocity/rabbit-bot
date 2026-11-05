@@ -116,12 +116,26 @@ async function envMatches(container: string, env: Record<string, string>): Promi
   return Object.entries(env).every(([k, v]) => map.get(k) === v);
 }
 
-/** 保证容器在跑：在跑就返回；停了就 start；不存在就按边界建一个。env 变了会重建。 */
+/**
+ * 挂载点变了也要重建：容器是长活的，挂载只在 `docker run` 那一刻生效。
+ * 运行时目录（人设/话题库）第一次接进来时不重建，容器里看到的还是旧的空壳。
+ */
+async function mountsMatch(container: string, volumes: SandboxShellOptions["volumes"]): Promise<boolean> {
+  const r = await run("docker", ["inspect", "-f", "{{range .Mounts}}{{.Source}}=>{{.Destination}};{{end}}", container], 15000);
+  if (r.code !== 0) return false;
+  const cur = new Set(r.out.trim().split(";").filter(Boolean));
+  const want = new Set(volumes.map((v) => `${v.host}=>${v.container}`));
+  if (cur.size !== want.size) return false;
+  for (const w of want) if (!cur.has(w)) return false;
+  return true;
+}
+
+/** 保证容器在跑：在跑就返回；停了就 start；不存在就按边界建一个。env 或挂载变了会重建。 */
 export async function ensureSandboxContainer(opts: SandboxShellOptions): Promise<{ ok: boolean; message: string }> {
   const desired = opts.env ?? {};
   const probe = await run("docker", ["inspect", "-f", "{{.State.Running}}", opts.container], 15000);
   if (probe.code === 0) {
-    if (!(await envMatches(opts.container, desired))) {
+    if (!(await envMatches(opts.container, desired)) || !(await mountsMatch(opts.container, opts.volumes))) {
       await run("docker", ["rm", "-f", opts.container], 30000);
     } else if (probe.out.trim() === "true") return { ok: true, message: "running" };
     else {

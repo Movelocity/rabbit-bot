@@ -1,6 +1,7 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
 import type { GateConfig } from "./core/gate.ts";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,11 @@ export interface EmojiTarget {
 
 export interface Config {
   timezone: string;
+  /**
+   * 运行时内容根目录：人设、提示词、话题库都放这儿（默认 ~/.config/rabbit-bot/runtime）。
+   * 仓库里只有代码和示例——这类内容会变、而且常常是私人内容，不该跟着代码推到 GitHub。
+   */
+  runtimeDir: string;
   dataDir: string;
   logDir: string;
   scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
@@ -108,6 +114,10 @@ function readJson(p: string): unknown {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
+function expandHome(p: string): string {
+  return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
 export function loadConfig(overrides?: unknown): Config {
   let cfg = readJson(path.join(APP_ROOT, "config/default.json")) as Config;
   const local = path.join(APP_ROOT, "config/local.json");
@@ -115,6 +125,7 @@ export function loadConfig(overrides?: unknown): Config {
   const extra = process.env.RABBIT_BOT_CONFIG;
   if (extra) cfg = deepMerge(cfg, readJson(path.resolve(extra)));
   if (overrides) cfg = deepMerge(cfg, overrides);
+  cfg.runtimeDir = path.resolve(expandHome(process.env.RABBIT_BOT_RUNTIME || cfg.runtimeDir));
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
   cfg.sandbox.dir = path.resolve(APP_ROOT, cfg.sandbox.dir);

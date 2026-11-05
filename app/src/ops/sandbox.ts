@@ -5,6 +5,7 @@ import { createSandboxFs } from "../core/sandbox-fs.ts";
 import { runShell, type SandboxArgvOptions } from "../core/sandbox-shell.ts";
 import { apiEnv, resolveApiToken } from "../api-token.ts";
 import { ensureSkillDataDirs } from "./skills.ts";
+import { runtimeOverlays } from "../core/runtime.ts";
 
 function sbox(cfg: Config) {
   const sc = cfg.sandbox;
@@ -13,7 +14,21 @@ function sbox(cfg: Config) {
     maxFileBytes: sc.maxFileBytes,
     maxFiles: sc.maxFiles,
     maxReadChars: sc.maxReadChars,
+    overlays: runtimeOverlays(cfg),
   });
+}
+
+/**
+ * 运行时内容挂到 /work 下的同名子目录（prompt、topics）。
+ * Docker 允许在同一个父挂载下再挂子路径，后者覆盖前者——所以 /work 还是 data/sandbox，
+ * 但 /work/topics 指向仓库外的真身。
+ */
+function withRuntimeVolumes(cfg: Config): SandboxArgvOptions["volumes"] {
+  const vols = [...cfg.sandbox.shell.volumes];
+  for (const [name, host] of Object.entries(runtimeOverlays(cfg))) {
+    vols.push({ host, container: `/work/${name}`, mode: "rw" });
+  }
+  return vols;
 }
 
 /** 沙盒 shell 的完整参数；会自动补上 RB_API_URL / RB_API_TOKEN。 */
@@ -24,7 +39,7 @@ export function sandboxShellOptions(cfg: Config, timeoutMs?: number): SandboxArg
     container: sc.container,
     image: sc.image,
     network: sc.network,
-    volumes: sc.volumes,
+    volumes: withRuntimeVolumes(cfg),
     workdir: "/work",
     hostCwd: sc.host?.cwd,
     hostInheritEnv: sc.host?.inheritEnv,

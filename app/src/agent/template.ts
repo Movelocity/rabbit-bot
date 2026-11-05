@@ -13,13 +13,22 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import type { Config } from "../config.ts";
+import { runtimeHas, runtimePath } from "../core/runtime.ts";
 
-const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "data", "sandbox", "prompt");
+export const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "data", "sandbox", "prompt");
 
 let dir = DEFAULT_DIR;
 /** 测试用：把模板目录指到夹具上 */
 export function setTemplateDir(d: string): void { dir = d; cache.clear(); }
 export function templateDir(): string { return dir; }
+
+/** 启动时定一次：运行时目录里有 prompt/ 就用它，否则用仓库里的默认份。 */
+export function useRuntimePrompts(cfg: Config): string {
+  const d = runtimeHas(cfg, "prompt") ? runtimePath(cfg, "prompt") : DEFAULT_DIR;
+  setTemplateDir(d);
+  return d;
+}
 
 const cache = new Map<string, { mtime: number; text: string }>();
 

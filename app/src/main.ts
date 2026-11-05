@@ -15,11 +15,16 @@ import { ensureSandboxContainer } from "./core/sandbox-shell.ts";
 import { sandboxShellOptions } from "./ops/sandbox.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
+import { ensureRuntime, RUNTIME_SUBDIRS } from "./core/runtime.ts";
+import { useRuntimePrompts } from "./agent/template.ts";
 import path from "node:path";
 
 async function main() {
   const cfg = loadConfig();
   const log = new Logger(cfg.logDir);
+  // 运行时内容（人设/提示词/话题库）在仓库外：先保证目录在，再把模板目录指过去
+  ensureRuntime(cfg, [...RUNTIME_SUBDIRS]);
+  log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
   // 主人名单：群聊里他说的话不 @ 也要回（hub 判唤醒、prompt 标 [主人] 都用它）
   setOwnerIds([...(cfg.adapters.matrix.ownerIds ?? [])]);
   if (cfg.llm.provider === "faux") throw new Error("正式服务不能使用 faux 桩模型；请在 config/local.json 设置 llm.provider/model");

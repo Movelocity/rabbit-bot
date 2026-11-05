@@ -23,6 +23,11 @@ export interface SandboxFsOptions {
   maxFiles: number;
   /** 单次 read 返回的最大字符数（超出截断）。 */
   maxReadChars?: number;
+  /**
+   * 子目录覆盖：{ "prompt": "/abs/runtime/prompt" }。
+   * 这些名字在运行时内容里（人设/话题库），真身在仓库外，但对她来说路径不变。
+   */
+  overlays?: Record<string, string>;
 }
 
 export class SandboxPathError extends Error {}
@@ -48,6 +53,26 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
     const norm = rel.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
     if (path.isAbsolute(norm) || /^[a-zA-Z]:/.test(norm)) throw new SandboxPathError("只收相对路径");
     if (norm.split("/").includes("..")) throw new SandboxPathError("不许用 ..");
+
+    // 运行时覆盖：第一段命中就整条改到那个根下面解析（安全检查一样不少）
+    const seg = norm.split("/")[0];
+    const ov = opts.overlays?.[seg];
+    if (ov && fs.existsSync(ov)) {
+      const ovRoot = fs.realpathSync(ov);
+      const insideOv = (a: string) => a === ovRoot || a.startsWith(ovRoot + path.sep);
+      const absOv = path.resolve(ovRoot, norm.slice(seg.length + 1));
+      if (!insideOv(absOv)) throw new SandboxPathError("跑到沙盒外面了");
+      if (fs.existsSync(absOv)) {
+        const real = fs.realpathSync(absOv);
+        if (!insideOv(real)) throw new SandboxPathError("符号链接指向沙盒外");
+        return real;
+      }
+      let q = path.dirname(absOv);
+      while (!fs.existsSync(q) && q !== path.dirname(q)) q = path.dirname(q);
+      if (!insideOv(fs.realpathSync(q))) throw new SandboxPathError("父目录指向沙盒外");
+      return absOv;
+    }
+
     const abs = path.resolve(realRoot, norm);
     if (!inside(abs)) throw new SandboxPathError("跑到沙盒外面了");
     if (fs.existsSync(abs)) {
@@ -80,10 +105,11 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
       const dir = sub ? resolve(sub) : realRoot;
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new SandboxPathError(`不是目录：${sub}`);
       const out: SandboxEntry[] = [];
+      const prefix = sub.trim().replace(/^\/+|\/+$/g, "");
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         if (e.name.startsWith(".")) continue;
         const abs = path.join(dir, e.name);
-        const rel = path.relative(realRoot, abs).split(path.sep).join("/");
+        const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) out.push({ path: rel, kind: "dir" });
         else if (e.isFile()) out.push({ path: rel, kind: "file", bytes: fs.statSync(abs).size });
       }
