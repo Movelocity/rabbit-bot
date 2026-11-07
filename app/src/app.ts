@@ -12,6 +12,7 @@ import { RunQueue } from "./core/queue.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey } from "./core/time.ts";
+import { costUsd } from "./core/pricing.ts";
 import { EmojiTable } from "./core/emoji.ts";
 import { needsPlanNudge } from "./core/nudge.ts";
 import { toImageContent } from "./core/media.ts";
@@ -110,7 +111,7 @@ export class App {
     await this.hub.startAdapters();
     this.scheduler.start();
     this.startReflectionLoop();
-    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok paused=${this.store.isPaused()}`);
+    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
   }
 
   async stop() {
@@ -247,6 +248,18 @@ export class App {
     }
   }
 
+  /**
+   * 一次运行 → 记账用的四个数（2026-11-07）。
+   * 三段 token 由 pi 报的 usage 拆出来；美元成本按官方单价表 × 当前时段自己算一遍，
+   * 不用 pi 自带的 cost（它认不认识峰谷、认不认识新价目表，都不该由我们猜）。
+   */
+  private usageExtra(res: { cacheHit?: number; cacheMiss?: number; outTokens?: number }) {
+    const cfg = this.o.cfg;
+    const split = { hit: res.cacheHit ?? 0, miss: res.cacheMiss ?? 0, out: res.outTokens ?? 0 };
+    const usd = costUsd(cfg.llm.model, split, Date.now(), cfg.limits.offPeakHolidays ?? []);
+    return { cacheHit: split.hit, cacheMiss: split.miss, outTokens: split.out, costUsd: usd };
+  }
+
   private async runReflection(poolId: string, now: number): Promise<void> {
     const cfg = this.o.cfg;
     const day = dayKey(now, cfg.timezone);
@@ -290,7 +303,7 @@ export class App {
       { tokensLeft, callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls },
       `你正在独处。只做一件事：想清楚此刻心里在想什么、有多想开口。只输出 JSON，不要任何别的内容。`,
     );
-    this.store.addUsage(day, res.llmCalls, res.tokens, 0);
+    this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
 
     const parsed = parseReflection(res.assistantText ?? "");
     if (!parsed.ok) {
@@ -419,9 +432,19 @@ export class App {
     if (this.store.isPaused()) return finish("skipped:paused");
     const day = dayKey(t0, cfg.timezone);
     const usage = this.store.getUsage(day);
-    if (usage.llm_calls >= cfg.limits.dailyLlmCalls || usage.tokens >= cfg.limits.dailyTokens) {
+    // 三条闸：调用次数、折算 token、**钱**（2026-11-07 起以钱为准，另外两条留作保险丝）。
+    // 钱的口径 = 官方单价表 × 峰谷 × 汇率，命中缓存的那部分只按 hit 价算，
+    // 所以「上下文很长但几乎是重读」不再吃掉整个日额度。
+    const cnyCap = Number(cfg.limits.dailyCny ?? 0);
+    const usdCny = Number(cfg.limits.usdCny ?? 7.1) || 7.1;
+    const spentCny = (usage.cost_usd ?? 0) * usdCny;
+    if (
+      usage.llm_calls >= cfg.limits.dailyLlmCalls ||
+      usage.tokens >= cfg.limits.dailyTokens ||
+      (cnyCap > 0 && spentCny >= cnyCap)
+    ) {
       const notice = await this.notifyCap(day);
-      return finish("skipped:daily-cap", notice ? { usage, notice } : { usage });
+      return finish("skipped:daily-cap", notice ? { usage, spentCny, notice } : { usage, spentCny });
     }
 
     // 读池：所有有未读的池（不只是触发的池），一次唤醒合并处理
@@ -499,7 +522,7 @@ export class App {
       callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls,
       forceHandoff,
     }, images);
-    this.store.addUsage(day, res.llmCalls, res.tokens, 1);
+    this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
 
     // 主动唤醒兜底：这是它自己排的计划，说完却没给自己排下一次 → 补一次极短的自我决定
     // 只劝它「要么排、要么明确不排」，不替它做决定，也不用 send 再发一条。
@@ -514,7 +537,7 @@ export class App {
             "你刚才是照自己排的计划开口的，说完了。现在做决定：还想接着聊，就用 plan 工具（action=add）给自己排下一次（content 写清到点要说什么）；不想，就只回一句「不排」。别用 send，这条不发出去。",
             left,
           );
-          this.store.addUsage(day, r2.llmCalls, r2.tokens, 0);
+          this.store.addUsage(day, r2.llmCalls, r2.tokens, 0, this.usageExtra(r2));
           res.toolCalls.push(...r2.toolCalls);
           res.tokens += r2.tokens;
           res.llmCalls += r2.llmCalls;

@@ -14,6 +14,7 @@ import type { Store } from "../core/db.ts";
 import type { Logger } from "../core/logger.ts";
 import { applyCommunityLoopGuardEnv, builtinLoopGuardExtension, callKey, communityLoopGuardPath } from "../core/loopguard.ts";
 import { handoffPrompt } from "./prompt.ts";
+import { splitUsage } from "../core/pricing.ts";
 
 export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
 export interface RunResult {
@@ -26,6 +27,10 @@ export interface RunResult {
   rawTokens?: number;
   /** 上游报的美元成本（pi 按模型定价算好的） */
   cost?: number;
+  /** 缓存命中的输入 token / 未命中 / 输出：额度按「钱」算之后，这三段才是账本 */
+  cacheHit?: number;
+  cacheMiss?: number;
+  outTokens?: number;
   aborted: boolean;
   abortReason?: string;
   error?: string;
@@ -217,7 +222,7 @@ export class PiEngine implements AgentEngine {
   }
 
   private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
-    const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, rawTokens: 0, cost: 0, aborted: false };
+    const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, rawTokens: 0, cost: 0, cacheHit: 0, cacheMiss: 0, outTokens: 0, aborted: false };
     const pendingArgs = new Map<string, unknown>();
     const abort = (why: string) => { if (!out.aborted) { out.aborted = true; out.abortReason = why; void s.abort(); } };
     const unsub = s.subscribe((ev: any) => {
@@ -238,6 +243,11 @@ export class PiEngine implements AgentEngine {
             + Math.round((u.cacheRead ?? 0) * this.d.cfg.limits.cacheReadRate)
             + (u.cacheWrite ?? 0);
           out.cost += u.cost?.total ?? 0;
+          // 三段记账（2026-11-07）：命中缓存的那部分几乎是免费的，未命中和输出才是钱。
+          const sp = splitUsage(u);
+          out.cacheHit = (out.cacheHit ?? 0) + sp.hit;
+          out.cacheMiss = (out.cacheMiss ?? 0) + sp.miss;
+          out.outTokens = (out.outTokens ?? 0) + sp.out;
         }
         if (out.tokens >= limits.tokensLeft) abort("daily-token-cap");
         else if (out.llmCalls >= limits.callsLeft) abort("daily-call-cap");

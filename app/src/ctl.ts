@@ -37,7 +37,19 @@ async function main() {
       out({ paused: store.isPaused(), today: day, usage: store.getUsage(day), limits: cfg.limits, pools: store.listPools().length, unreadPools: store.poolsWithUnread(), pendingPlans: store.listPlans("pending").length, handoffs: store.listHandoffs().length });
       break;
     }
-    case "usage": out(store.db.prepare("SELECT * FROM usage_daily ORDER BY day DESC LIMIT 14").all()); break;
+    case "usage": {
+      // 除了原始表，多给两行人看的：今天花了多少钱、缓存命中率多少（2026-11-07）
+      const rows = store.db.prepare("SELECT * FROM usage_daily ORDER BY day DESC LIMIT 14").all() as any[];
+      out(rows);
+      const fx = Number(cfg.limits.usdCny ?? 7.1) || 7.1;
+      const lines = rows.map((r) => {
+        const inTok = (r.cache_hit ?? 0) + (r.cache_miss ?? 0);
+        const hit = inTok > 0 ? ((r.cache_hit ?? 0) / inTok) * 100 : 0;
+        return `${r.day}  ¥${(((r.cost_usd ?? 0) * fx)).toFixed(3)}  hit ${hit.toFixed(1)}%  in ${inTok} out ${r.out_tokens ?? 0} calls ${r.llm_calls}`;
+      });
+      out(lines.join("\n"));
+      break;
+    }
     case "wakes": out(store.recentWakeLogs(Number(args[0] ?? 10))); break;
     case "pools": out(store.listPools().map((p) => ({ alias: store.poolAlias(p.pool_id), ...p, last: p.last_msg_at ? fmtLocal(p.last_msg_at) : null }))); break;
     case "plans": out(store.listPlans()); break;

@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS topics (
 CREATE INDEX IF NOT EXISTS idx_topics_pick ON topics(retired, cooldown_until, used_count, last_used_at);
 CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT);
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, cache_miss INTEGER NOT NULL DEFAULT 0, out_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
 
@@ -106,6 +106,16 @@ export class Store {
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
+    // 额度计算（2026-11-07）：缓存命中/未命中/输出三段分开记，cost_usd 是官方单价算出来的。
+    // 老库补列，新库已在 SCHEMA 里。
+    for (const col of [
+      "cache_hit INTEGER NOT NULL DEFAULT 0",
+      "cache_miss INTEGER NOT NULL DEFAULT 0",
+      "out_tokens INTEGER NOT NULL DEFAULT 0",
+      "cost_usd REAL NOT NULL DEFAULT 0",
+    ]) {
+      try { this.db.exec(`ALTER TABLE usage_daily ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
     // 记忆时间维度（2026-11-03）：以前记忆是扁平快照，「想辞职」和「想升职」会一起活着
     for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
       try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
@@ -660,11 +670,22 @@ export class Store {
   listHandoffs(): any[] { return this.db.prepare("SELECT id,created_at,tokens,file,length(content) len FROM handoffs ORDER BY id").all(); }
   addWakeLog(entry: unknown) { this.db.prepare("INSERT INTO wake_log(ts,json) VALUES(?,?)").run(Date.now(), JSON.stringify(entry)); }
   recentWakeLogs(n: number): any[] { return (this.db.prepare("SELECT json FROM wake_log ORDER BY id DESC LIMIT ?").all(n) as any[]).map((r) => JSON.parse(r.json)); }
-  getUsage(day: string): { llm_calls: number; tokens: number; wakes: number } {
-    return (this.db.prepare("SELECT llm_calls,tokens,wakes FROM usage_daily WHERE day=?").get(day) as any) ?? { llm_calls: 0, tokens: 0, wakes: 0 };
+  getUsage(day: string): {
+    llm_calls: number; tokens: number; wakes: number;
+    cache_hit: number; cache_miss: number; out_tokens: number; cost_usd: number;
+  } {
+    return (this.db.prepare("SELECT llm_calls,tokens,wakes,cache_hit,cache_miss,out_tokens,cost_usd FROM usage_daily WHERE day=?").get(day) as any)
+      ?? { llm_calls: 0, tokens: 0, wakes: 0, cache_hit: 0, cache_miss: 0, out_tokens: 0, cost_usd: 0 };
   }
-  addUsage(day: string, calls: number, tokens: number, wakes = 0) {
-    this.db.prepare(`INSERT INTO usage_daily(day,llm_calls,tokens,wakes) VALUES(?,?,?,?) ON CONFLICT(day) DO UPDATE SET
-      llm_calls=llm_calls+excluded.llm_calls, tokens=tokens+excluded.tokens, wakes=wakes+excluded.wakes`).run(day, calls, tokens, wakes);
+  addUsage(
+    day: string, calls: number, tokens: number, wakes = 0,
+    extra: { cacheHit?: number; cacheMiss?: number; outTokens?: number; costUsd?: number } = {},
+  ) {
+    const hit = Math.round(extra.cacheHit ?? 0), miss = Math.round(extra.cacheMiss ?? 0);
+    const outTok = Math.round(extra.outTokens ?? 0), usd = Number(extra.costUsd ?? 0) || 0;
+    this.db.prepare(`INSERT INTO usage_daily(day,llm_calls,tokens,wakes,cache_hit,cache_miss,out_tokens,cost_usd) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(day) DO UPDATE SET
+      llm_calls=llm_calls+excluded.llm_calls, tokens=tokens+excluded.tokens, wakes=wakes+excluded.wakes,
+      cache_hit=cache_hit+excluded.cache_hit, cache_miss=cache_miss+excluded.cache_miss,
+      out_tokens=out_tokens+excluded.out_tokens, cost_usd=cost_usd+excluded.cost_usd`).run(day, calls, tokens, wakes, hit, miss, outTok, usd);
   }
 }

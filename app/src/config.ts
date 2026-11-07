@@ -36,6 +36,12 @@ export interface Config {
     dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
     /** 缓存命中的 token 按多少折算进日额度（DeepSeek 前缀缓存 = 0.1 价） */
     cacheReadRate: number;
+    /** 一天最多花多少钱（人民币）。0 = 不算钱，只看 token 那条闸 */
+    dailyCny?: number;
+    /** 美元 → 人民币汇率，只用于记账 */
+    usdCny?: number;
+    /** 额外按谷时计价的日子（YYYY-MM-DD，中国法定节假日）；周末已自动按谷时 */
+    offPeakHolidays?: string[];
     /** 额度用尽时给用户发一条提示：不走模型、不进上下文，只为不让对方以为被无视 */
     capNotice?: { enabled: boolean; text: string; oncePerDay: boolean };
     /** 程序自己出的错（模型报错、异常崩了）：直接发 IM，不过模型、不进上下文 */
@@ -153,6 +159,10 @@ export function validateConfig(cfg: Config): void {
   if (typeof rate !== "number" || !(rate >= 0 && rate <= 1)) {
     throw new Error("config: limits.cacheReadRate 必须是 0~1 之间的数");
   }
+  const cny = cfg.limits.dailyCny;
+  if (cny !== undefined && !(Number.isFinite(cny) && cny >= 0)) throw new Error("config: limits.dailyCny 必须是 >=0 的数（0 = 不按钱限额）");
+  const fx = cfg.limits.usdCny;
+  if (fx !== undefined && !(Number.isFinite(fx) && fx > 0)) throw new Error("config: limits.usdCny 必须是正数");
   pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
   pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
   const mode = cfg.sandbox.shell.mode;
