@@ -205,7 +205,16 @@ host 模式下额外要求：`host.inheritEnv` 保持 `false`（默认值，别�
 - `read_file` 留着，但定位改成**只读视图**（prompt/、topics/、skills/ 都在里面，她得能看自己的提示词和话题库）
 - 工具描述跟着改：`terminal` 在 host 模式自称「在宿主机上跑」，不再说容器
 - `system.md` 第 11 条重写：写文件用 `terminal`，`terminal` 在宿主机上跑
-- 真机验证：重启后日志 `tools=chat,memory,plan,read_file,terminal,rb,codemode` —— `write_file` 确实没了
+- **真机验证**：重启后日志 `tools=chat,memory,plan,read_file,terminal,rb,codemode` —— `write_file` 确实没了
+
+**分叉修掉了（真机撞出来的）**：容器模式靠 volume 把 `/work/topics` 挂到运行时话题库；切 host 后没有挂载，
+她 `>> topics/life/x.md` 写进的是 `data/sandbox/topics` 里那份 11-05 的陈旧副本，而 `read_file` 读的是运行时——
+读一份、写另一份。启动时 `ensureHostSandboxLinks()` 把 `data/sandbox/{prompt,topics}` 换成指向运行时目录的软链
+（只在目标是软链或空目录时动手，有内容就留着不碰），日志会打「宿主机模式已把沙盒子目录接到运行时」。
+
+> 本机的坑：这两个目录里还有仓库自带的**默认份**（`DEFAULT_DIR` 就是 `data/sandbox/prompt`）。
+> 软链会把它们盖住，git 于是报一堆 `D`。解法是 `git update-index --skip-worktree` 掉那 20 个文件——
+> 只影响本机索引，仓库里默认份还在，新机器 clone 下来照样能用。
 
 ### 回执（2026-11-08 01:2x）
 

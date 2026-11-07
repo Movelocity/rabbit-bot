@@ -15,7 +15,7 @@ import { ensureSandboxContainer } from "./core/sandbox-shell.ts";
 import { sandboxShellOptions } from "./ops/sandbox.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
-import { ensureRuntime, RUNTIME_SUBDIRS } from "./core/runtime.ts";
+import { ensureRuntime, ensureHostSandboxLinks, RUNTIME_SUBDIRS } from "./core/runtime.ts";
 import { useRuntimePrompts } from "./agent/template.ts";
 import path from "node:path";
 
@@ -25,6 +25,10 @@ async function main() {
   // 运行时内容（人设/提示词/话题库）在仓库外：先保证目录在，再把模板目录指过去
   ensureRuntime(cfg, [...RUNTIME_SUBDIRS]);
   log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
+  // host 模式下没有 volume 挂载：把 sandbox 里 prompt/ topics/ 换成软链，
+  // 否则她读的是运行时、写的是 data/sandbox 里的陈旧副本，很快就分叉
+  const linked = ensureHostSandboxLinks(cfg);
+  if (linked.length) log.info(`宿主机模式已把沙盒子目录接到运行时：${linked.join("、")}`);
   // 主人名单：群聊里他说的话不 @ 也要回（hub 判唤醒、prompt 标 [主人] 都用它）
   setOwnerIds([...(cfg.adapters.matrix.ownerIds ?? [])]);
   if (cfg.llm.provider === "faux") throw new Error("正式服务不能使用 faux 桩模型；请在 config/local.json 设置 llm.provider/model");
