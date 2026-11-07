@@ -145,5 +145,12 @@
       "maxPerDay": 2,
       "maxConsecutive": 1
     }
+  },
+  "approval": {
+    "enabled": false,
+    "platform": "matrix",
+    "roomId": "",
+    "ownerIds": [],
+    "timeoutMs": 600000
   }
 }

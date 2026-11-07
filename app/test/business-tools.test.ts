@@ -145,7 +145,12 @@ test("rb 的运维查询照旧能跑", async () => {
 function setupFs() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-fs-"));
   const base = loadConfig();
-  const cfg = { ...base, dataDir, sandbox: { ...base.sandbox, dir: path.join(dataDir, "sandbox") } };
+  // 这组测的是「沙盒文件工具」，跟本机配置无关：固定成容器模式，免得 local.json 切了 host 就红
+  const cfg = {
+    ...base,
+    dataDir,
+    sandbox: { ...base.sandbox, dir: path.join(dataDir, "sandbox"), shell: { ...base.sandbox.shell, mode: "docker" as const } },
+  };
   fs.mkdirSync(cfg.sandbox.dir, { recursive: true });
   const store = new Store(":memory:");
   store.insertMessage({
@@ -181,6 +186,19 @@ test("read_file：文件不存在就报错，不返回空字符串", async () =>
   assert.equal(r.details?.ok, false);
   assert.ok(r.text.length > 0, "要有错误说明");
   fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("host 模式不再给 write_file（写盘只走 terminal 的审批）", async () => {
+  const base = loadConfig();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-host-"));
+  const cfg = { ...base, sandbox: { ...base.sandbox, dir: path.join(dir, "sandbox"), shell: { ...base.sandbox.shell, mode: "host" as const } } };
+  fs.mkdirSync(cfg.sandbox.dir, { recursive: true });
+  const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() }) as any[];
+  const names2 = tools.map((t) => t.name);
+  assert.ok(!names2.includes("write_file"), `host 模式还留着 write_file：${names2.join(",")}`);
+  assert.ok(names2.includes("read_file"), "读文件要留着，她得看自己的 prompt/topics");
+  assert.ok(names2.includes("terminal"));
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("write_file：不许跳出沙盒", async () => {

@@ -32,6 +32,8 @@ export class Hub {
   private lastSendAt = 0;
   private lastSendLen = 0;
   scheduler: Scheduler | null = null;
+  /** 审批闸门：入站先过它，命中的不进池、不进她的上下文（见 core/approval.ts） */
+  approval?: { tryHandle(m: InboundMessage): boolean };
   /** 每次 send 的回调（日志/测试） */
   onSent?: (poolId: string, text: string) => void;
   /** 被 takeUnread 消费掉、但还没喂给模型的图片消息（send 的"期间新消息"会顺带把游标推过图片） */
@@ -47,6 +49,8 @@ export class Hub {
 
   /** 入池；返回入库后的消息（重复则 null） */
   ingest(m: InboundMessage): StoredMessage | null {
+    // 审批房的事是系统跟主人之间的事，不该进她的对话
+    if (this.approval?.tryHandle(m)) return null;
     const saved = this.store.insertMessage(m);
     if (!saved) {
       if (!m.from_self) this.log.info(`重复消息已忽略（平台重投？）${m.platform}:${m.msg_id}`);
@@ -70,6 +74,18 @@ export class Hub {
       pool.kind === "group" && saved.is_mention_me,
     );
     return saved;
+  }
+
+  /** 直接往某个聊天发一条系统通知（审批用）：不经过池、不走节奏、不入她的话 */
+  async sendSystem(platform: string, chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const adapter = this.adapters.get(platform);
+    if (!adapter) return { ok: false, error: `平台 ${platform} 没有可用的适配器` };
+    try {
+      await adapter.sendText(chatId, text);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
   }
 
   /** 收集所有池的未读并推进游标（send 返回值、唤醒时读池都走这里） */

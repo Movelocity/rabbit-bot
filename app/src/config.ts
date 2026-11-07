@@ -97,6 +97,21 @@ export interface Config {
       host?: { cwd?: string; inheritEnv?: boolean };
     };
   };
+  /**
+   * 宿主机命令的审批闸门（只在 sandbox.shell.mode === "host" 时生效）。
+   * 发到独立房间等主人一句话；超时按拒绝，审批内容不进她的会话上下文。
+   */
+  approval: {
+    enabled: boolean;
+    /** matrix / feishu */
+    platform: string;
+    /** 审批房的 external chat id（不是池 id） */
+    roomId: string;
+    /** 谁能批；空 = 谁都批不了（等于关） */
+    ownerIds: string[];
+    /** 超时毫秒，超时即拒绝 */
+    timeoutMs: number;
+  };
   /** 本地 REST API：沙盒里的技能脚本通过它访问池/计划/记忆/沙盒文件 */
   api?: { enabled: boolean; port: number; host: string };
   inject?: { port: number };

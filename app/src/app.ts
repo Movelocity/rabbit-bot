@@ -20,6 +20,7 @@ import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine } from "./agent/engine.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
+import { ApprovalGate } from "./core/approval.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import { resolveAliases } from "./ops/memories.ts";
 import type { Model } from "@earendil-works/pi-ai";
@@ -69,6 +70,8 @@ export class App {
   readonly plans: PlanEngine;
   readonly engine: AgentEngine;
   readonly emoji: EmojiTable;
+  /** 宿主机命令的审批闸门（host 模式下 terminal 才会用它） */
+  readonly approval: ApprovalGate;
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: Wake | null = null;
@@ -86,6 +89,13 @@ export class App {
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "rabbit-bot.db"));
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
+    this.approval = new ApprovalGate(
+      cfg.approval,
+      this.log,
+      (chatId, text) => this.hub.sendSystem(cfg.approval.platform, chatId, text),
+      path.join(cfg.dataDir, "approval.jsonl"),
+    );
+    this.hub.approval = this.approval;
     this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
     this.queue = new RunQueue((w) => this.handleWake(w));
     this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
@@ -103,6 +113,7 @@ export class App {
       markSilent: (reason: string) => { this.silenceReason = reason; },
       primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
       rbExec: o.rbExec,
+      approval: this.approval,
     });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }

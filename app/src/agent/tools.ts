@@ -6,6 +6,7 @@ import type { Store } from "../core/db.ts";
 import type { Hub } from "../core/hub.ts";
 import { fmtGrouped } from "./prompt.ts";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
@@ -13,6 +14,8 @@ import { sandboxShellOptions, readSandboxFile, writeSandboxFile, runSandboxShell
 import { runSandboxArgv } from "../core/sandbox-shell.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
+import { classify } from "../core/cmd-rules.ts";
+import type { ApprovalGate } from "../core/approval.ts";
 import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
 import { listPools, readPool, searchPool } from "../ops/pools.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
@@ -33,6 +36,8 @@ export interface ToolDeps {
   markSilent?: (reason: string) => void;
   /** 这一轮的主要池：记记忆/加计划时自动落到这里，模型不用自己填池 */
   primaryPool?: () => string | null;
+  /** 宿主机命令审批闸门（只在 sandbox.shell.mode=host 时被用到） */
+  approval?: ApprovalGate;
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
@@ -374,7 +379,7 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      "读沙盒里的文件（/work 下的相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md。"
+      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md。"
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，例如 topics/INDEX.md" }),
@@ -415,15 +420,36 @@ export function createTools(d: ToolDeps) {
     label: "terminal",
     executionMode: "sequential",
     description:
-      "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。用来列目录（ls、rg --files）、搜内容、算数、批量处理；"
-      + "单次最多 30 秒。只读文件就别用这个，read_file 更快。",
+      (d.cfg.sandbox.shell.mode === "host"
+        ? "在**宿主机**上跑一条命令（不再是容器，碰得到真实文件）。写文件、建目录、跑脚本都走它；"
+          + "会改状态的命令要先过主人的审批，审批没过就不会执行。"
+        : "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。")
+      + "用来列目录（ls、rg --files）、搜内容、算数、批量处理；单次最多 30 秒。只读文件用 read_file 更快。",
     parameters: Type.Object({
       cmd: Type.String({ description: "完整命令行，例如 rg -n '关键词' topics" }),
       timeout_sec: Type.Optional(Type.Number({ description: "超时秒数，最多 30，默认按配置" })),
     }),
     async execute(_id, p) {
+      const cmd = String(p.cmd ?? "");
       try {
-        const r = await runSandboxShell(d.cfg, String(p.cmd ?? ""), p.timeout_sec);
+        // 只有在宿主机上裸跑时才设闸：docker 模式下容器本身就是边界
+        if (d.cfg.sandbox.shell.mode === "host") {
+          const hostCfg = d.cfg.sandbox.shell.host ?? {};
+          const cwd = path.resolve(String(hostCfg.cwd ?? d.cfg.sandbox.dir));
+          const v = classify(cmd, { allowedRoots: [path.resolve(d.cfg.sandbox.dir)], cwd, home: os.homedir() });
+          if (v.verdict === "deny") return txt(`这条不许跑：${v.why}。`, { ok: false, denied: true });
+          if (v.verdict === "ask") {
+            if (!d.approval || !d.approval.enabled) {
+              return txt(`这条要和主人确认才能跑（${v.why}），审批没开，我没动。`, { ok: false, denied: true });
+            }
+            const r = await d.approval.request({ cmd, cwd, why: v.why });
+            if (r.decision !== "approved") {
+              const why = r.decision === "timeout" ? "没等到批准" : "主人说不行";
+              return txt(`${why}，我没跑（${v.why}）。`, { ok: false, denied: true, decision: r.decision });
+            }
+          }
+        }
+        const r = await runSandboxShell(d.cfg, cmd, p.timeout_sec);
         const out = String(r.output ?? "").trim();
         return txt(out || `（命令跑完了，没有输出；退出码 ${r.code}）`, { ok: r.ok, code: r.code });
       } catch (e) {
@@ -471,5 +497,7 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  return [chat, memory, plan, readFile, writeFile, runShellTool, rb];
+  // host 模式下不再给写文件工具：写盘只走 terminal（会过审批），少一条路就少一次搞不清写到哪
+  const sandboxed = d.cfg.sandbox.shell.mode !== "host";
+  return [chat, memory, plan, readFile, ...(sandboxed ? [writeFile] : []), runShellTool, rb];
 }
