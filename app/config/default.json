@@ -151,6 +151,7 @@
     "platform": "matrix",
     "roomId": "",
     "ownerIds": [],
-    "timeoutMs": 600000
+    "timeoutMs": 600000,
+    "notify": true
   }
 }

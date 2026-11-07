@@ -57,7 +57,7 @@ test("同意：发出去、写账、resolve approved", async () => {
   const g = new ApprovalGate(cfg(), log, async (_c, t) => { sent.push(t); return { ok: true }; }, file);
   const p = g.request({ cmd: "npm run build", cwd: "/x", why: "执行体不可见" });
   await new Promise((r) => setTimeout(r, 10));           // 让消息发出去
-  assert.equal(sent.length, 1);
+  assert.equal(sent.filter((t) => t.includes("【要动本机】")).length, 1);
   assert.match(sent[0], /【要动本机】#1/);
   assert.match(sent[0], /npm run build/);
   assert.match(sent[0], /y 1/);
@@ -65,6 +65,10 @@ test("同意：发出去、写账、resolve approved", async () => {
   const r = await p;
   assert.equal(r.decision, "approved");
   assert.equal(r.by, OWNER);
+  assert.equal(r.id, 1);
+  // 裁决后要回一句状态，别让人对着按钮猜
+  await new Promise((res) => setTimeout(res, 10));
+  assert.ok(sent.some((t) => /#1 已批准/.test(t)), `没回状态：${JSON.stringify(sent)}`);
   const rec = JSON.parse(fs.readFileSync(file, "utf8").trim());
   assert.equal(rec.decision, "approved");
   assert.equal(rec.id, 1);
@@ -136,12 +140,51 @@ test("串行：第二条等第一条裁决完才发", async () => {
   const p1 = g.request({ cmd: "cmd-one", cwd: "/x", why: "一" });
   const p2 = g.request({ cmd: "cmd-two", cwd: "/x", why: "二" });
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(sent.length, 1);
+  const asks = () => sent.filter((t) => t.includes("【要动本机】"));
+  assert.equal(asks().length, 1);
   g.tryHandle(msg({ text: "y 1" }));
   await p1;
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(sent.length, 2);
-  assert.match(sent[1], /#2/);
+  assert.equal(asks().length, 2);
+  assert.match(asks()[1], /#2/);
   g.tryHandle(msg({ text: "y 2" }));
   assert.equal((await p2).decision, "approved");
+});
+
+test("拒绝 / 超时也各回一句状态", async () => {
+  const { log } = fakeLog();
+  const sent: string[] = [];
+  const g = new ApprovalGate(cfg({ timeoutMs: 600 }), log, async (_c, t) => { sent.push(t); return { ok: true }; });
+
+  const p1 = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
+  await new Promise((r) => setTimeout(r, 10));
+  g.tryHandle(msg({ text: "n 1" }));
+  await p1;
+
+  const p2 = g.request({ cmd: "rm -rf build2", cwd: "/x", why: "删" });
+  await p2;
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(sent.some((t) => /#1 已拒绝/.test(t)), JSON.stringify(sent));
+  assert.ok(sent.some((t) => /#2 超时.*按拒绝处理/.test(t)), JSON.stringify(sent));
+});
+
+test("执行完回一句结果（带上序号）", async () => {
+  const { log } = fakeLog();
+  const sent: string[] = [];
+  const g = new ApprovalGate(cfg(), log, async (_c, t) => { sent.push(t); return { ok: true }; });
+  g.reportDone(7, { ok: true, code: 0, ms: 1234 });
+  g.reportDone(8, { ok: false, code: 127, ms: 50 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(sent.some((t) => /#7 执行完成（1\.2s）/.test(t)), JSON.stringify(sent));
+  assert.ok(sent.some((t) => /#8 执行失败：退出码 127/.test(t)), JSON.stringify(sent));
+});
+
+test("没开审批时不发这些状态（别往房间里灌噪声）", async () => {
+  const { log } = fakeLog();
+  const sent: string[] = [];
+  const g = new ApprovalGate(cfg({ enabled: false }), log, async (_c, t) => { sent.push(t); return { ok: true }; });
+  g.reportDone(1, { ok: true, code: 0, ms: 1 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 0);
 });

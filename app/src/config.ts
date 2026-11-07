@@ -111,6 +111,8 @@ export interface Config {
     ownerIds: string[];
     /** 超时毫秒，超时即拒绝 */
     timeoutMs: number;
+    /** 裁决后和执行完各回一句状态到审批房 */
+    notify?: boolean;
   };
   /** 本地 REST API：沙盒里的技能脚本通过它访问池/计划/记忆/沙盒文件 */
   api?: { enabled: boolean; port: number; host: string };

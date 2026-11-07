@@ -431,6 +431,8 @@ export function createTools(d: ToolDeps) {
     }),
     async execute(_id, p) {
       const cmd = String(p.cmd ?? "");
+      /** 过审批的那条序号：执行完拿它回报结果 */
+      let pendingId = 0;
       try {
         // 只有在宿主机上裸跑时才设闸：docker 模式下容器本身就是边界
         if (d.cfg.sandbox.shell.mode === "host") {
@@ -443,13 +445,19 @@ export function createTools(d: ToolDeps) {
               return txt(`这条要和主人确认才能跑（${v.why}），审批没开，我没动。`, { ok: false, denied: true });
             }
             const r = await d.approval.request({ cmd, cwd, why: v.why });
+            pendingId = r.id;
             if (r.decision !== "approved") {
               const why = r.decision === "timeout" ? "没等到批准" : "主人说不行";
               return txt(`${why}，我没跑（${v.why}）。`, { ok: false, denied: true, decision: r.decision });
             }
           }
         }
+        const t0 = Date.now();
         const r = await runSandboxShell(d.cfg, cmd, p.timeout_sec);
+        // 过了审批的那条，把结果也回一句到审批房：他要知道自己批的那下有没有真跑成
+        if (d.cfg.sandbox.shell.mode === "host" && d.approval) {
+          d.approval.reportDone((pendingId ?? 0), { ok: !!r.ok, code: Number(r.code ?? 0), ms: Date.now() - t0 });
+        }
         const out = String(r.output ?? "").trim();
         return txt(out || `（命令跑完了，没有输出；退出码 ${r.code}）`, { ok: r.ok, code: r.code });
       } catch (e) {

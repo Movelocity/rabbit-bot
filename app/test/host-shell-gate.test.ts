@@ -19,13 +19,15 @@ function setup(decision: "approved" | "rejected" | "timeout" | "disabled", opts:
   cfg.sandbox.shell.host = { cwd: dir, inheritEnv: false };
 
   const asked: { cmd: string; why: string }[] = [];
+  const reported: { id: number; ok: boolean; code: number }[] = [];
   const store = new Store(":memory:");
   const gate = {
     enabled: decision !== "disabled",
     request: async (req: { cmd: string; why: string }) => {
       asked.push(req);
-      return { decision: decision === "disabled" ? "disabled" : decision, latencyMs: 1 };
+      return { id: 42, decision: decision === "disabled" ? "disabled" : decision, latencyMs: 1 };
     },
+    reportDone: (id: number, info: { ok: boolean; code: number }) => { reported.push({ id, ...info }); },
   };
   const tools = createTools({
     store, hub: {} as any, cfg, now: () => Date.now(),
@@ -37,7 +39,7 @@ function setup(decision: "approved" | "rejected" | "timeout" | "disabled", opts:
     const text = Array.isArray(r.content) ? r.content.map((c: any) => c?.text ?? "").join("") : String(r.content ?? "");
     return { text, details: r.details ?? {} };
   };
-  return { dir, run, asked };
+  return { dir, run, asked, reported };
 }
 
 test("safe 档：直接跑，不惊动审批", async () => {
@@ -57,12 +59,15 @@ test("ask 档被拒：不执行，目录还在", async () => {
   assert.equal(fs.existsSync(path.join(dir, "build")), true, "被拒了还删掉了，闸门形同虚设");
 });
 
-test("ask 档获批：真的在宿主机上跑", async () => {
-  const { dir, run } = setup("approved");
+test("ask 档获批：真的在宿主机上跑，并把结果序号回报", async () => {
+  const { dir, run, reported } = setup("approved");
   fs.mkdirSync(path.join(dir, "build"));
   const r = await run("rm -rf build");
   assert.equal(fs.existsSync(path.join(dir, "build")), false);
   assert.equal(r.details.ok, true);
+  assert.equal(reported.length, 1, "批完执行完要回报一次");
+  assert.equal(reported[0].id, 42);
+  assert.equal(reported[0].ok, true);
 });
 
 test("超时：不执行", async () => {

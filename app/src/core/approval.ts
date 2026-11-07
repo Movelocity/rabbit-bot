@@ -23,9 +23,13 @@ export interface ApprovalConfig {
   ownerIds: string[];
   /** 超时毫秒数，超时按拒绝 */
   timeoutMs: number;
+  /** 裁决后和执行完各回一句状态到审批房（默认 true） */
+  notify?: boolean;
 }
 
 export interface ApprovalResult {
+  /** 这条审批的序号，执行完回报结果时要用它指认 */
+  id: number;
   decision: Decision;
   /** 批/拒的人 */
   by?: string;
@@ -79,7 +83,7 @@ export class ApprovalGate {
   }
 
   async request(req: { cmd: string; cwd: string; why: string }): Promise<ApprovalResult> {
-    if (!this.enabled) return { decision: "disabled", latencyMs: 0 };
+    if (!this.enabled) return { id: 0, decision: "disabled", latencyMs: 0 };
     const run = () => this.ask(req);
     const p = this.chain.then(run, run);
     this.chain = p.catch(() => undefined);
@@ -119,7 +123,28 @@ export class ApprovalGate {
     const latencyMs = Date.now() - p.createdAt;
     this.note({ ts: p.createdAt, id, cmd: p.cmd, why: p.why, decision, by: by ?? null, latencyMs });
     this.log.info(`审批 #${id} ${decision}${by ? ` by ${by}` : ""} ${latencyMs}ms：${p.cmd.replace(/\s+/g, " ").slice(0, 80)}`);
-    p.resolve({ decision, by, latencyMs });
+
+    // 回一句状态到审批房：他刚点了按钮，得看到这一下有没有落上
+    if (this.cfg.notify !== false) {
+      const secs = (latencyMs / 1000).toFixed(0);
+      const line =
+        decision === "approved" ? `#${id} 已批准（${by ?? "系统"}，${secs}s），开始执行`
+        : decision === "rejected" ? `#${id} 已拒绝，没有执行`
+        : decision === "timeout" ? `#${id} 超时 ${secs}s，按拒绝处理，没有执行`
+        : `#${id} 关掉了审批，没有执行`;
+      void this.send(this.cfg.roomId, line).catch(() => undefined);
+    }
+    p.resolve({ id, decision, by, latencyMs });
+  }
+
+  /** 命令跑完了，回一句结果到审批房（只对过了审批的那条有意义） */
+  reportDone(id: number, info: { ok: boolean; code: number; ms: number }): void {
+    if (!this.enabled || !id || this.cfg.notify === false) return;
+    const secs = (info.ms / 1000).toFixed(1);
+    const line = info.ok
+      ? `#${id} 执行完成（${secs}s）`
+      : `#${id} 执行失败：退出码 ${info.code}（${secs}s）`;
+    void this.send(this.cfg.roomId, line).catch(() => undefined);
   }
 
   /**
