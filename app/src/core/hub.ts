@@ -77,12 +77,17 @@ export class Hub {
   }
 
   /** 直接往某个聊天发一条系统通知（审批用）：不经过池、不走节奏、不入她的话 */
-  async sendSystem(platform: string, chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  async sendSystem(
+    platform: string,
+    chatId: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string; msgId?: string }> {
     const adapter = this.adapters.get(platform);
     if (!adapter) return { ok: false, error: `平台 ${platform} 没有可用的适配器` };
     try {
-      await adapter.sendText(chatId, text);
-      return { ok: true };
+      // msgId 要往上带：审批闸门靠它认「表情贴在哪一条上」
+      const r = await adapter.sendText(chatId, text);
+      return { ok: true, msgId: r?.msgId };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }

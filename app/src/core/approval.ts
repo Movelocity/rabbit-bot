@@ -43,10 +43,21 @@ interface Pending {
   createdAt: number;
   resolve: (r: ApprovalResult) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** 这条审批提示本身的事件 id：只认贴在这条上的表情 */
+  promptEventId?: string | null;
 }
 
 const YES = /^(y|ye|yes|ok|好|好的|同意|批准|可以|行)\b/i;
 const NO = /^(n|no|不|不行|不要|拒绝|否)\b/i;
+
+/** 表情归一化：Matrix 的 key 常带 U+FE0F 变体选择符（"👍️" ≠ "👍"），先削掉。 */
+function normKey(k: string): string {
+  return k.replace(/[\uFE0F\uFE0E]/g, "").trim();
+}
+
+/** 点赞类 = 批准；点踩类 = 拒绝。故意只收这几种，别的表情一律不算默许。 */
+const REACT_YES = new Set(["👍", "👌", "✅", "✔", "🆗", "❤"]);
+const REACT_NO = new Set(["👎", "❌", "✖", "🚫", "🙅"]);
 
 export class ApprovalGate {
   private seq = 0;
@@ -58,7 +69,10 @@ export class ApprovalGate {
     private cfg: ApprovalConfig,
     private log: Logger,
     /** 往审批房发一条系统通知（不经过池、不入她的对话） */
-    private send: (chatId: string, text: string) => Promise<{ ok: boolean; error?: string }>,
+    private send: (
+      chatId: string,
+      text: string,
+    ) => Promise<{ ok: boolean; error?: string; msgId?: string }>,
     private logFile?: string,
   ) {
     // 序号要从账本接着数：重启后重新从 #1 开始，「y 1」就会批到一条新命令上
@@ -98,7 +112,7 @@ export class ApprovalGate {
     const text = [
       `【要动本机】#${id}（${req.why}）`,
       oneLine,
-      `同意回 y ${id}　拒绝回 n ${id}　（${Math.round(timeoutMs / 1000)} 秒内不回＝拒绝）`,
+      `同意回 y ${id} / 点赞 👍　拒绝回 n ${id} / 点踩 👎　（${Math.round(timeoutMs / 1000)} 秒内不回＝拒绝）`,
     ].join("\n");
 
     return new Promise<ApprovalResult>((resolve) => {
@@ -109,7 +123,10 @@ export class ApprovalGate {
         if (!r.ok) {
           this.log.warn(`审批 #${id} 发不出去：${r.error ?? "未知原因"}，按拒绝处理`);
           this.settle(id, "rejected");
+          return;
         }
+        // 记下提示事件 id：表情必须贴在这一条上才算数
+        if (this.pending && this.pending.id === id) this.pending.promptEventId = r.msgId ?? null;
       });
     });
   }
@@ -163,6 +180,21 @@ export class ApprovalGate {
     }
     const p = this.pending;
     if (!p) return true;
+
+    // 表情审批：点赞 = 批准，点踩 = 拒绝。只认贴在提示本身上的、
+    // 且归一化后命中白名单的表情，别的表情视为「看见了但没表态」，吞掉不裁决。
+    if (m.media_type === "reaction") {
+      const key = normKey(m.text ?? "");
+      const onPrompt = !p.promptEventId || !m.reaction_to || m.reaction_to === p.promptEventId;
+      if (!onPrompt) {
+        this.log.info(`审批 #${p.id}：表情贴在别的消息上（${m.reaction_to}），忽略`);
+        return true;
+      }
+      if (REACT_YES.has(key)) { this.settle(p.id, "approved", who); return true; }
+      if (REACT_NO.has(key)) { this.settle(p.id, "rejected", who); return true; }
+      this.log.info(`审批 #${p.id}：收到表情「${key}」，不在批准/拒绝名单里，忽略`);
+      return true;
+    }
 
     const text = (m.text ?? "").trim();
     // 带序号就核对序号，防止「y」批到上一条

@@ -28,6 +28,8 @@ export interface PoolMessage {
   attachment?: Attachment | null;
   /** 是否为本 Agent 自己发出的消息 */
   from_self?: boolean;
+  /** 表情回复指向的事件 id（只有 media_type="reaction" 时有值） */
+  reaction_to?: string | null;
 }
 
 export interface StoredMessage extends PoolMessage {

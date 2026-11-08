@@ -283,3 +283,48 @@ test("Matrix：下载失败也不算崩，文字里标出来", async () => {
   assert.equal(got[0].attachment, null);
   assert.equal(got[0].text, "[图片：挂了.png]（没下载下来）");
 });
+
+test("Matrix：m.reaction 翻译成 reaction 消息，带被贴的事件 id", async () => {
+  const calls = fakeFetch((url) => {
+    if (url.includes("/profile/")) return { displayname: "主人" };
+    if (url.includes("/sync")) return { next_batch: "s9", rooms: { join: {} } };
+    return {};
+  });
+  const a = new MatrixAdapter(
+    { homeserver: "https://mx.test", userId: SELF, accessToken: "t", stateFile: "/tmp/mx-test-state.json" },
+    logger,
+  );
+  const got: any[] = [];
+  (a as any).since = "s0";
+  (a as any).sink = (m: any) => got.push(m);
+  await (a as any).handleSync({
+    rooms: {
+      join: {
+        "!approval:mx.test": {
+          summary: { "m.joined_member_count": 2 },
+          state: { events: [{ type: "m.room.name", content: { name: "审批房" } }] },
+          timeline: {
+            events: [
+              {
+                type: "m.reaction",
+                event_id: "$r1",
+                sender: "@weikang:mx.test",
+                origin_server_ts: 1700000001000,
+                content: {
+                  "m.relates_to": { rel_type: "m.annotation", event_id: "$prompt", key: "👍️" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+  await flush(a);
+  assert.equal(got.length, 1, JSON.stringify(got));
+  assert.equal(got[0].media_type, "reaction");
+  assert.equal(got[0].text, "👍️");
+  assert.equal(got[0].reaction_to, "$prompt");
+  assert.equal(got[0].from_self, false);
+  assert.ok(calls.length >= 0);
+});

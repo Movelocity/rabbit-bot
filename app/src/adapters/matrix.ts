@@ -209,6 +209,35 @@ export class MatrixAdapter implements IMAdapter {
       }
       return;
     }
+    if (ev.type === "m.reaction") {
+      // 表情回复（审批用）：m.relates_to 里带被回复的事件 id 与表情本身。
+      // 注意 key 常带 U+FE0F 变体选择符（"👍️"），归一化交给上面的闸门做。
+      const rel = (ev.content?.["m.relates_to"] ?? {}) as {
+        rel_type?: string;
+        event_id?: string;
+        key?: string;
+      };
+      if (rel.rel_type !== "m.annotation" || !rel.key) return;
+      this.sink({
+        platform: "matrix",
+        external_chat_id: roomId,
+        pool_kind: this.kindCache.get(roomId) ?? "group",
+        pool_title: this.titleOf(roomId, room),
+        msg_id: ev.event_id,
+        sender_id: ev.sender,
+        sender_name: this.nameCache.get(ev.sender) ?? this.shortName(ev.sender),
+        ts: ev.origin_server_ts,
+        text: rel.key,
+        reply_to: null,
+        mentions: [],
+        is_mention_me: false,
+        media_type: "reaction",
+        from_self: this.isSelf(ev.sender),
+        attachment: null,
+        reaction_to: rel.event_id ?? null,
+      });
+      return;
+    }
     if (ev.type !== "m.room.message") return;
     if (ev.unsigned?.redacted_because) return;
     const msgtype = String(ev.content?.msgtype ?? "");

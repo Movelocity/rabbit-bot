@@ -188,3 +188,62 @@ test("没开审批时不发这些状态（别往房间里灌噪声）", async ()
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(sent.length, 0);
 });
+
+// ---------------------------------------------------------------- 表情审批
+test("表情审批：点赞 = 批准（key 带 U+FE0F 也认）", async () => {
+  const { log } = fakeLog();
+  const sent: string[] = [];
+  const g = new ApprovalGate(cfg(), log, async (_c, t) => { sent.push(t); return { ok: true, msgId: "$prompt1" }; });
+  const p = g.request({ cmd: "ls -la", cwd: "/x", why: "列目录" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(g.waiting?.id, 1);
+  // Element 发出来的实际是 "👍️"（U+1F44D + U+FE0F）
+  assert.equal(g.tryHandle(msg({ text: "👍\uFE0F", media_type: "reaction", reaction_to: "$prompt1" })), true);
+  const r = await p;
+  assert.equal(r.decision, "approved");
+  assert.equal(r.by, OWNER);
+});
+
+test("表情审批：点踩 = 拒绝", async () => {
+  const { log } = fakeLog();
+  const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt2" }));
+  const p = g.request({ cmd: "rm -rf /tmp/x", cwd: "/x", why: "删缓存" });
+  await new Promise((r) => setTimeout(r, 10));
+  g.tryHandle(msg({ text: "👎\uFE0F", media_type: "reaction", reaction_to: "$prompt2" }));
+  assert.equal((await p).decision, "rejected");
+});
+
+test("表情审批：贴在别的消息上不算数", async () => {
+  const { log, lines } = fakeLog();
+  const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt3" }));
+  const p = g.request({ cmd: "whoami", cwd: "/x", why: "看看" });
+  await new Promise((r) => setTimeout(r, 10));
+  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$someOther" }));
+  assert.equal(g.waiting?.id, 1, "贴错消息不该裁决");
+  assert.ok(lines.some((l) => /表情贴在别的消息上/.test(l)), lines.join("|"));
+  // 收尾：贴对的那条才生效
+  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt3" }));
+  assert.equal((await p).decision, "approved");
+});
+
+test("表情审批：非主人贴表情不裁决，且不报错", async () => {
+  const { log } = fakeLog();
+  const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt4" }));
+  const p = g.request({ cmd: "id", cwd: "/x", why: "看看" });
+  await new Promise((r) => setTimeout(r, 10));
+  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt4", sender_id: "@stranger:matrix.test" }));
+  assert.equal(g.waiting?.id, 1);
+  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt4" }));
+  assert.equal((await p).decision, "approved");
+});
+
+test("表情审批：不在名单里的表情忽略，不当作默许", async () => {
+  const { log } = fakeLog();
+  const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt5" }));
+  const p = g.request({ cmd: "date", cwd: "/x", why: "看看" });
+  await new Promise((r) => setTimeout(r, 10));
+  g.tryHandle(msg({ text: "🤔", media_type: "reaction", reaction_to: "$prompt5" }));
+  assert.equal(g.waiting?.id, 1);
+  g.tryHandle(msg({ text: "n 1", media_type: "text" }));
+  assert.equal((await p).decision, "rejected");
+});
