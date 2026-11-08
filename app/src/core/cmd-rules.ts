@@ -19,6 +19,8 @@ export interface RuleContext {
   /** 相对路径的基准目录 */
   cwd: string;
   home: string;
+  /** 主人点名免审的命令（配置 exec.shell.safeProgs），只给它真能做的事的边界 */
+  extraSafe?: string[];
 }
 
 export interface VerdictResult {
@@ -89,6 +91,9 @@ export function splitSubcommands(cmd: string): { parts: string[]; opaque: string
     }
     if (c === ";" || c === "\n") { parts.push(buf); buf = ""; continue; }
     if (c === "&") {
+      // 重定向里的 & 不是命令分隔符：`2>&1`、`>&2`、`&>` 都留在同一段里，
+      // 否则 `2>&1` 会被拆出一个 `1`，分类器报「未登记的命令：1」——白名单里的命令也跟着被拦。
+      if (cmd[i - 1] === ">" || cmd[i + 1] === ">") { buf += c; continue; }
       if (cmd[i + 1] === "&") { parts.push(buf); buf = ""; i++; continue; }
       parts.push(buf); buf = ""; continue;
     }
@@ -165,18 +170,21 @@ function classifyArgv(argv: string[], raw: string, ctx: RuleContext): VerdictRes
 
   // 写重定向：/dev/null 之类不算写；系统目录 deny；其余根外降为 ask
   if (WRITE_REDIRECT.test(raw)) {
-    const target = raw.split(/>>?/).pop()?.trim().split(/\s+/)[0] ?? "";
-    if (target) {
+    // 逐个看重定向目标：`> /dev/null 2>&1` 里真正写文件的是 /dev/null，
+    // 而 `2>&1`/`1>&2` 只是复制文件描述符（纯数字，不落到文件）。
+    const targets = [...raw.matchAll(/>{1,2}\s*([^\s;|&]+)/g)]
+      .map((m) => m[1])
+      .filter((t) => !/^\d+$/.test(t));
+    for (const target of targets) {
       const abs = resolvePath(target, ctx);
-      if (DEV_NULL.has(abs)) {
-        // 丢进黑洞，等于没写；继续按动词本身判
-      } else if (SYS_ROOTS.some((r) => abs === r || abs.startsWith(r + "/"))) {
+      if (DEV_NULL.has(abs)) continue;              // 丢进黑洞，等于没写
+      if (SYS_ROOTS.some((r) => abs === r || abs.startsWith(r + "/"))) {
         return { verdict: "deny", why: `往系统目录写：${abs}`, part };
-      } else if (!insideRoots(abs, ctx.allowedRoots)) {
-        return { verdict: "ask", why: `往允许根外写：${abs}`, part };
-      } else {
-        return { verdict: "ask", why: "写文件（重定向）", part };
       }
+      if (!insideRoots(abs, ctx.allowedRoots)) {
+        return { verdict: "ask", why: `往允许根外写：${abs}`, part };
+      }
+      return { verdict: "ask", why: "写文件（重定向）", part };
     }
   }
 
@@ -228,13 +236,25 @@ function classifyArgv(argv: string[], raw: string, ctx: RuleContext): VerdictRes
     return { verdict: "safe", why: `${prog} 只读`, part };
   }
 
+  // 主人点名放行的工具：一个命令只做一件事、碰不到本地文件系统的那些。
+  // 唯一例外：bucket 的 rm 删的是远端对象，删错了没回收站，仍然要问。
+  if ((ctx.extraSafe ?? []).includes(prog)) {
+    if (prog === "bucket" && (argv[1] ?? "") === "rm") {
+      return { verdict: "ask", why: "删远端对象", part };
+    }
+    return { verdict: "safe", why: `${prog} 已登记免审`, part };
+  }
+
   return { verdict: "ask", why: `未登记的命令：${prog}`, part };
 }
 
 /** 顶层入口 */
 export function classify(cmd: string, ctx: RuleContext): VerdictResult {
-  const { parts, opaque } = splitSubcommands(cmd);
+  const { parts: rawParts, opaque } = splitSubcommands(cmd);
   if (opaque) return { verdict: "ask", why: `命令里含 ${opaque}，执行体看不见` };
+  // `time` 只是计时外壳：剥掉它，按里面真正的命令判，否则 `time bucket put` 会被当未登记。
+  // 注意剥完还要判剩下的，所以 `time rm -rf ~` 仍然是 refuse。
+  const parts = rawParts.map((p) => p.replace(/^\s*(?:\/usr\/bin\/)?time\b\s*/, ""));
 
   // curl/wget 直接喂给 shell：不问，拒
   for (let i = 1; i < parts.length; i++) {

@@ -440,7 +440,12 @@ export function createTools(d: ToolDeps) {
         if (d.cfg.exec.shell.mode === "host") {
           const hostCfg = d.cfg.exec.shell.host ?? {};
           const cwd = path.resolve(String(hostCfg.cwd ?? d.cfg.exec.dir));
-          const v = classify(cmd, { allowedRoots: [path.resolve(d.cfg.exec.dir)], cwd, home: os.homedir() });
+          const v = classify(cmd, {
+            allowedRoots: [path.resolve(d.cfg.exec.dir)],
+            cwd,
+            home: os.homedir(),
+            extraSafe: d.cfg.exec.shell.safeProgs ?? [],
+          });
           if (v.verdict === "deny") return txt(`这条不许跑：${v.why}。`, { ok: false, denied: true });
           if (v.verdict === "ask") {
             if (!d.approval || !d.approval.enabled) {

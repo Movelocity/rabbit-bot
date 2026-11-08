@@ -90,6 +90,8 @@ export interface Config {
       network: "bridge" | "none";
       timeoutMs: number;
       maxOutputChars: number;
+      /** 免审命令名单：只放「一个命令只做一件事、碰不到本地文件」的工具 */
+      safeProgs?: string[];
       volumes: Array<{ host: string; container: string; mode?: "ro" | "rw" }>;
       /** 额外注入容器/宿主 shell 的环境变量（自动带 RB_API_URL / RB_API_TOKEN） */
       env?: Record<string, string>;

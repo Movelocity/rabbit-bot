@@ -9,7 +9,13 @@ import assert from "node:assert/strict";
 import { classify, type RuleContext, type Verdict } from "../src/core/cmd-rules.ts";
 
 const SANDBOX = "/Users/weikang/projects/rabbit-bot/app/data/sandbox";
-const ctx: RuleContext = { allowedRoots: [SANDBOX], cwd: SANDBOX, home: "/Users/weikang" };
+const ctx: RuleContext = {
+  allowedRoots: [SANDBOX],
+  cwd: SANDBOX,
+  home: "/Users/weikang",
+  // 与 config/default.json 的 exec.shell.safeProgs 保持一致
+  extraSafe: ["bucket", "ark_image.py", "form_ratio.py", "form_ratio"],
+};
 
 interface Case { cmd: string; want: Verdict; why: string; group: "日常" | "边界" }
 
@@ -104,6 +110,17 @@ const CASES: Case[] = [
   { group: "对抗", cmd: "sort -o /etc/x f", want: "ask", why: "-o 让只读命令写盘" },
   { group: "对抗", cmd: "rg --pre 'rm -rf ~' x", want: "ask", why: "--pre 会执行命令" },
   { group: "对抗", cmd: "ls -la /Users/weikang/.ssh", want: "deny", why: "列凭据目录也拦" },
+
+  // ---------- 免审工具（config exec.shell.safeProgs） ----------
+  { group: "日常", cmd: "bucket put ./a.png img/a.png", want: "safe", why: "已登记免审" },
+  { group: "日常", cmd: "bucket list test/", want: "safe", why: "同上" },
+  { group: "日常", cmd: "ark_image.py \"鲸鱼\" --format png", want: "safe", why: "同上" },
+  { group: "边界", cmd: "bucket rm test/a.png", want: "ask", why: "删远端对象，删错没回收站" },
+  { group: "边界", cmd: "notregistered-tool --x", want: "ask", why: "没登记的仍然要问" },
+  { group: "日常", cmd: "time bucket put a.png img/a.png", want: "safe", why: "time 是计时外壳，剥掉后判里面" },
+  { group: "对抗", cmd: "time rm -rf /Users/weikang/Documents", want: "deny", why: "剥掉 time 后照样拦" },
+  { group: "日常", cmd: 'time bucket put a.png img/a.png 2>&1; echo "exit=$?"', want: "safe", why: "2>&1 不该被拆成一条命令" },
+  { group: "日常", cmd: "bucket list test/ > /dev/null 2>&1", want: "safe", why: "重定向不影响判定" },
 ];
 
 test("分类器逐条验收", () => {
