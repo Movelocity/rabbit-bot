@@ -20,7 +20,7 @@ export interface SkillInfo {
 const IGNORED = new Set(["node_modules", "data"]);
 
 export function skillsRoot(cfg: Config): string {
-  return path.join(cfg.sandbox.dir, "skills");
+  return path.join(cfg.exec.dir, "skills");
 }
 
 /**

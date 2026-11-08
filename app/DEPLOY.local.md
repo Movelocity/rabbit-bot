@@ -186,8 +186,8 @@ extensionFactories: [
 
 | 边界 | 值 |
 |---|---|
-| 模式 | `config.sandbox.shell.mode`：`docker`（默认，隔离）/ `host`（无隔离，仅本地开发） |
-| 网络 | `--network bridge`（**有网**；`config.sandbox.shell.network` 可切回 `none`） |
+| 模式 | `config.exec.shell.mode`：`docker`（默认，隔离）/ `host`（无隔离，仅本地开发） |
+| 网络 | `--network bridge`（**有网**；`config.exec.shell.network` 可切回 `none`） |
 | 根文件系统 | `--read-only`，只有 `/tmp`（tmpfs 256m）和 `/work` 可写 |
 | 挂载 | 只把 `data/sandbox` 挂成 `/work`，宿主其余路径在容器里**不存在** |
 | 权限 | `--cap-drop ALL`、`no-new-privileges`、非 root（宿主 uid:gid） |
@@ -216,7 +216,7 @@ extensionFactories: [
 
 **装包**：网络是 `bridge`，所以 `pip install` / `npm i` / `git clone` 都能用。镜像里设了 `PIP_USER=1` + `PIP_BREAK_SYSTEM_PACKAGES=1`，`pip install requests` 直接成功——装在 `/tmp/home/.local`（tmpfs），**容器一重建就没了**。要长期留着就 `python3 -m venv /work/.venv`，包落在沙盒目录里。
 
-**有网的代价**：容器能上网，也就能把手里拿到的内容发出去。宿主文件仍然碰不到（`/Users` 在容器里不存在），但如果模型把聊天内容写进 `/work` 再外发，这条链路是通的。想收紧就把 `config.sandbox.shell.network` 改 `"none"`，再 `docker rm -f rabbit-bot-sbx` 让它按新参数重建。
+**有网的代价**：容器能上网，也就能把手里拿到的内容发出去。宿主文件仍然碰不到（`/Users` 在容器里不存在），但如果模型把聊天内容写进 `/work` 再外发，这条链路是通的。想收紧就把 `config.exec.shell.network` 改 `"none"`，再 `docker rm -f rabbit-bot-sbx` 让它按新参数重建。
 
 **测试**：`test/sandbox-shell.test.ts` 5 条锁住「宿主路径不存在 / network 两种模式 / 根只读 / 写 /work 落到宿主 / 超时被杀」，没有 docker 时自动 skip。
 

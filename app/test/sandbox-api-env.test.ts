@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/config.ts";
-import { sandboxShellOptions } from "../src/ops/sandbox.ts";
+import { shellRunnerOptions } from "../src/ops/exec.ts";
 import { resolveApiToken } from "../src/api-token.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-api-env-"));
@@ -14,13 +14,13 @@ test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 const mk = (mode: "docker" | "host", port = 3738) => loadConfig({
   dataDir: dir,
   api: { enabled: true, port, host: "0.0.0.0" },
-  sandbox: { shell: { mode } },
+  exec: { shell: { mode } },
 });
 
 test("docker 模式注入 host.docker.internal，token 落盘 0600", () => {
   delete process.env.RABBIT_BOT_API_TOKEN;
   const cfg = mk("docker");
-  const opts = sandboxShellOptions(cfg);
+  const opts = shellRunnerOptions(cfg);
   assert.equal(opts.env?.RB_API_URL, "http://host.docker.internal:3738");
   const token = opts.env?.RB_API_TOKEN ?? "";
   assert.equal(token.length, 64);
@@ -32,14 +32,14 @@ test("docker 模式注入 host.docker.internal，token 落盘 0600", () => {
 });
 
 test("host 模式注入 127.0.0.1", () => {
-  const opts = sandboxShellOptions(mk("host", 4567));
+  const opts = shellRunnerOptions(mk("host", 4567));
   assert.equal(opts.env?.RB_API_URL, "http://127.0.0.1:4567");
 });
 
 test("RABBIT_BOT_API_TOKEN 优先于文件", () => {
   process.env.RABBIT_BOT_API_TOKEN = "env-token-env-token";
   try {
-    assert.equal(sandboxShellOptions(mk("docker")).env?.RB_API_TOKEN, "env-token-env-token");
+    assert.equal(shellRunnerOptions(mk("docker")).env?.RB_API_TOKEN, "env-token-env-token");
   } finally {
     delete process.env.RABBIT_BOT_API_TOKEN;
   }

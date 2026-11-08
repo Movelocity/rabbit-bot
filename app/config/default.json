@@ -99,7 +99,7 @@
     "name": "小池",
     "persona": "你是一个自然、简短、有分寸的聊天伙伴。"
   },
-  "sandbox": {
+  "exec": {
     "dir": "data/sandbox",
     "maxFileBytes": 262144,
     "maxFiles": 200,

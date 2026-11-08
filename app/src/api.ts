@@ -19,7 +19,7 @@ import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
 import { addMemory, closeMemory, searchMemories } from "./ops/memories.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
-import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/sandbox.ts";
+import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
 
 const MAX_BODY = 512 * 1024;
@@ -100,7 +100,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
 
     // 健康检查不需要 token（只回状态，不含业务数据）
     if (method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
-      return reply(200, { status: "ok", sandbox: d.cfg.sandbox.shell.mode, time: Date.now() });
+      return reply(200, { status: "ok", exec: d.cfg.exec.shell.mode, time: Date.now() });
     }
 
     const auth = String(req.headers.authorization ?? "");

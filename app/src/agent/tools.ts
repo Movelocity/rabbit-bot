@@ -10,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
-import { sandboxShellOptions, readSandboxFile, writeSandboxFile, runSandboxShell } from "../ops/sandbox.ts";
-import { runSandboxArgv } from "../core/sandbox-shell.ts";
+import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell } from "../ops/exec.ts";
+import { runSandboxArgv } from "../core/shell-runner.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -36,7 +36,7 @@ export interface ToolDeps {
   markSilent?: (reason: string) => void;
   /** 这一轮的主要池：记记忆/加计划时自动落到这里，模型不用自己填池 */
   primaryPool?: () => string | null;
-  /** 宿主机命令审批闸门（只在 sandbox.shell.mode=host 时被用到） */
+  /** 宿主机命令审批闸门（只在 exec.shell.mode=host 时被用到） */
   approval?: ApprovalGate;
 }
 
@@ -420,14 +420,16 @@ export function createTools(d: ToolDeps) {
     label: "terminal",
     executionMode: "sequential",
     description:
-      (d.cfg.sandbox.shell.mode === "host"
+      (d.cfg.exec.shell.mode === "host"
         ? "在**宿主机**上跑一条命令（不再是容器，碰得到真实文件）。写文件、建目录、跑脚本都走它；"
           + "会改状态的命令要先过主人的审批，审批没过就不会执行。"
         : "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。")
-      + "用来列目录（ls、rg --files）、搜内容、算数、批量处理；单次最多 30 秒。只读文件用 read_file 更快。",
+      + "用来列目录（ls、rg --files）、搜内容、算数、批量处理；默认 30 秒，可放到 600 秒（构建、装包、转录这类长活别拆碎）。"
+      + "输出太大时会截断并把全文落盘，回话里带路径。只读文件用 read_file 更快。",
     parameters: Type.Object({
       cmd: Type.String({ description: "完整命令行，例如 rg -n '关键词' topics" }),
-      timeout_sec: Type.Optional(Type.Number({ description: "超时秒数，最多 30，默认按配置" })),
+      timeout_sec: Type.Optional(Type.Number({ description: "超时秒数，默认按配置（通常 30），最多 600" })),
+      cwd: Type.Optional(Type.String({ description: "在这条命令的工作目录里跑（绝对路径）；不填就是沙盒目录" })),
     }),
     async execute(_id, p) {
       const cmd = String(p.cmd ?? "");
@@ -435,10 +437,10 @@ export function createTools(d: ToolDeps) {
       let pendingId = 0;
       try {
         // 只有在宿主机上裸跑时才设闸：docker 模式下容器本身就是边界
-        if (d.cfg.sandbox.shell.mode === "host") {
-          const hostCfg = d.cfg.sandbox.shell.host ?? {};
-          const cwd = path.resolve(String(hostCfg.cwd ?? d.cfg.sandbox.dir));
-          const v = classify(cmd, { allowedRoots: [path.resolve(d.cfg.sandbox.dir)], cwd, home: os.homedir() });
+        if (d.cfg.exec.shell.mode === "host") {
+          const hostCfg = d.cfg.exec.shell.host ?? {};
+          const cwd = path.resolve(String(hostCfg.cwd ?? d.cfg.exec.dir));
+          const v = classify(cmd, { allowedRoots: [path.resolve(d.cfg.exec.dir)], cwd, home: os.homedir() });
           if (v.verdict === "deny") return txt(`这条不许跑：${v.why}。`, { ok: false, denied: true });
           if (v.verdict === "ask") {
             if (!d.approval || !d.approval.enabled) {
@@ -453,9 +455,14 @@ export function createTools(d: ToolDeps) {
           }
         }
         const t0 = Date.now();
-        const r = await runSandboxShell(d.cfg, cmd, p.timeout_sec);
+        // 输出超限时落盘，别让模型只看到开头几百字还以为命令没跑完整
+        const overflowFile = path.join(d.cfg.dataDir, "tool-output", `term-${Date.now()}.log`);
+        const r = await execShell(d.cfg, cmd, p.timeout_sec, {
+          cwd: p.cwd ? String(p.cwd) : undefined,
+          overflowFile,
+        });
         // 过了审批的那条，把结果也回一句到审批房：他要知道自己批的那下有没有真跑成
-        if (d.cfg.sandbox.shell.mode === "host" && d.approval) {
+        if (d.cfg.exec.shell.mode === "host" && d.approval) {
           d.approval.reportDone((pendingId ?? 0), { ok: !!r.ok, code: Number(r.code ?? 0), ms: Date.now() - t0 });
         }
         const out = String(r.output ?? "").trim();
@@ -495,7 +502,7 @@ export function createTools(d: ToolDeps) {
       }
       try {
         // RB_NOW 让模拟器里的「现在」和这一轮一致（plan-add 的过期判断会用到）
-        const opts = sandboxShellOptions(d.cfg, 60_000);
+        const opts = shellRunnerOptions(d.cfg, 60_000);
         const exec = d.rbExec ?? ((argv: string[]) => runSandboxArgv(["rb", ...argv], { ...opts, execEnv: { RB_NOW: String(d.now()) } }));
         const r = await exec(parts);
         return txt(r.output.trim() || "（没有输出）", { ok: r.ok, code: r.code });
@@ -506,6 +513,6 @@ export function createTools(d: ToolDeps) {
   });
 
   // host 模式下不再给写文件工具：写盘只走 terminal（会过审批），少一条路就少一次搞不清写到哪
-  const sandboxed = d.cfg.sandbox.shell.mode !== "host";
+  const sandboxed = d.cfg.exec.shell.mode !== "host";
   return [chat, memory, plan, readFile, ...(sandboxed ? [writeFile] : []), runShellTool, rb];
 }

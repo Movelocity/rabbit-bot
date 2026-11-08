@@ -76,7 +76,7 @@ export interface Config {
   };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
-  sandbox: {
+  exec: {
     dir: string;
     maxFileBytes: number;
     maxFiles: number;
@@ -98,7 +98,7 @@ export interface Config {
     };
   };
   /**
-   * 宿主机命令的审批闸门（只在 sandbox.shell.mode === "host" 时生效）。
+   * 宿主机命令的审批闸门（只在 exec.shell.mode === "host" 时生效）。
    * 发到独立房间等主人一句话；超时按拒绝，审批内容不进她的会话上下文。
    */
   approval: {
@@ -141,25 +141,59 @@ function expandHome(p: string): string {
   return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
+/**
+ * 老配置里这一段叫 `sandbox`，现在叫 `exec`（同一段，管「命令怎么跑」：容器 / 宿主机）。
+ *
+ * 必须在拿到每一层原始 JSON 时就搬，不能等 deepMerge 之后：
+ * 默认配置里已经有 `exec`，合并完再看 `sandbox` 就分不清「用户写的是旧键」还是
+ * 「默认值来自新键」——旧键会被静默忽略，`mode` 掉回默认的 `docker`，
+ * 于是她的 terminal 突然碰不到真实文件了，而且一句报错都没有。
+ *
+ * 所以这里每层单独搬 + 留一行 warn，两键并存时以 exec 为准。
+ */
+export function migrateLegacyKeys(raw: unknown, where: string): void {
+  if (!isObj(raw) || !("sandbox" in raw)) return;
+  if ("exec" in raw) {
+    console.warn(`config: ${where} 里 sandbox 和 exec 同时存在，用 exec，忽略 sandbox`);
+  } else {
+    raw.exec = raw.sandbox;
+    console.warn(`config: ${where} 里的 sandbox 段已改名为 exec，已自动搬运（建议手工改掉）`);
+  }
+  delete raw.sandbox;
+}
+
 export function loadConfig(overrides?: unknown): Config {
-  let cfg = readJson(path.join(APP_ROOT, "config/default.json")) as Config;
+  const base = readJson(path.join(APP_ROOT, "config/default.json"));
+  migrateLegacyKeys(base, "config/default.json");
+  let cfg = base as Config;
   const local = path.join(APP_ROOT, "config/local.json");
-  if (fs.existsSync(local)) cfg = deepMerge(cfg, readJson(local));
+  if (fs.existsSync(local)) {
+    const l = readJson(local);
+    migrateLegacyKeys(l, "config/local.json");
+    cfg = deepMerge(cfg, l);
+  }
   const extra = process.env.RABBIT_BOT_CONFIG;
-  if (extra) cfg = deepMerge(cfg, readJson(path.resolve(extra)));
-  if (overrides) cfg = deepMerge(cfg, overrides);
+  if (extra) {
+    const e = readJson(path.resolve(extra));
+    migrateLegacyKeys(e, `$RABBIT_BOT_CONFIG(${extra})`);
+    cfg = deepMerge(cfg, e);
+  }
+  if (overrides) {
+    migrateLegacyKeys(overrides, "overrides");
+    cfg = deepMerge(cfg, overrides);
+  }
   cfg.runtimeDir = path.resolve(expandHome(process.env.RABBIT_BOT_RUNTIME || cfg.runtimeDir));
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
-  cfg.sandbox.dir = path.resolve(APP_ROOT, cfg.sandbox.dir);
-  // volumes 里的 host 是相对 APP_ROOT 的路径（和 sandbox.dir 一样）
-  cfg.sandbox.shell.volumes = (cfg.sandbox.shell.volumes ?? []).map((v) => ({
+  cfg.exec.dir = path.resolve(APP_ROOT, cfg.exec.dir);
+  // volumes 里的 host 是相对 APP_ROOT 的路径（和 exec.dir 一样）
+  cfg.exec.shell.volumes = (cfg.exec.shell.volumes ?? []).map((v) => ({
     ...v,
     host: path.resolve(APP_ROOT, v.host),
   }));
   // host 模式的 cwd 不填就落到沙盒目录（和 docker 模式的 /work 指向同一个地方）
-  if (cfg.sandbox.shell.host?.cwd) cfg.sandbox.shell.host.cwd = path.resolve(APP_ROOT, cfg.sandbox.shell.host.cwd);
-  else cfg.sandbox.shell.host = { ...cfg.sandbox.shell.host, cwd: cfg.sandbox.dir };
+  if (cfg.exec.shell.host?.cwd) cfg.exec.shell.host.cwd = path.resolve(APP_ROOT, cfg.exec.shell.host.cwd);
+  else cfg.exec.shell.host = { ...cfg.exec.shell.host, cwd: cfg.exec.dir };
   if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);
   return cfg;
@@ -180,11 +214,11 @@ export function validateConfig(cfg: Config): void {
   if (cny !== undefined && !(Number.isFinite(cny) && cny >= 0)) throw new Error("config: limits.dailyCny 必须是 >=0 的数（0 = 不按钱限额）");
   const fx = cfg.limits.usdCny;
   if (fx !== undefined && !(Number.isFinite(fx) && fx > 0)) throw new Error("config: limits.usdCny 必须是正数");
-  pos(cfg.sandbox.maxFileBytes, "sandbox.maxFileBytes");
-  pos(cfg.sandbox.maxFiles, "sandbox.maxFiles");
-  const mode = cfg.sandbox.shell.mode;
-  if (mode !== "docker" && mode !== "host") throw new Error('config: sandbox.shell.mode 只能是 "docker" 或 "host"');
-  if (cfg.sandbox.shell.enabled) pos(cfg.sandbox.shell.timeoutMs, "sandbox.shell.timeoutMs");
+  pos(cfg.exec.maxFileBytes, "exec.maxFileBytes");
+  pos(cfg.exec.maxFiles, "exec.maxFiles");
+  const mode = cfg.exec.shell.mode;
+  if (mode !== "docker" && mode !== "host") throw new Error('config: exec.shell.mode 只能是 "docker" 或 "host"');
+  if (cfg.exec.shell.enabled) pos(cfg.exec.shell.timeoutMs, "exec.shell.timeoutMs");
   if (cfg.api?.enabled) {
     const p = cfg.api.port;
     if (!Number.isInteger(p) || p < 0 || p > 65535) throw new Error("config: api.port 必须是 0~65535 的整数（0 = 随机端口）");

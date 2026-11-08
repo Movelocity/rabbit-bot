@@ -11,8 +11,8 @@ import { setOwnerIds } from "./core/owners.ts";
 import { startInjectServer } from "./inject.ts";
 import { startApiServer } from "./api.ts";
 import { resolveApiToken } from "./api-token.ts";
-import { ensureSandboxContainer } from "./core/sandbox-shell.ts";
-import { sandboxShellOptions } from "./ops/sandbox.ts";
+import { ensureSandboxContainer } from "./core/shell-runner.ts";
+import { shellRunnerOptions } from "./ops/exec.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
 import { ensureRuntime, ensureHostSandboxLinks, RUNTIME_SUBDIRS } from "./core/runtime.ts";
@@ -101,9 +101,9 @@ async function main() {
   try {
     const token = resolveApiToken(cfg);
     apiSrv = await startApiServer({ cfg, store: app.store, log, token });
-    if (cfg.sandbox.shell.enabled && cfg.sandbox.shell.mode === "docker") {
-      const r = await ensureSandboxContainer(sandboxShellOptions(cfg));
-      if (r.ok) log.info(`沙盒容器 ${cfg.sandbox.shell.container}：${r.message}`);
+    if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {
+      const r = await ensureSandboxContainer(shellRunnerOptions(cfg));
+      if (r.ok) log.info(`沙盒容器 ${cfg.exec.shell.container}：${r.message}`);
       else log.warn(`沙盒容器没起来：${r.message}（sb run 时会再试）`);
     }
   } catch (e) {

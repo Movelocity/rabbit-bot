@@ -10,7 +10,7 @@ import { ensureSkillDataDirs, listSkills } from "../src/ops/skills.ts";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-skills-"));
 const sandbox = path.join(dir, "sandbox");
 const skills = path.join(sandbox, "skills");
-const cfg = loadConfig({ dataDir: dir, sandbox: { dir: sandbox } });
+const cfg = loadConfig({ dataDir: dir, exec: { dir: sandbox } });
 
 const mk = (name: string, withSkill = true) => {
   const d = path.join(skills, name);
@@ -47,7 +47,7 @@ test("ensureSkillDataDirs 只补缺的，重复调用不再新建", () => {
 });
 
 test("没有 skills 目录时返回空，不抛错", () => {
-  const empty = loadConfig({ dataDir: dir, sandbox: { dir: path.join(dir, "nowhere") } });
+  const empty = loadConfig({ dataDir: dir, exec: { dir: path.join(dir, "nowhere") } });
   assert.deepEqual(listSkills(empty), []);
   assert.deepEqual(ensureSkillDataDirs(empty), []);
 });

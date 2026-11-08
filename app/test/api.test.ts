@@ -15,7 +15,7 @@ const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
   api: { enabled: true, port: 0, host: "127.0.0.1" },
-  sandbox: { dir: path.join(dir, "sandbox") },
+  exec: { dir: path.join(dir, "sandbox") },
 });
 const store = new Store(path.join(dir, "test.db"));
 const log = new Logger(null, true);

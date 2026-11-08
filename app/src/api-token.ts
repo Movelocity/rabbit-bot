@@ -25,6 +25,6 @@ export function resolveApiToken(cfg: Config): string {
 /** 注入容器/宿主 shell 的环境变量：容器里用 host.docker.internal，宿主上用 127.0.0.1。 */
 export function apiEnv(cfg: Config, token: string): Record<string, string> {
   const port = cfg.api?.port ?? DEFAULT_PORT;
-  const host = cfg.sandbox.shell.mode === "host" ? "127.0.0.1" : "host.docker.internal";
+  const host = cfg.exec.shell.mode === "host" ? "127.0.0.1" : "host.docker.internal";
   return { RB_API_URL: `http://${host}:${port}`, RB_API_TOKEN: token };
 }

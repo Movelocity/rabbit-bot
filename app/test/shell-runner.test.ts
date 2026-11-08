@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runShell, type SandboxShellOptions } from "../src/core/sandbox-shell.ts";
+import { runShell, type ShellRunnerOptions } from "../src/core/shell-runner.ts";
 
 const hasDocker = (() => {
   try {
@@ -20,8 +20,8 @@ const skip = hasDocker ? false : "没有可用的 docker，跳过容器沙盒测
 // 有自建镜像就用它（带 python/git/curl/bash/jq/rg），没有就退回基础镜像
 const image = (() => {
   try {
-    execFileSync("docker", ["image", "inspect", "rabbit-bot-sandbox:latest"], { stdio: "ignore", timeout: 8000 });
-    return "rabbit-bot-sandbox:latest";
+    execFileSync("docker", ["image", "inspect", "rabbit-bot-exec:latest"], { stdio: "ignore", timeout: 8000 });
+    return "rabbit-bot-exec:latest";
   } catch {
     return "node:22-alpine";
   }
@@ -36,8 +36,8 @@ const base = {
   timeoutMs: 15000,
   maxOutputChars: 4000,
 };
-const opts: SandboxShellOptions = { ...base, mode: "docker" };
-const hostOpts: SandboxShellOptions = { ...base, mode: "host", hostCwd: workspace, timeoutMs: 5000 };
+const opts: ShellRunnerOptions = { ...base, mode: "docker" };
+const hostOpts: ShellRunnerOptions = { ...base, mode: "host", hostCwd: workspace, timeoutMs: 5000 };
 
 test.after(() => {
   try {
@@ -125,4 +125,43 @@ test("host 模式：超时被杀，输出截断", async () => {
 test("空命令和超长命令直接拒绝", async () => {
   await assert.rejects(() => runShell("   ", hostOpts), /cmd 不能为空/);
   await assert.rejects(() => runShell("x".repeat(4001), hostOpts), /cmd 太长/);
+});
+
+test("host 模式：输出超限时把全文落盘，回话里带路径", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-overflow-"));
+  const overflow = path.join(dir, "nested", "out.log");
+  const r = await runShell("printf 'x%.0s' $(seq 1 5000)", {
+    mode: "host",
+    container: "unused",
+    image: "unused",
+    network: "none",
+    volumes: [],
+    hostCwd: dir,
+    timeoutMs: 15000,
+    maxOutputChars: 100,
+    overflowFile: overflow,
+  } as ShellRunnerOptions);
+  assert.equal(r.ok, true);
+  assert.match(r.output, /输出已截断/);
+  assert.match(r.output, /全文在/);
+  assert.ok(fs.existsSync(overflow), "全文应该落盘");
+  assert.equal(fs.readFileSync(overflow, "utf8").length, 5000);
+});
+
+test("host 模式：没超限就不落盘，也不加提示", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-noclip-"));
+  const overflow = path.join(dir, "out.log");
+  const r = await runShell("echo hi", {
+    mode: "host",
+    container: "unused",
+    image: "unused",
+    network: "none",
+    volumes: [],
+    hostCwd: dir,
+    timeoutMs: 15000,
+    maxOutputChars: 100,
+    overflowFile: overflow,
+  } as ShellRunnerOptions);
+  assert.equal(r.output.trim(), "hi");
+  assert.equal(fs.existsSync(overflow), false);
 });

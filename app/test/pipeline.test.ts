@@ -18,7 +18,7 @@ async function setup(over: any = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-test-"));
   const cfg = loadConfig({
     dataDir, logDir: path.join(dataDir, "logs"),
-    sandbox: { dir: path.join(dataDir, "sandbox") },
+    exec: { dir: path.join(dataDir, "sandbox") },
     send: { confirmWaitMs: 30 }, llm: { provider: "faux", model: "faux-brain" },
     emoji: { map: { 微笑: { text: "🙂" } } }, ...over,
   });

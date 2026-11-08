@@ -22,7 +22,7 @@ fs.mkdirSync(sandbox, { recursive: true });
 const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
-  sandbox: { dir: sandbox },
+  exec: { dir: sandbox },
   api: { enabled: true, port: 0, host: "127.0.0.1" },
 });
 const store = new Store(path.join(dir, "test.db"));

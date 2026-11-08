@@ -149,9 +149,9 @@ function setupFs() {
   const cfg = {
     ...base,
     dataDir,
-    sandbox: { ...base.sandbox, dir: path.join(dataDir, "sandbox"), shell: { ...base.sandbox.shell, mode: "docker" as const } },
+    exec: { ...base.exec, dir: path.join(dataDir, "sandbox"), shell: { ...base.exec.shell, mode: "docker" as const } },
   };
-  fs.mkdirSync(cfg.sandbox.dir, { recursive: true });
+  fs.mkdirSync(cfg.exec.dir, { recursive: true });
   const store = new Store(":memory:");
   store.insertMessage({
     platform: "feishu", external_chat_id: "oc_fs", pool_kind: "private", msg_id: "f1",
@@ -191,8 +191,8 @@ test("read_file：文件不存在就报错，不返回空字符串", async () =>
 test("host 模式不再给 write_file（写盘只走 terminal 的审批）", async () => {
   const base = loadConfig();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-host-"));
-  const cfg = { ...base, sandbox: { ...base.sandbox, dir: path.join(dir, "sandbox"), shell: { ...base.sandbox.shell, mode: "host" as const } } };
-  fs.mkdirSync(cfg.sandbox.dir, { recursive: true });
+  const cfg = { ...base, exec: { ...base.exec, dir: path.join(dir, "sandbox"), shell: { ...base.exec.shell, mode: "host" as const } } };
+  fs.mkdirSync(cfg.exec.dir, { recursive: true });
   const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() }) as any[];
   const names2 = tools.map((t) => t.name);
   assert.ok(!names2.includes("write_file"), `host 模式还留着 write_file：${names2.join(",")}`);

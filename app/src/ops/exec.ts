@@ -2,13 +2,13 @@
 import path from "node:path";
 import { APP_ROOT, type Config } from "../config.ts";
 import { createSandboxFs } from "../core/sandbox-fs.ts";
-import { runShell, type SandboxArgvOptions } from "../core/sandbox-shell.ts";
+import { runShell, type SandboxArgvOptions } from "../core/shell-runner.ts";
 import { apiEnv, resolveApiToken } from "../api-token.ts";
 import { ensureSkillDataDirs } from "./skills.ts";
 import { runtimeOverlays } from "../core/runtime.ts";
 
 function sbox(cfg: Config) {
-  const sc = cfg.sandbox;
+  const sc = cfg.exec;
   return createSandboxFs({
     root: sc.dir,
     maxFileBytes: sc.maxFileBytes,
@@ -24,7 +24,7 @@ function sbox(cfg: Config) {
  * 但 /work/topics 指向仓库外的真身。
  */
 function withRuntimeVolumes(cfg: Config): SandboxArgvOptions["volumes"] {
-  const vols = [...cfg.sandbox.shell.volumes];
+  const vols = [...cfg.exec.shell.volumes];
   for (const [name, host] of Object.entries(runtimeOverlays(cfg))) {
     vols.push({ host, container: `/work/${name}`, mode: "rw" });
   }
@@ -32,8 +32,8 @@ function withRuntimeVolumes(cfg: Config): SandboxArgvOptions["volumes"] {
 }
 
 /** 沙盒 shell 的完整参数；会自动补上 RB_API_URL / RB_API_TOKEN。 */
-export function sandboxShellOptions(cfg: Config, timeoutMs?: number): SandboxArgvOptions {
-  const sc = cfg.sandbox.shell;
+export function shellRunnerOptions(cfg: Config, timeoutMs?: number): SandboxArgvOptions {
+  const sc = cfg.exec.shell;
   return {
     mode: sc.mode,
     container: sc.container,
@@ -65,13 +65,23 @@ export function writeSandboxFile(cfg: Config, p: string, content: string) {
   return { path: p, bytes: sbox(cfg).write(p, content) };
 }
 
-export async function runSandboxShell(cfg: Config, cmd: string, timeoutSec?: number) {
-  const sc = cfg.sandbox;
+export async function execShell(
+  cfg: Config,
+  cmd: string,
+  timeoutSec?: number,
+  opts: { cwd?: string; overflowFile?: string } = {},
+) {
+  const sc = cfg.exec;
   if (!sc.shell.enabled) throw new Error("沙盒 shell 没开");
   if (!cmd) throw new Error("缺少命令");
   // 新加的技能目录可能还没 data/；跑命令前补一次，技能里直接写 data/ 不会 ENOENT
   ensureSkillDataDirs(cfg);
-  const secs = Math.min(30, Math.max(1, Math.floor(timeoutSec ?? sc.shell.timeoutMs / 1000)));
-  const r = await runShell(cmd, sandboxShellOptions(cfg, secs * 1000));
+  // 上限从 30 秒放到 600 秒：构建/装包/转录这类活 30 秒根本跑不完，
+  // 30 秒的硬上限等于逼模型「拆成十条命令」，反而更慢更容易错。
+  const secs = Math.min(600, Math.max(1, Math.floor(timeoutSec ?? sc.shell.timeoutMs / 1000)));
+  const o = shellRunnerOptions(cfg, secs * 1000);
+  if (opts.cwd) o.hostCwd = opts.cwd;
+  if (opts.overflowFile) o.overflowFile = opts.overflowFile;
+  const r = await runShell(cmd, o);
   return { code: r.code, ok: r.ok, output: r.output };
 }

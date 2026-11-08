@@ -14,9 +14,9 @@ import { loadConfig } from "../src/config.ts";
 function setup(decision: "approved" | "rejected" | "timeout" | "disabled", opts: { hasGate?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-host-"));
   const cfg = loadConfig();
-  cfg.sandbox.dir = dir;
-  cfg.sandbox.shell.mode = "host";
-  cfg.sandbox.shell.host = { cwd: dir, inheritEnv: false };
+  cfg.exec.dir = dir;
+  cfg.exec.shell.mode = "host";
+  cfg.exec.shell.host = { cwd: dir, inheritEnv: false };
 
   const asked: { cmd: string; why: string }[] = [];
   const reported: { id: number; ok: boolean; code: number }[] = [];

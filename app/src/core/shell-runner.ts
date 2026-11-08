@@ -2,7 +2,7 @@
  * 沙盒 shell：默认跑在 Docker 容器里，不是宿主机。
  *
  * mode="docker" 的边界（创建时固定，改这里等于改安全边界）：
- *   --network <network>     "none" 完全断网；"bridge" 有网（按需，见 config.sandbox.shell.network）
+ *   --network <network>     "none" 完全断网；"bridge" 有网（按需，见 config.exec.shell.network）
  *   --read-only             根文件系统只读，只有 /work 和 /tmp(tmpfs) 可写
  *   --cap-drop ALL          丢弃全部 capability
  *   no-new-privileges       不许提权
@@ -15,6 +15,8 @@
  * 模型能看到 ~/.config/rabbit-bot/env 和任意宿主路径。只在 config/local.json 里开。
  */
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 export type SandboxMode = "docker" | "host";
 
@@ -26,7 +28,7 @@ export interface VolumeSpec {
   mode?: "ro" | "rw";
 }
 
-export interface SandboxShellOptions {
+export interface ShellRunnerOptions {
   /** 默认 "docker"；"host" 无隔离，仅开发用。 */
   mode?: SandboxMode;
   container: string;
@@ -45,9 +47,11 @@ export interface SandboxShellOptions {
   hostInheritEnv?: boolean;
   /** 额外注入容器的环境变量（API 地址/token 走这里）。host 模式下只在 hostInheritEnv 时生效。 */
   env?: Record<string, string>;
+  /** 输出被截断时把全文写到这个文件（不给就直接丢）。让模型能「翻全文」而不是只看到头。 */
+  overflowFile?: string;
 }
 
-export interface SandboxShellResult {
+export interface ShellRunnerResult {
   ok: boolean;
   code: number;
   output: string;
@@ -85,10 +89,17 @@ function run(bin: string, args: string[], timeoutMs: number, cwd?: string, env?:
   });
 }
 
-function clip(combined: string, maxOutputChars: number): string {
-  return combined.length > maxOutputChars
-    ? `${combined.slice(0, maxOutputChars)}\n…（输出已截断，共 ${combined.length} 字）`
-    : combined;
+function clip(combined: string, maxOutputChars: number, overflowFile?: string): string {
+  if (combined.length <= maxOutputChars) return combined;
+  let saved = "";
+  if (overflowFile) {
+    try {
+      fs.mkdirSync(path.dirname(overflowFile), { recursive: true });
+      fs.writeFileSync(overflowFile, combined, "utf8");
+      saved = `，全文在 ${overflowFile}`;
+    } catch { /* 写不进去就只报字数 */ }
+  }
+  return `${combined.slice(0, maxOutputChars)}\n…（输出已截断，共 ${combined.length} 字${saved}）`;
 }
 
 function timeoutMark(body: string, secs: number, timedOut: boolean): string {
@@ -120,7 +131,7 @@ async function envMatches(container: string, env: Record<string, string>): Promi
  * 挂载点变了也要重建：容器是长活的，挂载只在 `docker run` 那一刻生效。
  * 运行时目录（人设/话题库）第一次接进来时不重建，容器里看到的还是旧的空壳。
  */
-async function mountsMatch(container: string, volumes: SandboxShellOptions["volumes"]): Promise<boolean> {
+async function mountsMatch(container: string, volumes: ShellRunnerOptions["volumes"]): Promise<boolean> {
   const r = await run("docker", ["inspect", "-f", "{{range .Mounts}}{{.Source}}=>{{.Destination}};{{end}}", container], 15000);
   if (r.code !== 0) return false;
   const cur = new Set(r.out.trim().split(";").filter(Boolean));
@@ -131,7 +142,7 @@ async function mountsMatch(container: string, volumes: SandboxShellOptions["volu
 }
 
 /** 保证容器在跑：在跑就返回；停了就 start；不存在就按边界建一个。env 或挂载变了会重建。 */
-export async function ensureSandboxContainer(opts: SandboxShellOptions): Promise<{ ok: boolean; message: string }> {
+export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<{ ok: boolean; message: string }> {
   const desired = opts.env ?? {};
   const probe = await run("docker", ["inspect", "-f", "{{.State.Running}}", opts.container], 15000);
   if (probe.code === 0) {
@@ -174,7 +185,7 @@ export async function ensureSandboxContainer(opts: SandboxShellOptions): Promise
 }
 
 /** 在沙盒容器里跑一段 shell（sh -lc）。命令字符串不进宿主 shell，走 execFile 参数传递。 */
-export async function runInDocker(cmd: string, opts: SandboxShellOptions): Promise<SandboxShellResult> {
+export async function runInDocker(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
   const trimmed = checkCmd(cmd);
 
   const ready = await ensureSandboxContainer(opts);
@@ -187,17 +198,17 @@ export async function runInDocker(cmd: string, opts: SandboxShellOptions): Promi
   return {
     ok: r.code === 0,
     code: r.code,
-    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars, opts.overflowFile).trim(), secs, timedOut),
   };
 }
 
 /** host 模式的 cwd：优先显式配置，否则用挂到 /work 的那条卷。 */
-function hostCwd(opts: SandboxShellOptions): string | undefined {
+function hostCwd(opts: ShellRunnerOptions): string | undefined {
   return opts.hostCwd ?? opts.volumes.find((v) => v.container === "/work")?.host ?? opts.workdir;
 }
 
 /** host 模式的环境变量：默认白名单，inheritEnv 才继承；再叠 opts.env。 */
-function hostEnv(opts: SandboxShellOptions, extra?: Record<string, string>): NodeJS.ProcessEnv {
+function hostEnv(opts: ShellRunnerOptions, extra?: Record<string, string>): NodeJS.ProcessEnv {
   return {
     ...(opts.hostInheritEnv
       ? process.env
@@ -212,7 +223,7 @@ function hostEnv(opts: SandboxShellOptions, extra?: Record<string, string>): Nod
  * 用 -c 而不是 -lc：登录 shell 会读 ~/.bash_profile，可能把我们刚过滤掉的环境变量又塞回来。
  * 只在配置 mode="host" 时走到这里，给本地开发省掉 docker 那一层。
  */
-export async function runOnHost(cmd: string, opts: SandboxShellOptions): Promise<SandboxShellResult> {
+export async function runOnHost(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
   const trimmed = checkCmd(cmd);
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
   const r = await run("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
@@ -220,11 +231,11 @@ export async function runOnHost(cmd: string, opts: SandboxShellOptions): Promise
   return {
     ok: r.code === 0 && !timedOut,
     code: r.code,
-    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars, opts.overflowFile).trim(), secs, timedOut),
   };
 }
 
-export interface SandboxArgvOptions extends SandboxShellOptions {
+export interface SandboxArgvOptions extends ShellRunnerOptions {
   /** host 模式下 argv[0] 的替代启动器，例如 [node, /path/rb.mjs]；argv 其余部分原样传给它 */
   hostPrefix?: string[];
   /** 只对本次执行注入的环境变量（docker exec -e / host env） */
@@ -235,7 +246,7 @@ export interface SandboxArgvOptions extends SandboxShellOptions {
  * 按 argv 直接执行（不过 shell）：模型拼不出 `; rm -rf`。
  * 用于沙盒里的 rb 客户端——docker 模式执行镜像里的 `rb`，host 模式执行仓库里的 docker/rb.mjs。
  */
-export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): Promise<SandboxShellResult> {
+export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): Promise<ShellRunnerResult> {
   if (!argv.length) throw new Error("argv 不能为空");
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
 
@@ -248,7 +259,7 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
     return {
       ok: r.code === 0 && !timedOut,
       code: r.code,
-      output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+      output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars, opts.overflowFile).trim(), secs, timedOut),
     };
   }
 
@@ -265,11 +276,11 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
   return {
     ok: r.code === 0,
     code: r.code,
-    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars).trim(), secs, timedOut),
+    output: timeoutMark(clip(`${r.out}${r.err}`, opts.maxOutputChars, opts.overflowFile).trim(), secs, timedOut),
   };
 }
 
 /** 按 mode 分发：docker（默认，隔离）或 host（无隔离，开发用）。 */
-export async function runShell(cmd: string, opts: SandboxShellOptions): Promise<SandboxShellResult> {
+export async function runShell(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
   return (opts.mode ?? "docker") === "host" ? runOnHost(cmd, opts) : runInDocker(cmd, opts);
 }

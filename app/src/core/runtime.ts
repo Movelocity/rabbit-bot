@@ -47,11 +47,11 @@ export const RUNTIME_SUBDIRS = ["prompt", "topics"] as const;
  */
 export function ensureHostSandboxLinks(cfg: Config): string[] {
   const made: string[] = [];
-  if (cfg.sandbox.shell.mode !== "host") return made;
+  if (cfg.exec.shell.mode !== "host") return made;
   for (const name of RUNTIME_SUBDIRS) {
     if (!runtimeHas(cfg, name)) continue;
     const target = runtimePath(cfg, name);
-    const link = path.join(path.resolve(cfg.sandbox.dir), name);
+    const link = path.join(path.resolve(cfg.exec.dir), name);
     try {
       const st = fs.lstatSync(link);
       if (st.isSymbolicLink()) {
