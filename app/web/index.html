@@ -63,15 +63,17 @@
           <div id="pool-list" class="pool-list"></div>
         </aside>
 
-        <section class="conversation">
+        <section class="conversation" aria-label="会话记录">
           <div class="conv-head">
+            <button id="back-to-pools" class="ghost small" type="button">会话列表</button>
             <div class="conv-title-wrap">
               <h2 id="conv-title">选择左侧会话</h2>
-              <div id="conv-meta" class="muted"></div>
+              <div id="conv-meta" class="conv-meta muted"></div>
             </div>
-            <span class="readonly-note">只读 · 收发消息请用飞书</span>
           </div>
-          <div id="messages" class="messages" aria-live="polite"></div>
+          <p id="chat-status" class="chat-status hidden" role="status"></p>
+          <div id="messages" class="messages" tabindex="0" aria-label="消息记录"></div>
+          <div class="conversation-foot"><span>只读 · 收发请用飞书</span><button id="jump-latest" class="ghost small" type="button">回到最新</button></div>
         </section>
       </section>
 

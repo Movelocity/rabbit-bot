@@ -14,6 +14,8 @@
     oldestSeq: null,
     tab: "chat",
     loadingMessages: false,
+    messageRequest: 0,
+    loadingOlder: false,
     pollTimer: null,
     memUser: "",
     personaLoaded: false,
@@ -35,7 +37,7 @@
   }
 
   function kindLabel(kind) {
-    return kind === "private" ? "私聊" : kind === "group" ? "群聊" : String(kind || "");
+    return kind === "private" ? "私聊" : kind === "group" ? "群聊" : kind === "task" ? "任务" : String(kind || "");
   }
 
   function formatTs(ms) {
@@ -181,7 +183,9 @@
 
   async function loadPools(silent) {
     const pools = await api("/v1/pools");
-    state.pools = Array.isArray(pools) ? pools : [];
+    const nextPools = Array.isArray(pools) ? pools : [];
+    const poolsChanged = JSON.stringify(nextPools) !== JSON.stringify(state.pools);
+    state.pools = nextPools;
     if (state.current && !state.pools.some((p) => p.alias === state.current)) {
       state.current = null;
       state.messages = [];
@@ -189,7 +193,7 @@
       state.oldestSeq = null;
       renderMessages();
     }
-    renderPools();
+    if (poolsChanged) renderPools();
     if (!state.current && state.pools.length) await selectPool(state.pools[0].alias);
     else if (state.current) updateConversationHeader();
     if (!silent) setHealth(true, "API 正常");
@@ -205,16 +209,24 @@
     for (const pool of state.pools) {
       const btn = el("button", "pool" + (pool.alias === state.current ? " active" : ""));
       btn.type = "button";
-      btn.addEventListener("click", () => void selectPool(pool.alias));
+      btn.setAttribute("aria-current", String(pool.alias === state.current));
+      btn.title = pool.title || pool.alias;
+      btn.addEventListener("click", () => {
+        $("#tab-chat").classList.add("reading");
+        if (state.current !== pool.alias) void selectPool(pool.alias);
+        else $("#messages").scrollTop = $("#messages").scrollHeight;
+      });
 
       const top = el("div", "pool-top");
-      top.appendChild(el("span", "pool-alias", pool.alias));
       top.appendChild(el("span", "pool-title", pool.title || "（无标题）"));
       top.appendChild(el("span", "chip", kindLabel(pool.kind)));
       btn.appendChild(top);
 
       const meta = el("div", "pool-meta");
-      meta.appendChild(el("span", "", pool.last_msg_local || "暂无消息"));
+      meta.appendChild(el("span", "pool-alias", pool.alias));
+      const time = el("span", "pool-time", pool.last_msg_local ? pool.last_msg_local.slice(5, 16) : "暂无消息");
+      time.title = pool.last_msg_local || "";
+      meta.appendChild(time);
       meta.appendChild(el("span", "", `${pool.total || 0} 条`));
       btn.appendChild(meta);
       list.appendChild(btn);
@@ -224,6 +236,10 @@
   async function selectPool(alias) {
     if (!alias) return;
     state.current = alias;
+    state.messageRequest++;
+    state.loadingMessages = false;
+    state.loadingOlder = false;
+    chatStatus("正在读取消息…");
     state.messages = [];
     state.total = 0;
     state.oldestSeq = null;
@@ -232,11 +248,12 @@
     if (memUser) memUser.value = "";
     renderPools();
     renderMessages();
+    updateConversationHeader();
     try {
       await loadLatestMessages(false);
     } catch (e) {
       const msg = friendlyError(e);
-      if (msg) setHealth(false, "读取消息失败");
+      if (msg && state.current === alias) chatStatus("读取失败，请点击刷新重试。", true);
     }
   }
 
@@ -248,9 +265,15 @@
       return;
     }
     $("#conv-title").textContent = pool.title || pool.alias;
-    const loaded = state.messages.length ? ` · 已加载 ${state.messages.length}` : "";
-    $("#conv-meta").textContent =
-      `${pool.alias} · ${kindLabel(pool.kind)} · ${state.total} 条消息${loaded}`;
+    $("#conv-meta").textContent = `${state.total} 条消息`;
+    $("#conv-title").title = `${pool.title || pool.alias} · ${pool.alias} · ${kindLabel(pool.kind)}`;
+  }
+
+  function chatStatus(text, error = false) {
+    const status = $("#chat-status");
+    status.textContent = text;
+    status.classList.toggle("hidden", !text);
+    status.classList.toggle("error", error);
   }
 
   function nearBottom(box) {
@@ -262,12 +285,14 @@
     const alias = state.current;
     const box = $("#messages");
     const stickToBottom = nearBottom(box);
+    const request = ++state.messageRequest;
     state.loadingMessages = true;
     try {
       const data = await api(
         `/v1/pools/${encodeURIComponent(alias)}/messages?limit=${silent ? 40 : 25}`,
       );
-      if (state.current !== alias) return;
+      if (state.current !== alias || request !== state.messageRequest) return;
+      chatStatus("");
       state.total = data.total || 0;
       if (data.oldest_seq !== null && data.oldest_seq !== undefined) state.oldestSeq = data.oldest_seq;
 
@@ -281,12 +306,15 @@
       updateConversationHeader();
       detectMemoryUser();
     } finally {
-      state.loadingMessages = false;
+      if (request === state.messageRequest) state.loadingMessages = false;
     }
   }
 
   async function loadOlderMessages() {
-    if (!state.current || !state.messages.length) return;
+    if (!state.current || !state.messages.length || state.loadingOlder) return;
+    state.loadingOlder = true;
+    const olderButton = $(".load-older");
+    if (olderButton) { olderButton.disabled = true; olderButton.textContent = "正在加载…"; }
     const alias = state.current;
     const before = state.messages[0].seq;
     try {
@@ -294,6 +322,7 @@
         `/v1/pools/${encodeURIComponent(alias)}/messages?limit=25&before_seq=${before}`,
       );
       if (state.current !== alias) return;
+      chatStatus("");
       state.total = data.total || state.total;
       if (data.oldest_seq !== null && data.oldest_seq !== undefined) state.oldestSeq = data.oldest_seq;
       const map = new Map(state.messages.map((m) => [m.seq, m]));
@@ -303,7 +332,10 @@
       updateConversationHeader();
     } catch (e) {
       const msg = friendlyError(e);
-      if (msg) setPanelStatus("#send-status", `加载更早失败：${msg}`, true);
+      if (msg && state.current === alias) chatStatus(`加载更早失败：${msg}`, true);
+    } finally {
+      if (state.current === alias) state.loadingOlder = false;
+      if (olderButton) { olderButton.disabled = false; olderButton.textContent = "加载更早的消息"; }
     }
   }
 
@@ -311,6 +343,10 @@
     const box = $("#messages");
     const prevHeight = box.scrollHeight;
     const prevTop = box.scrollTop;
+    const boxTop = box.getBoundingClientRect().top;
+    const anchor = $$(".msg", box).find((row) => row.getBoundingClientRect().bottom > boxTop);
+    const anchorSeq = anchor?.dataset.seq;
+    const anchorTop = anchor?.getBoundingClientRect().top;
     box.replaceChildren();
 
     if (!state.current) {
@@ -334,23 +370,39 @@
       return;
     }
 
+    let previous = null;
+    let previousDay = "";
     for (const m of state.messages) {
-      const row = el("div", "msg" + (m.from_self ? " self" : ""));
+      const stamp = m.local || formatTs(m.ts);
+      const day = stamp.split(/[ T]/)[0];
+      if (day && day !== previousDay) {
+        box.appendChild(el("div", "message-day", day));
+      }
+      const grouped = previous && day === previousDay &&
+        previous.from_self === m.from_self && previous.sender === m.sender &&
+        previous.user_id === m.user_id && Number(m.ts) - Number(previous.ts) >= 0 &&
+        Number(m.ts) - Number(previous.ts) < 5 * 60 * 1000;
+      const row = el("article", "msg" + (m.from_self ? " self" : "") + (grouped ? " continued" : ""));
+      row.dataset.seq = m.seq;
       const meta = el("div", "msg-meta");
-      meta.appendChild(el("span", "msg-sender", m.from_self ? `${m.sender || "机器人"}（机器人）` : (m.sender || "未知")));
-      meta.appendChild(el("span", "", m.local || formatTs(m.ts)));
-      meta.appendChild(el("span", "msg-seq", `#${m.seq}`));
+      meta.appendChild(el("span", "msg-sender", m.sender || (m.from_self ? "机器人" : "未知")));
+      if (m.from_self) meta.appendChild(el("span", "msg-role", "机器人"));
+      const time = el("span", "msg-time", stamp.match(/\d{2}:\d{2}/)?.[0] || stamp);
+      time.title = `${stamp} · 消息 #${m.seq}`;
+      meta.appendChild(time);
       row.appendChild(meta);
       row.appendChild(el("div", "msg-text", m.text || ""));
       box.appendChild(row);
+      previous = m;
+      previousDay = day;
     }
 
     if (opts.scrollBottom) {
       requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
-    } else if (opts.keepScroll) {
-      requestAnimationFrame(() => {
-        box.scrollTop = box.scrollHeight - prevHeight + prevTop;
-      });
+    } else {
+      const restored = $$(".msg", box).find((row) => row.dataset.seq === anchorSeq);
+      if (restored) box.scrollTop = prevTop + restored.getBoundingClientRect().top - anchorTop;
+      else box.scrollTop = opts.keepScroll ? box.scrollHeight - prevHeight + prevTop : prevTop;
     }
   }
 
@@ -827,8 +879,16 @@
       btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
 
+    $("#back-to-pools").addEventListener("click", () => {
+      $("#tab-chat").classList.remove("reading");
+      $(".pool.active")?.focus();
+    });
+    $("#jump-latest").addEventListener("click", () => {
+      const box = $("#messages");
+      box.scrollTop = box.scrollHeight;
+    });
     $("#reload-pools").addEventListener("click", () => {
-      void loadPools(false).catch((e) => {
+      void loadPools(false).then(() => loadLatestMessages(false)).catch((e) => {
         const msg = friendlyError(e);
         if (msg) setHealth(false, "刷新失败");
       });
