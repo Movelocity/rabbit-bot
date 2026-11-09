@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_pool ON messages(pool_id, seq);
 CREATE INDEX IF NOT EXISTS idx_messages_pool_ts ON messages(pool_id, ts);
 CREATE TABLE IF NOT EXISTS cursors (pool_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', alias TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS identities (
   platform TEXT NOT NULL, platform_user_id TEXT NOT NULL, user_id TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(platform, platform_user_id)
@@ -174,6 +174,8 @@ export class Store {
     ]) {
       try { this.db.exec(`ALTER TABLE usage_daily ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
+    // 用户别名（2026-11-09）：与飞书/通讯录自动名分开存，避免每条消息把人工别名冲掉
+    try { this.db.exec("ALTER TABLE users ADD COLUMN alias TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
     // 记忆时间维度（2026-11-03）：以前记忆是扁平快照，「想辞职」和「想升职」会一起活着
     for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
       try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
@@ -261,18 +263,18 @@ export class Store {
     tx();
     return user_id;
   }
-  /** 只读解析显示名：users 优先，其次 identities，最后空串。 */
+  /** 只读解析显示名：人工别名 > 最近一次自动名 > 平台身份名 > 空串。 */
   userDisplayName(platform: string, platformUserId: string): string {
     if (!platform || !platformUserId) return "";
-    const row = this.db.prepare(`SELECT u.display_name AS user_name, i.display_name AS identity_name
+    const row = this.db.prepare(`SELECT u.alias AS user_alias, u.display_name AS user_name, i.display_name AS identity_name
       FROM identities i LEFT JOIN users u ON u.user_id=i.user_id
       WHERE i.platform=? AND i.platform_user_id=?`).get(platform, platformUserId) as any;
     if (!row) return "";
-    return String(row.user_name ?? "").trim() || String(row.identity_name ?? "").trim();
+    return String(row.user_alias ?? "").trim() || String(row.user_name ?? "").trim() || String(row.identity_name ?? "").trim();
   }
   /** 用户 + 其绑定身份，给 API / 看板用。 */
-  listUsers(): { user_id: string; display_name: string; created_at: number; identities: { platform: string; platform_user_id: string; display_name: string }[] }[] {
-    const users = this.db.prepare("SELECT user_id,display_name,created_at FROM users ORDER BY created_at, user_id").all() as any[];
+  listUsers(): { user_id: string; display_name: string; alias: string; created_at: number; identities: { platform: string; platform_user_id: string; display_name: string }[] }[] {
+    const users = this.db.prepare("SELECT user_id,display_name,alias,created_at FROM users ORDER BY created_at, user_id").all() as any[];
     const idents = this.db.prepare("SELECT platform,platform_user_id,user_id,display_name FROM identities ORDER BY platform,platform_user_id").all() as any[];
     const byUser = new Map<string, { platform: string; platform_user_id: string; display_name: string }[]>();
     for (const i of idents) {
@@ -281,19 +283,19 @@ export class Store {
       byUser.set(i.user_id, list);
     }
     return users.map((u) => ({
-      user_id: u.user_id, display_name: u.display_name, created_at: u.created_at,
+      user_id: u.user_id, display_name: u.display_name, alias: u.alias, created_at: u.created_at,
       identities: byUser.get(u.user_id) ?? [],
     }));
   }
-  /** 手动改名：users 与全部 identities 同步；backfill 时连历史消息的 sender_name 一起改。 */
+  /** 手动设别名：写 alias（自动名以后还能继续更新）；backfill 时连历史消息的 sender_name 一起改。 */
   renameUser(userId: string, displayName: string, opts: { backfill?: boolean } = {}):
-    { user_id: string; display_name: string; identities: { platform: string; platform_user_id: string; display_name: string }[]; backfilled: number } | null {
+    { user_id: string; display_name: string; alias: string; identities: { platform: string; platform_user_id: string; display_name: string }[]; backfilled: number } | null {
     const name = String(displayName ?? "").trim();
     if (!userId || !name) return null;
     if (!this.db.prepare("SELECT 1 FROM users WHERE user_id=?").get(userId)) return null;
     let backfilled = 0;
     const tx = this.db.transaction(() => {
-      this.db.prepare("UPDATE users SET display_name=? WHERE user_id=?").run(name, userId);
+      this.db.prepare("UPDATE users SET alias=?, display_name=? WHERE user_id=?").run(name, name, userId);
       this.db.prepare("UPDATE identities SET display_name=? WHERE user_id=?").run(name, userId);
       if (opts.backfill) {
         backfilled = Number(this.db.prepare("UPDATE messages SET sender_name=? WHERE user_id=?").run(name, userId).changes);
@@ -303,7 +305,7 @@ export class Store {
     const identities = this.db.prepare(
       "SELECT platform,platform_user_id,display_name FROM identities WHERE user_id=? ORDER BY platform,platform_user_id",
     ).all(userId) as any[];
-    return { user_id: userId, display_name: name, identities, backfilled };
+    return { user_id: userId, display_name: name, alias: name, identities, backfilled };
   }
   /** 把某平台账号并入已有 user_id（跨平台续聊）。 */
   linkIdentity(platform: string, platformUserId: string, userId: string) {

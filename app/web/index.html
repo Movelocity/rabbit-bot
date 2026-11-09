@@ -49,6 +49,7 @@
       <button type="button" data-tab="workers">Worker</button>
       <button type="button" data-tab="plans">计划</button>
       <button type="button" data-tab="memories">记忆</button>
+      <button type="button" data-tab="users">用户</button>
       <button type="button" data-tab="persona">人格</button>
       <button type="button" data-tab="skills">技能</button>
     </nav>
@@ -173,6 +174,18 @@
         </div>
         <p id="mem-status" class="status"></p>
         <div id="mem-list" class="cards"></div>
+      </section>
+
+      <section id="tab-users" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>飞书用户别名</h2>
+            <p class="muted">按飞书 sender open_id 绑定；别名优先于通讯录名字，后续自动改名不会冲掉。</p>
+          </div>
+          <button id="reload-users" class="ghost" type="button">刷新</button>
+        </div>
+        <p id="users-status" class="status"></p>
+        <div id="users-list" class="cards"></div>
       </section>
 
       <section id="tab-persona" class="tab-panel">

@@ -547,6 +547,61 @@
     }
   }
 
+  // ---------- 用户别名 ----------
+
+  async function loadUsers() {
+    setPanelStatus("#users-status", "加载中…");
+    try {
+      const rows = await api("/v1/users");
+      renderUsers(Array.isArray(rows) ? rows : []);
+      setPanelStatus("#users-status", rows.length ? "" : "还没有识别到用户。");
+    } catch (e) {
+      setPanelStatus("#users-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
+    }
+  }
+
+  function renderUsers(rows) {
+    const list = $("#users-list");
+    list.replaceChildren();
+    for (const u of rows) {
+      const card = el("article", "card");
+      const head = el("div", "card-head");
+      head.appendChild(el("div", "card-title", u.alias || u.display_name || u.user_id));
+      head.appendChild(el("span", "badge", u.alias ? "有别名" : "自动名"));
+      card.appendChild(head);
+
+      const meta = el("div", "card-meta");
+      meta.appendChild(el("span", "", u.user_id));
+      for (const i of u.identities || []) {
+        meta.appendChild(el("span", "", `${i.platform}:${i.platform_user_id}`));
+      }
+      card.appendChild(meta);
+
+      const form = el("div", "alias-form");
+      const input = el("input");
+      input.type = "text";
+      input.value = u.alias || "";
+      input.placeholder = u.display_name || "给这个用户起个别名";
+      const save = el("button", "primary small", "保存别名");
+      save.addEventListener("click", async () => {
+        save.disabled = true;
+        try {
+          await api(`/v1/users/${encodeURIComponent(u.user_id)}`, {
+            method: "PATCH",
+            body: { alias: input.value, backfill: true },
+          });
+          await loadUsers();
+        } catch (e) {
+          save.disabled = false;
+          setPanelStatus("#users-status", `保存失败：${friendlyError(e) || "未登录"}`, true);
+        }
+      });
+      form.append(input, save);
+      card.appendChild(form);
+      list.appendChild(card);
+    }
+  }
+
   // ---------- 人格与提示词 ----------
 
   async function loadEditors(force) {
@@ -854,6 +909,8 @@
       void loadMemories();
     } else if (name === "persona") {
       void loadEditors();
+    } else if (name === "users") {
+      void loadUsers();
     } else if (name === "skills") {
       void loadSkills();
     }
@@ -895,6 +952,7 @@
     });
     $("#reload-plans").addEventListener("click", () => void loadPlans());
     $("#reload-memories").addEventListener("click", () => void loadMemories());
+    $("#reload-users").addEventListener("click", () => void loadUsers());
     $("#reload-persona").addEventListener("click", () => void loadEditors(true));
     $("#save-persona").addEventListener("click", () => void savePersona());
     $("#save-prompt").addEventListener("click", () => void saveSystemPrompt());

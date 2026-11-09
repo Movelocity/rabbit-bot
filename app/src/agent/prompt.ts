@@ -25,8 +25,9 @@ export function poolLabel(store: Store, p: Pool): string {
   return `${store.poolAlias(p.pool_id)} ${p.platform}${p.kind === "private" ? "私聊" : "群聊"}「${p.title || "-"}」`;
 }
 
-export function fmtMsg(m: StoredMessage, withSeq = true): string {
-  const who = m.from_self ? "我" : `${m.sender_name}(${m.user_id ?? m.sender_id})`;
+export function fmtMsg(store: Store, m: StoredMessage, withSeq = true): string {
+  const display = store.userDisplayName(m.platform, m.sender_id) || m.sender_name;
+  const who = m.from_self ? "我" : `${display}(${m.user_id ?? m.sender_id})`;
   // [主人] 是她判断"这句必须接"的依据：群聊里其他人的话可以不接，主人的不行
   const tag = `${m.is_mention_me ? "[@我]" : ""}${!m.from_self && isOwnerId(m.sender_id) ? "[主人]" : ""}`;
   return `${withSeq ? `#${m.seq} ` : ""}${fmtShort(m.ts)} ${who}${tag}: ${m.text}`;
@@ -40,7 +41,7 @@ export function fmtGrouped(store: Store, msgs: StoredMessage[]): string {
   for (const [pid, ms] of by) {
     const p = store.getPool(pid);
     out.push(`[${p ? poolLabel(store, p) : pid}]`);
-    for (const m of ms) out.push(fmtMsg(m));
+    for (const m of ms) out.push(fmtMsg(store, m));
   }
   return out.join("\n");
 }
@@ -67,7 +68,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   for (const [pid, ctx] of x.context) {
     if (!ctx.length) continue;
     const pool = store.getPool(pid)!;
-    blocks.push(`近期上下文 [${poolLabel(store, pool)}]：\n` + ctx.map((m) => fmtMsg(m, false)).join("\n"));
+    blocks.push(`近期上下文 [${poolLabel(store, pool)}]：\n` + ctx.map((m) => fmtMsg(store, m, false)).join("\n"));
   }
   for (const [pid, users] of x.memories) {
     for (const u of users) {

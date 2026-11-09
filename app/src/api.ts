@@ -199,14 +199,15 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
         case "users": {
           if (parts.length === 2 && method === "GET") return reply(200, d.store.listUsers());
           if (parts.length === 3 && method === "PATCH") {
-            const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
-            if (!displayName) throw new HttpError(400, "缺少 display_name");
+            const raw = typeof body.alias === "string" ? body.alias : body.display_name;
+            const displayName = typeof raw === "string" ? raw.trim() : "";
+            if (!displayName) throw new HttpError(400, "缺少 alias");
             const backfill = body.backfill === true || body.backfill === "1" || body.backfill === "true";
             const result = d.store.renameUser(decodeURIComponent(parts[2]), displayName, { backfill });
             if (!result) throw new HttpError(404, `用户不存在：${parts[2]}`);
             return reply(200, result);
           }
-          throw new HttpError(404, "用法：GET /v1/users、PATCH /v1/users/:user_id");
+          throw new HttpError(404, "用法：GET /v1/users、PATCH /v1/users/:user_id {alias}");
         }
         case "plans": {
           if (parts.length === 2 && method === "GET") return reply(200, listPlans(d.store, url.searchParams.get("status") ?? "pending"));

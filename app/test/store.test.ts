@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
 import { feishuContentToText } from "../src/adapters/feishu.ts";
 import { readPool, searchPool } from "../src/ops/pools.ts";
+import { fmtMsg } from "../src/agent/prompt.ts";
 import type { InboundMessage } from "../src/types.ts";
 
 let n = 0;
@@ -48,6 +49,28 @@ test("resolveUser 拿到新名字时同时更新 users 和 identities", () => {
   assert.equal(s.userDisplayName("feishu", "ou_h"), "贺伟康");
   s.db.prepare("UPDATE identities SET display_name='' WHERE platform='feishu' AND platform_user_id='ou_h'").run();
   assert.equal(s.userDisplayName("feishu", "ou_h"), "");
+});
+
+test("人工别名不会被后续自动名冲掉", () => {
+  const s = new Store(":memory:");
+  const u = s.resolveUser("feishu", "ou_h", "用户449b");
+  s.renameUser(u, "老大");
+  s.resolveUser("feishu", "ou_h", "贺伟康");
+  assert.equal(s.userDisplayName("feishu", "ou_h"), "老大");
+  const row = s.listUsers().find((x) => x.user_id === u)!;
+  assert.equal(row.alias, "老大");
+  assert.equal(row.display_name, "贺伟康");
+});
+
+test("唤醒上下文也用人工别名，不靠 @ 或平台原名", () => {
+  const s = new Store(":memory:");
+  const m = s.insertMessage(msg({ sender_id: "ou_alias", sender_name: "用户449b" }))!;
+  const u = s.resolveUser("feishu", "ou_alias", "贺伟康");
+  s.renameUser(u, "老大");
+  s.resolveUser("feishu", "ou_alias", "贺伟康改的名");
+  const line = fmtMsg(s, m);
+  assert.match(line, /老大/);
+  assert.doesNotMatch(line, /用户449b|贺伟康/);
 });
 
 test("池消息显示映射后的名字：旧消息也能补，sender_name 保留原名", () => {

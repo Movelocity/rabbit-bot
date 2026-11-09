@@ -116,6 +116,7 @@ test("用户：列表、手动改名、回填历史消息", async () => {
   });
   assert.equal(patched.status, 200, JSON.stringify(patched.body));
   assert.equal(patched.body.data.display_name, "王小明");
+  assert.equal(patched.body.data.alias, "王小明");
   assert.equal(patched.body.data.backfilled, 1);
 
   const after = await call("/v1/users");
@@ -133,6 +134,12 @@ test("用户：列表、手动改名、回填历史消息", async () => {
   assert.equal((await call("/v1/users/u_nope", {
     method: "PATCH", body: JSON.stringify({ display_name: "x" }),
   })).status, 404);
+
+  // 自动名后来变了，人工别名也不能被冲掉
+  store.resolveUser("feishu", "u1", "小王");
+  const kept = (await call("/v1/users")).body.data.find((u: any) => u.user_id === user.user_id);
+  assert.equal(kept.alias, "王小明");
+  assert.equal(kept.display_name, "小王");
 });
 
 test("计划：写、列、改状态", async () => {
