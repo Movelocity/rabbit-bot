@@ -111,7 +111,12 @@
       "image": "rabbit-bot-sandbox:latest",
       "timeoutMs": 10000,
       "maxOutputChars": 8000,
-      "safeProgs": ["bucket", "ark_image.py", "form_ratio.py", "form_ratio"],
+      "safeProgs": [
+        "bucket",
+        "ark_image.py",
+        "form_ratio.py",
+        "form_ratio"
+      ],
       "network": "bridge",
       "volumes": [
         {
@@ -120,7 +125,8 @@
           "mode": "rw"
         }
       ]
-    }
+    },
+    "sharedSkillsDir": ""
   },
   "tide": {
     "enabled": true,

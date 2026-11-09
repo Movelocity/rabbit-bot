@@ -201,9 +201,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, listSkills(d.cfg).map((s) => ({
               name: s.name,
               description: s.description,
-              skill: `skills/${s.name}/SKILL.md`,
-              data: `skills/${s.name}/data`,
+              skill: s.path,
+              data: s.readonly ? null : `skills/${s.name}/data`,
               has_data: s.hasData,
+              readonly: s.readonly,
             })));
           }
           throw new HttpError(404, "用法：GET /v1/skills");

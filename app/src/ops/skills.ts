@@ -5,16 +5,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.ts";
+import { externalSkillsDir } from "../core/runtime.ts";
 
 export interface SkillInfo {
   name: string;
   /** SKILL.md frontmatter 里的 description，一句话说明什么时候用 */
   description: string;
+  /** 沙盒内的相对路径，read_file 直接可用：skills/<name>/SKILL.md 或 shared-skills/<name>/SKILL.md */
+  path: string;
   /** 宿主绝对路径 */
   dir: string;
-  /** 宿主绝对路径（skills/<name>/data） */
+  /** 宿主绝对路径（skills/<name>/data）；外部技能库没有 data/，为空串 */
   dataDir: string;
   hasData: boolean;
+  /** 外部技能库（shared-skills）：只读，不补 data/ */
+  readonly: boolean;
 }
 
 const IGNORED = new Set(["node_modules", "data"]);
@@ -54,34 +59,56 @@ function readDescription(file: string): string {
 }
 
 /** 以 `_` / `.` 开头的目录不算技能（模板、临时目录）。 */
-export function listSkills(cfg: Config): SkillInfo[] {
-  const root = skillsRoot(cfg);
+function scanRoot(root: string, prefix: string, readonly: boolean): SkillInfo[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
   } catch {
     return [];
   }
-  return entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith("_") && !e.name.startsWith(".") && !IGNORED.has(e.name))
-    .filter((e) => fs.existsSync(path.join(root, e.name, "SKILL.md")))
-    .map((e) => {
-      const dir = path.join(root, e.name);
-      const dataDir = path.join(dir, "data");
-      return {
-        name: e.name,
-        description: readDescription(path.join(dir, "SKILL.md")),
-        dir, dataDir, hasData: fs.existsSync(dataDir),
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const out: SkillInfo[] = [];
+  for (const e of entries) {
+    if (e.name.startsWith("_") || e.name.startsWith(".") || IGNORED.has(e.name)) continue;
+    const dir = path.join(root, e.name);
+    // 符号链接也算：~/.agents/skills 里大半是指向别处的软链，
+    // 光看 dirent.isDirectory() 会把整库漏掉。
+    let st: fs.Stats;
+    try { st = fs.statSync(dir); } catch { continue; }
+    if (!st.isDirectory()) continue;
+    if (!fs.existsSync(path.join(dir, "SKILL.md"))) continue;
+    const dataDir = path.join(dir, "data");
+    out.push({
+      name: e.name,
+      description: readDescription(path.join(dir, "SKILL.md")),
+      path: `${prefix}/${e.name}/SKILL.md`,
+      dir,
+      dataDir: readonly ? "" : dataDir,
+      hasData: readonly ? true : fs.existsSync(dataDir),
+      readonly,
+    });
+  }
+  return out;
+}
+
+/**
+ * 技能来自两处：自己的 skills/（可写，进 git）和外部只读库（shared-skills/）。
+ * 重名时自己的那份优先——她要改就直接在工作区里放一份覆盖，不改别人的库。
+ */
+export function listSkills(cfg: Config): SkillInfo[] {
+  const own = scanRoot(skillsRoot(cfg), "skills", false);
+  const ext = externalSkillsDir(cfg);
+  const seen = new Set(own.map((s) => s.name));
+  const shared = ext ? scanRoot(ext, "shared-skills", true).filter((s) => !seen.has(s.name)) : [];
+  return [...own, ...shared].sort((a, b) =>
+    a.name === b.name ? Number(a.readonly) - Number(b.readonly) : a.name.localeCompare(b.name),
+  );
 }
 
 /** 每个技能自带 data/：空目录不进 git，所以启动时补上。返回新建的目录。 */
 export function ensureSkillDataDirs(cfg: Config): string[] {
   const created: string[] = [];
   for (const s of listSkills(cfg)) {
-    if (s.hasData) continue;
+    if (s.readonly || s.hasData) continue;
     fs.mkdirSync(s.dataDir, { recursive: true });
     created.push(s.dataDir);
   }

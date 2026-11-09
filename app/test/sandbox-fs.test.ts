@@ -60,3 +60,26 @@ test("读超长文件会截断", () => {
   assert.ok(got.startsWith("字".repeat(100)));
   assert.match(got, /已截断，共 300 字/);
 });
+
+test("可信根：登记过的软链落点能读，没登记的一律拒", () => {
+  // 共享技能库里技能是软链（~/.agents/skills/ego-browser → 别处的真身）。
+  // 只放开显式登记的目录，别的软链照样拒绝。
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-trust-"));
+  const root = path.join(base, "sandbox");
+  const lib = path.join(base, "lib");
+  const realSkill = path.join(base, "elsewhere", "skill");
+  const evilDir = path.join(base, "evil");
+  for (const d of [root, lib, realSkill, evilDir]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(realSkill, "SKILL.md"), "外面的真身");
+  fs.writeFileSync(path.join(evilDir, "secret.txt"), "不该读到");
+  fs.symlinkSync(realSkill, path.join(lib, "ok-skill"), "dir");
+  fs.symlinkSync(evilDir, path.join(lib, "bad-skill"), "dir");
+
+  const fsbox = createSandboxFs({
+    root, maxFileBytes: 4096, maxFiles: 10, maxReadChars: 200,
+    overlays: { "shared-skills": lib },
+    trustedRoots: [realSkill],
+  });
+  assert.equal(fsbox.read("shared-skills/ok-skill/SKILL.md"), "外面的真身");
+  assert.throws(() => fsbox.read("shared-skills/bad-skill/secret.txt"), SandboxPathError);
+});

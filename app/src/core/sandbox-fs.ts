@@ -15,6 +15,11 @@ export interface SandboxEntry {
 }
 
 export interface SandboxFsOptions {
+  /**
+   * 允许符号链接指向这些根（共享技能库里的技能常常是软链）。
+   * 默认空＝一律拒绝「链接指向沙盒外」，只有明确登记过的目录能穿过去。
+   */
+  trustedRoots?: string[];
   /** 根目录，绝对路径。不存在会创建。 */
   root: string;
   /** 单个文件上限（字节）。 */
@@ -43,6 +48,9 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
   const root = path.resolve(opts.root);
   fs.mkdirSync(root, { recursive: true });
   const realRoot = fs.realpathSync(root);
+  const trustedRoots = (opts.trustedRoots ?? []).map((p) => {
+    try { return fs.realpathSync(p); } catch { return ""; }
+  }).filter(Boolean);
   const maxReadChars = opts.maxReadChars ?? 8000;
 
   const inside = (abs: string): boolean => abs === realRoot || abs.startsWith(realRoot + path.sep);
@@ -60,11 +68,12 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
     if (ov && fs.existsSync(ov)) {
       const ovRoot = fs.realpathSync(ov);
       const insideOv = (a: string) => a === ovRoot || a.startsWith(ovRoot + path.sep);
+      const trusted = (a: string) => trustedRoots.some((r) => a === r || a.startsWith(r + path.sep));
       const absOv = path.resolve(ovRoot, norm.slice(seg.length + 1));
       if (!insideOv(absOv)) throw new SandboxPathError("跑到沙盒外面了");
       if (fs.existsSync(absOv)) {
         const real = fs.realpathSync(absOv);
-        if (!insideOv(real)) throw new SandboxPathError("符号链接指向沙盒外");
+        if (!insideOv(real) && !trusted(real)) throw new SandboxPathError("符号链接指向沙盒外");
         return real;
       }
       let q = path.dirname(absOv);

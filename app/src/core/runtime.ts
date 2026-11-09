@@ -8,6 +8,7 @@
  * 判断只看「文件在不在」，不读配置开关——多一个开关就多一种配置错误的可能。
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Config } from "../config.ts";
 
@@ -73,11 +74,47 @@ export function ensureHostSandboxLinks(cfg: Config): string[] {
   return made;
 }
 
+/**
+ * 外部技能库（例如 ~/.agents/skills）：别人写的技能，她只读。
+ *
+ * 为什么不直接 symlink 进 skills/：sandbox-fs 明确拒绝「符号链接指向沙盒外」，
+ * 挂了也读不到。走 overlay 才和 prompt/、topics/ 一样有边界（第一段命中就整条改根）。
+ */
+export function externalSkillsDir(cfg: Config): string | null {
+  const raw = cfg.exec.sharedSkillsDir?.trim();
+  if (!raw) return null;
+  const abs = raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(raw);
+  try { return fs.statSync(abs).isDirectory() ? abs : null; } catch { return null; }
+}
+
+/**
+ * 共享库里每个技能的真实落点。
+ *
+ * ~/.agents/skills 里大半是软链（ego-browser → 别处的真身）。沙盒默认拒绝
+ * 「链接指向沙盒外」，所以这里把每个技能跟一遍 realpath，登记成可信根——
+ * 只放开这几个目录，不是放开整个共享库外面。
+ */
+export function sharedSkillRoots(cfg: Config): string[] {
+  const dir = externalSkillsDir(cfg);
+  if (!dir) return [];
+  const out: string[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (name.startsWith(".") || name.startsWith("_")) continue;
+    try {
+      const real = fs.realpathSync(path.join(dir, name));
+      if (fs.statSync(real).isDirectory()) out.push(real);
+    } catch { /* 坏链接跳过 */ }
+  }
+  return out;
+}
+
 /** 有真身的那些子目录：{ 名字 → 绝对路径 } */
 export function runtimeOverlays(cfg: Config): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of RUNTIME_SUBDIRS) {
     if (runtimeHas(cfg, name)) out[name] = runtimePath(cfg, name);
   }
+  const ext = externalSkillsDir(cfg);
+  if (ext) out["shared-skills"] = ext;
   return out;
 }

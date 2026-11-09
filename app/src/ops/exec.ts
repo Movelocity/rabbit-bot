@@ -5,7 +5,7 @@ import { createSandboxFs } from "../core/sandbox-fs.ts";
 import { runShell, type SandboxArgvOptions } from "../core/shell-runner.ts";
 import { apiEnv, resolveApiToken } from "../api-token.ts";
 import { ensureSkillDataDirs } from "./skills.ts";
-import { runtimeOverlays } from "../core/runtime.ts";
+import { runtimeOverlays, sharedSkillRoots } from "../core/runtime.ts";
 
 function sbox(cfg: Config) {
   const sc = cfg.exec;
@@ -15,6 +15,7 @@ function sbox(cfg: Config) {
     maxFiles: sc.maxFiles,
     maxReadChars: sc.maxReadChars,
     overlays: runtimeOverlays(cfg),
+    trustedRoots: sharedSkillRoots(cfg),
   });
 }
 

@@ -379,7 +379,7 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md。"
+      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）。"
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，例如 topics/INDEX.md" }),

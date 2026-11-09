@@ -78,6 +78,8 @@ export interface Config {
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
   exec: {
     dir: string;
+    /** 外部只读技能库（宿主机路径或 ~）：作为 shared-skills/ 暴露给 read_file */
+    sharedSkillsDir?: string;
     maxFileBytes: number;
     maxFiles: number;
     maxReadChars: number;

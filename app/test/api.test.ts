@@ -15,7 +15,8 @@ const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
   api: { enabled: true, port: 0, host: "127.0.0.1" },
-  exec: { dir: path.join(dir, "sandbox") },
+  // 单测会合并线上 local.json，外部技能库要显式关掉，否则列的是本机真库
+  exec: { dir: path.join(dir, "sandbox"), sharedSkillsDir: "" },
 });
 const store = new Store(path.join(dir, "test.db"));
 const log = new Logger(null, true);
@@ -119,7 +120,7 @@ test("记忆：写、查；scope 按池类型推导", async () => {
 test("技能：列出设计文件和数据目录", async () => {
   const r = await call("/v1/skills");
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.data, [{ name: "demo", description: "", skill: "skills/demo/SKILL.md", data: "skills/demo/data", has_data: false }]);
+  assert.deepEqual(r.body.data, [{ name: "demo", description: "", skill: "skills/demo/SKILL.md", data: "skills/demo/data", has_data: false, readonly: false }]);
 });
 
 test("沙盒文件：写读、越界拒绝", async () => {
