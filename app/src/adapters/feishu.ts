@@ -31,6 +31,9 @@ export function imageKeyOf(msgType: string, content: string): string | null {
   return null;
 }
 
+/** 群成员列表缓存 10 分钟：新进群或改名不会立刻反映，但不会每条消息都打接口。 */
+const MEMBER_CACHE_TTL_MS = 10 * 60_000;
+
 const PLACEHOLDER: Record<string, [MediaType, string]> = {
   image: ["image", "[图片]"], audio: ["audio", "[语音]"], media: ["video", "[视频]"], file: ["file", "[文件]"],
   sticker: ["sticker", "[表情包]"], share_chat: ["other", "[群名片]"], share_user: ["other", "[个人名片]"],
@@ -81,6 +84,8 @@ export class FeishuAdapter implements IMAdapter {
   private ws: lark.WSClient | null = null;
   private botOpenId = "";
   private names = new Map<string, string>();
+  /** 群成员名字缓存：chat_id → { at, names }，10 分钟过期 */
+  private chatMemberNames = new Map<string, { at: number; names: Map<string, string> }>();
   private chatTitles = new Map<string, string>();
   private chatKinds = new Map<string, "private" | "group">();
   private sink: ((m: InboundMessage) => void) | null = null;
@@ -180,7 +185,7 @@ export class FeishuAdapter implements IMAdapter {
     this.chatKinds.set(msg.chat_id, kind);
     return {
       platform: "feishu", external_chat_id: msg.chat_id, pool_kind: kind, pool_title: await this.chatTitle(msg.chat_id, kind),
-      msg_id: msg.message_id, sender_id: senderOpenId, sender_name: await this.senderName(senderOpenId),
+      msg_id: msg.message_id, sender_id: senderOpenId, sender_name: await this.resolveSenderName(msg.chat_id, senderOpenId, kind),
       ts: Number(msg.create_time) || Date.now(), text, reply_to: msg.parent_id || null,
       mentions: mentions.map((m) => m.id).filter(Boolean),
       is_mention_me: !!this.botOpenId && mentions.some((m) => m.id === this.botOpenId),
@@ -234,9 +239,9 @@ export class FeishuAdapter implements IMAdapter {
     return {
       platform: "feishu", external_chat_id: chatId, pool_kind: kind, pool_title: await this.chatTitle(chatId, kind),
       msg_id: `reaction:${data.message_id}:${userId}:${key}:${data.action_time ?? Date.now()}`,
-      sender_id: userId, sender_name: await this.senderName(userId), ts: Number(data.action_time) || Date.now(),
+      sender_id: userId, sender_name: await this.resolveSenderName(chatId, userId, kind), ts: Number(data.action_time) || Date.now(),
       text: `[表情回复] 给${mine ? "你" : ""}「${quoted}」点了 ${emo}`, reply_to: data.message_id, mentions: [],
-      is_mention_me: false, media_type: "reaction", from_self: false,
+      is_mention_me: false, media_type: "reaction", from_self: false, reaction_key: key,
     };
   }
 
@@ -252,6 +257,55 @@ export class FeishuAdapter implements IMAdapter {
     }
     this.names.set(openId, name);
     return name;
+  }
+
+  /** 通讯录拿不到时的占位名：用户 + open_id 后 4 位。 */
+  private isPlaceholderName(name: string): boolean {
+    return /^用户[0-9A-Za-z_-]{1,8}$/.test(name);
+  }
+
+  /** 群聊里用群成员列表补名字；失败了不影响消息入池。 */
+  private async resolveSenderName(chatId: string, openId: string, kind: string): Promise<string> {
+    const name = await this.senderName(openId);
+    if (kind !== "group" || !this.isPlaceholderName(name)) return name;
+    const real = await this.memberName(chatId, openId);
+    if (!real) return name;
+    this.names.set(openId, real);
+    return real;
+  }
+
+  private async memberName(chatId: string, openId: string): Promise<string | null> {
+    const cached = this.chatMemberNames.get(chatId);
+    if (!cached || Date.now() - cached.at >= MEMBER_CACHE_TTL_MS) await this.loadGroupMembers(chatId);
+    return this.chatMemberNames.get(chatId)?.names.get(openId) ?? null;
+  }
+
+  private async loadGroupMembers(chatId: string): Promise<void> {
+    const names = new Map<string, string>();
+    let pageToken: string | undefined;
+    try {
+      for (let page = 0; page < 10; page++) {
+        const r: any = await this.client.im.v1.chatMembers.get({
+          path: { chat_id: chatId },
+          params: { member_id_type: "open_id", page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
+        });
+        if (typeof r?.code === "number" && r.code !== 0) throw new Error(`code=${r.code} msg=${r.msg}`);
+        for (const item of r?.data?.items ?? []) {
+          if (item?.member_id && item?.name) names.set(item.member_id, item.name);
+        }
+        if (!r?.data?.has_more || !r?.data?.page_token) break;
+        pageToken = r.data.page_token;
+      }
+      this.chatMemberNames.set(chatId, { at: Date.now(), names });
+      for (const [id, name] of names) {
+        const old = this.names.get(id);
+        if (!old || this.isPlaceholderName(old)) this.names.set(id, name);
+      }
+    } catch (e) {
+      // 失败也记时间，避免每条消息都去撞接口；10 分钟后再试
+      this.chatMemberNames.set(chatId, { at: Date.now(), names: this.chatMemberNames.get(chatId)?.names ?? new Map() });
+      this.log.warn(`feishu: 拉取群成员失败（消息照常入池，${chatId}）：${(e as Error).message}`);
+    }
   }
 
   private async chatTitle(chatId: string, kind: string): Promise<string> {

@@ -1,5 +1,5 @@
-export type Platform = "feishu" | "mock" | "matrix";
-export type PoolKind = "private" | "group";
+export type Platform = "feishu" | "mock" | "matrix" | "task";
+export type PoolKind = "private" | "group" | "task";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 
 /** 落到本地的一张图片（已压缩）。path 是绝对路径，喂模型时读成 base64。 */
@@ -30,6 +30,8 @@ export interface PoolMessage {
   from_self?: boolean;
   /** 表情回复指向的事件 id（只有 media_type="reaction" 时有值） */
   reaction_to?: string | null;
+  /** 表情原始 key（飞书 emoji_type / Matrix 的 key），审批只认 OK / No */
+  reaction_key?: string | null;
 }
 
 export interface StoredMessage extends PoolMessage {
@@ -52,7 +54,7 @@ export interface InboundMessage extends Omit<PoolMessage, "pool_id"> {
   pool_title?: string;
 }
 
-export type WakeType = "tick" | "message" | "plan";
+export type WakeType = "tick" | "message" | "plan" | "task-updated";
 export interface Wake {
   type: WakeType;
   pools: Set<string>; // 触发的池

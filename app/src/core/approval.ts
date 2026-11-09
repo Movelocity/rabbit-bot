@@ -3,13 +3,15 @@
  *
  * 三条硬规矩：
  *   1. 超时 = 拒绝（fail-closed），不是默认放行
- *   2. 审批消息**不进她的会话上下文**——那是系统在跟主人说话，不是聊天素材
- *   3. 一次只留一条待审，回「y 12」带序号也能对上，避免连点 y 批错东西
+ *   2. 只有贴在审批提示上的 OK / No 表情算数，聊天消息照常进她的会话
+ *   3. 一次只留一条待审，表情必须贴在对应那条提示上，避免批错
  */
 import fs from "node:fs";
 import path from "node:path";
 import type { InboundMessage } from "../types.ts";
 import type { Logger } from "./logger.ts";
+import type { Store } from "./db.ts";
+import { ApprovalConflictError, createApproval, decideApproval } from "./approvals.ts";
 
 export type Decision = "approved" | "rejected" | "timeout" | "disabled";
 
@@ -45,19 +47,28 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
   /** 这条审批提示本身的事件 id：只认贴在这条上的表情 */
   promptEventId?: string | null;
+  /** approvals 表里的行 id；落库失败时为空，退回纯内存审批 */
+  approvalRowId?: number;
 }
 
-const YES = /^(y|ye|yes|ok|好|好的|同意|批准|可以|行)\b/i;
-const NO = /^(n|no|不|不行|不要|拒绝|否)\b/i;
-
-/** 表情归一化：Matrix 的 key 常带 U+FE0F 变体选择符（"👍️" ≠ "👍"），先削掉。 */
-function normKey(k: string): string {
-  return k.replace(/[\uFE0F\uFE0E]/g, "").trim();
+/** 落库/唤醒依赖；不传就是原来的纯内存闸门（测试与未接线场景）。 */
+export interface ApprovalGateDeps {
+  store?: Store;
+  /** 新申请 / 拒绝后的 pending tick 唤醒 */
+  enqueue?: () => void;
+  /** 落库时的任务 id，默认 0（不挂具体任务） */
+  taskId?: number;
+  /** 落库时的 worker id，默认 "host" */
+  workerId?: string;
 }
 
-/** 点赞类 = 批准；点踩类 = 拒绝。故意只收这几种，别的表情一律不算默许。 */
-const REACT_YES = new Set(["👍", "👌", "✅", "✔", "🆗", "❤"]);
-const REACT_NO = new Set(["👎", "❌", "✖", "🚫", "🙅"]);
+/** 审批只认两个表情：OK = 允许，No = 拒绝。别的表情一律当聊天放行。 */
+function reactionDecision(key: string): Decision | null {
+  const k = key.replace(/[\uFE0F\uFE0E]/g, "").trim().toLowerCase();
+  if (k === "ok" || k === "👍") return "approved";
+  if (k === "no" || k === "👎") return "rejected";
+  return null;
+}
 
 export class ApprovalGate {
   private seq = 0;
@@ -74,6 +85,8 @@ export class ApprovalGate {
       text: string,
     ) => Promise<{ ok: boolean; error?: string; msgId?: string }>,
     private logFile?: string,
+    /** 落库与 pending tick；不给就是纯内存闸门 */
+    private deps: ApprovalGateDeps = {},
   ) {
     // 序号要从账本接着数：重启后重新从 #1 开始，「y 1」就会批到一条新命令上
     if (this.logFile) {
@@ -96,7 +109,7 @@ export class ApprovalGate {
     return { id: this.pending.id, cmd: this.pending.cmd, elapsedMs: Date.now() - this.pending.createdAt };
   }
 
-  async request(req: { cmd: string; cwd: string; why: string }): Promise<ApprovalResult> {
+  async request(req: { cmd: string; cwd: string; why: string; taskId?: number }): Promise<ApprovalResult> {
     if (!this.enabled) return { id: 0, decision: "disabled", latencyMs: 0 };
     const run = () => this.ask(req);
     const p = this.chain.then(run, run);
@@ -104,7 +117,7 @@ export class ApprovalGate {
     return p;
   }
 
-  private ask(req: { cmd: string; cwd: string; why: string }): Promise<ApprovalResult> {
+  private ask(req: { cmd: string; cwd: string; why: string; taskId?: number }): Promise<ApprovalResult> {
     const id = ++this.seq;
     const createdAt = Date.now();
     const timeoutMs = Math.max(500, this.cfg.timeoutMs || 600_000);
@@ -112,12 +125,30 @@ export class ApprovalGate {
     const text = [
       `【要动本机】#${id}（${req.why}）`,
       oneLine,
-      `同意回 y ${id} / 点赞 👍　拒绝回 n ${id} / 点踩 👎　（${Math.round(timeoutMs / 1000)} 秒内不回＝拒绝）`,
+      `同意贴 OK 表情 / 拒绝贴 No 表情（贴在 #${id} 这条消息上）　（${Math.round(timeoutMs / 1000)} 秒内不回＝拒绝）`,
     ].join("\n");
+
+    // 内存 Pending 同时落库：重启后 GET /v1/approvals 还能看到、还能裁决
+    let approvalRowId: number | undefined;
+    if (this.deps.store) {
+      try {
+        const a = createApproval(this.deps.store, {
+          taskId: req.taskId ?? this.deps.taskId ?? 0,
+          workerId: this.deps.workerId ?? "host",
+          action: `shell: ${oneLine}`,
+          detail: req.cwd,
+          why: req.why,
+          timeoutS: timeoutMs / 1000,
+        }, this.deps.enqueue);
+        approvalRowId = a.id;
+      } catch (e) {
+        this.log.warn(`审批 #${id} 落库失败（继续走内存审批）：${(e as Error).message}`);
+      }
+    }
 
     return new Promise<ApprovalResult>((resolve) => {
       const timer = setTimeout(() => this.settle(id, "timeout"), timeoutMs);
-      this.pending = { id, cmd: req.cmd, createdAt, why: req.why, resolve, timer };
+      this.pending = { id, cmd: req.cmd, createdAt, why: req.why, resolve, timer, approvalRowId };
 
       this.send(this.cfg.roomId, text).then((r) => {
         if (!r.ok) {
@@ -140,6 +171,21 @@ export class ApprovalGate {
     const latencyMs = Date.now() - p.createdAt;
     this.note({ ts: p.createdAt, id, cmd: p.cmd, why: p.why, decision, by: by ?? null, latencyMs });
     this.log.info(`审批 #${id} ${decision}${by ? ` by ${by}` : ""} ${latencyMs}ms：${p.cmd.replace(/\s+/g, " ").slice(0, 80)}`);
+
+    // 同一张表：审批房里的裁决也写 approvals；UFA 工具裁决走同一个 decideApproval。
+    // timeout 不在这里写——expires_at 和定时器同一时刻到，交给 sweepExpirations 收口。
+    if (this.deps.store && p.approvalRowId) {
+      if (decision === "approved" || decision === "rejected") {
+        try {
+          decideApproval(this.deps.store, p.approvalRowId, { decision, by: by ?? "system" }, this.deps.enqueue);
+        } catch (e) {
+          // 已经被 UFA 或 sweeper 裁决过了：内存里这条照常按本地结果返回，别改坏已经落定的状态
+          if (!(e instanceof ApprovalConflictError)) {
+            this.log.warn(`审批 #${id} 落库失败：${(e as Error).message}`);
+          }
+        }
+      }
+    }
 
     // 回一句状态到审批房：他刚点了按钮，得看到这一下有没有落上
     if (this.cfg.notify !== false) {
@@ -165,47 +211,23 @@ export class ApprovalGate {
   }
 
   /**
-   * 入站消息先过这里。返回 true = 这条被闸门吃掉了，不要入池、不要给她看。
-   * 审批房里的一切都不进她的上下文——包括没头没脑的「y」和闲聊。
+   * 入站消息先过这里。返回 true = 这条是贴在审批提示上的 OK / No 表情，已被吃掉。
+   * 没有待审批、贴错消息、别的表情、文字聊天，一律返回 false，消息照常入池。
    */
   tryHandle(m: InboundMessage): boolean {
+    if (!this.enabled) return false;
     if (!this.cfg?.roomId || m.external_chat_id !== this.cfg.roomId) return false;
-    // 自己发的、以及审批房里的所有消息，一律吞掉
-    if (m.from_self) return true;
-
-    const who = m.sender_id;
-    if (!(this.cfg.ownerIds ?? []).includes(who)) {
-      this.log.warn(`审批房里有非主人的消息，忽略：${who}`);
-      return true;
-    }
     const p = this.pending;
-    if (!p) return true;
+    if (!p) return false;
+    if (m.from_self) return false;
+    if (!(this.cfg.ownerIds ?? []).includes(m.sender_id)) return false;
+    if (m.media_type !== "reaction") return false;
 
-    // 表情审批：点赞 = 批准，点踩 = 拒绝。只认贴在提示本身上的、
-    // 且归一化后命中白名单的表情，别的表情视为「看见了但没表态」，吞掉不裁决。
-    if (m.media_type === "reaction") {
-      const key = normKey(m.text ?? "");
-      const onPrompt = !p.promptEventId || !m.reaction_to || m.reaction_to === p.promptEventId;
-      if (!onPrompt) {
-        this.log.info(`审批 #${p.id}：表情贴在别的消息上（${m.reaction_to}），忽略`);
-        return true;
-      }
-      if (REACT_YES.has(key)) { this.settle(p.id, "approved", who); return true; }
-      if (REACT_NO.has(key)) { this.settle(p.id, "rejected", who); return true; }
-      this.log.info(`审批 #${p.id}：收到表情「${key}」，不在批准/拒绝名单里，忽略`);
-      return true;
-    }
-
-    const text = (m.text ?? "").trim();
-    // 带序号就核对序号，防止「y」批到上一条
-    const num = text.match(/\b(\d{1,6})\b/)?.[1];
-    if (num && Number(num) !== p.id) {
-      this.log.info(`审批 #${p.id}：收到针对 #${num} 的回复，忽略`);
-      return true;
-    }
-    if (YES.test(text)) { this.settle(p.id, "approved", who); return true; }
-    if (NO.test(text)) { this.settle(p.id, "rejected", who); return true; }
-    // 说了别的：当聊天，吞掉但不裁决
+    const decision = reactionDecision(m.reaction_key ?? "");
+    if (!decision) return false;
+    const onPrompt = !p.promptEventId || !m.reaction_to || m.reaction_to === p.promptEventId;
+    if (!onPrompt) return false;
+    this.settle(p.id, decision, m.sender_id);
     return true;
   }
 

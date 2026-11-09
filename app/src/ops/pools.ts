@@ -15,6 +15,11 @@ export function listPools(store: Store) {
   }));
 }
 
+/** 池消息对外展示的发送者：优先身份映射里的名字，映射不到才用入池时的原名。 */
+function senderOf(store: Store, m: { platform: string; sender_id: string; sender_name: string }): string {
+  return store.userDisplayName(m.platform, m.sender_id) || m.sender_name;
+}
+
 export interface ReadPoolOptions {
   limit?: number;
   /** 从这个 seq 之前开始读（不含），用于翻页 */
@@ -36,7 +41,10 @@ export function readPool(store: Store, ref: string | undefined, opts: ReadPoolOp
       ts: m.ts,
       local: fmtLocal(m.ts),
       from_self: !!m.from_self,
-      sender: m.sender_name,
+      sender: senderOf(store, m),
+      sender_name: m.sender_name,
+      sender_id: m.sender_id,
+      user_id: m.user_id,
       text: m.text,
     })),
   };
@@ -67,7 +75,8 @@ export function searchPool(
       seq: m.seq,
       local: fmtLocal(m.ts),
       from_self: !!m.from_self,
-      sender: m.sender_name,
+      sender: senderOf(store, m),
+      sender_name: m.sender_name,
       text: m.text,
     })),
   };

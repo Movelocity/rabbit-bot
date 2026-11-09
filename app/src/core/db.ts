@@ -72,6 +72,64 @@ CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, creat
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, cache_miss INTEGER NOT NULL DEFAULT 0, out_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tasks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       TEXT    NOT NULL,
+  pool_id       TEXT    NOT NULL,
+  task_pool_id  TEXT    NOT NULL DEFAULT '',
+  name          TEXT    NOT NULL DEFAULT '',
+  goal          TEXT    NOT NULL,
+  deliverable   TEXT    NOT NULL DEFAULT '',
+  constraints   TEXT    NOT NULL DEFAULT '',
+  acceptance    TEXT    NOT NULL DEFAULT '',
+  files         TEXT    NOT NULL DEFAULT '[]',
+  status        TEXT    NOT NULL DEFAULT 'pending',
+  stage         TEXT    NOT NULL DEFAULT '',
+  worker_id     TEXT,
+  claimed_at    INTEGER,
+  lease_until   INTEGER,
+  attempt       INTEGER NOT NULL DEFAULT 0,
+  note          TEXT    NOT NULL DEFAULT '',
+  result        TEXT    NOT NULL DEFAULT '',
+  artifact      TEXT    NOT NULL DEFAULT '',
+  start_at      INTEGER NOT NULL,
+  end_at        INTEGER,
+  -- 任务执行方式（2026-11-09）：每个任务一个一次性进程，不再常驻 worker 轮询
+  work_dir          TEXT    NOT NULL DEFAULT '',
+  executor          TEXT    NOT NULL DEFAULT 'opencode',
+  model             TEXT    NOT NULL DEFAULT '',
+  session_id        TEXT    NOT NULL DEFAULT '',
+  runner_pid        INTEGER,
+  runner_started_at INTEGER,
+  doc_path          TEXT    NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_start ON tasks(start_at);
+CREATE TABLE IF NOT EXISTS workers (
+  worker_id      TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  kind           TEXT NOT NULL DEFAULT 'wa',
+  status         TEXT NOT NULL DEFAULT 'online',
+  registered_at  INTEGER NOT NULL,
+  last_seen_at   INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS approvals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL,
+  worker_id   TEXT NOT NULL DEFAULT '',
+  action      TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '',
+  why         TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'pending',
+  decided_by  TEXT,
+  decided_at  INTEGER,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 `;
 
 function rowToMsg(r: any): StoredMessage {
@@ -120,6 +178,28 @@ export class Store {
     for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
       try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
+    // 任务面板（UFA-WA P0）：老库若已有 tasks 但没有 stage，补一列；失败不影响启动
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN stage TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+    // 短任务名（2026-11-09）：任务池标题用；老任务为空，展示时回退成 #任务<id>
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN name TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+    // worker 领任务（UFA-WA P1）：租约、归属、重试次数；新库已在 SCHEMA 里
+    for (const col of ["worker_id TEXT", "claimed_at INTEGER", "lease_until INTEGER", "attempt INTEGER NOT NULL DEFAULT 0"]) {
+      try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
+    // 任务池（UFA-WA P4）：每条任务对应一个 platform=task 的聊天池；老库补列
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN task_pool_id TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+    // 一次性进程派发（2026-11-09）：工作目录、执行器、会话、runner 进程、任务文档；老库补列
+    for (const col of [
+      "work_dir TEXT NOT NULL DEFAULT ''",
+      "executor TEXT NOT NULL DEFAULT 'opencode'",
+      "model TEXT NOT NULL DEFAULT ''",
+      "session_id TEXT NOT NULL DEFAULT ''",
+      "runner_pid INTEGER",
+      "runner_started_at INTEGER",
+      "doc_path TEXT NOT NULL DEFAULT ''",
+    ]) {
+      try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
   }
   close() { this.db.close(); }
 
@@ -164,7 +244,13 @@ export class Store {
   resolveUser(platform: string, platformUserId: string, displayName = ""): string {
     const row = this.db.prepare("SELECT user_id FROM identities WHERE platform=? AND platform_user_id=?").get(platform, platformUserId) as any;
     if (row) {
-      if (displayName) this.db.prepare("UPDATE identities SET display_name=? WHERE platform=? AND platform_user_id=?").run(displayName, platform, platformUserId);
+      if (displayName) {
+        const tx = this.db.transaction(() => {
+          this.db.prepare("UPDATE identities SET display_name=? WHERE platform=? AND platform_user_id=?").run(displayName, platform, platformUserId);
+          this.db.prepare("UPDATE users SET display_name=? WHERE user_id=?").run(displayName, row.user_id);
+        });
+        tx();
+      }
       return row.user_id;
     }
     const user_id = "u_" + crypto.randomUUID().slice(0, 8);
@@ -174,6 +260,50 @@ export class Store {
     });
     tx();
     return user_id;
+  }
+  /** 只读解析显示名：users 优先，其次 identities，最后空串。 */
+  userDisplayName(platform: string, platformUserId: string): string {
+    if (!platform || !platformUserId) return "";
+    const row = this.db.prepare(`SELECT u.display_name AS user_name, i.display_name AS identity_name
+      FROM identities i LEFT JOIN users u ON u.user_id=i.user_id
+      WHERE i.platform=? AND i.platform_user_id=?`).get(platform, platformUserId) as any;
+    if (!row) return "";
+    return String(row.user_name ?? "").trim() || String(row.identity_name ?? "").trim();
+  }
+  /** 用户 + 其绑定身份，给 API / 看板用。 */
+  listUsers(): { user_id: string; display_name: string; created_at: number; identities: { platform: string; platform_user_id: string; display_name: string }[] }[] {
+    const users = this.db.prepare("SELECT user_id,display_name,created_at FROM users ORDER BY created_at, user_id").all() as any[];
+    const idents = this.db.prepare("SELECT platform,platform_user_id,user_id,display_name FROM identities ORDER BY platform,platform_user_id").all() as any[];
+    const byUser = new Map<string, { platform: string; platform_user_id: string; display_name: string }[]>();
+    for (const i of idents) {
+      const list = byUser.get(i.user_id) ?? [];
+      list.push({ platform: i.platform, platform_user_id: i.platform_user_id, display_name: i.display_name });
+      byUser.set(i.user_id, list);
+    }
+    return users.map((u) => ({
+      user_id: u.user_id, display_name: u.display_name, created_at: u.created_at,
+      identities: byUser.get(u.user_id) ?? [],
+    }));
+  }
+  /** 手动改名：users 与全部 identities 同步；backfill 时连历史消息的 sender_name 一起改。 */
+  renameUser(userId: string, displayName: string, opts: { backfill?: boolean } = {}):
+    { user_id: string; display_name: string; identities: { platform: string; platform_user_id: string; display_name: string }[]; backfilled: number } | null {
+    const name = String(displayName ?? "").trim();
+    if (!userId || !name) return null;
+    if (!this.db.prepare("SELECT 1 FROM users WHERE user_id=?").get(userId)) return null;
+    let backfilled = 0;
+    const tx = this.db.transaction(() => {
+      this.db.prepare("UPDATE users SET display_name=? WHERE user_id=?").run(name, userId);
+      this.db.prepare("UPDATE identities SET display_name=? WHERE user_id=?").run(name, userId);
+      if (opts.backfill) {
+        backfilled = Number(this.db.prepare("UPDATE messages SET sender_name=? WHERE user_id=?").run(name, userId).changes);
+      }
+    });
+    tx();
+    const identities = this.db.prepare(
+      "SELECT platform,platform_user_id,display_name FROM identities WHERE user_id=? ORDER BY platform,platform_user_id",
+    ).all(userId) as any[];
+    return { user_id: userId, display_name: name, identities, backfilled };
   }
   /** 把某平台账号并入已有 user_id（跨平台续聊）。 */
   linkIdentity(platform: string, platformUserId: string, userId: string) {

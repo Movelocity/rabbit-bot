@@ -30,7 +30,7 @@ function setup(decision: "approved" | "rejected" | "timeout" | "disabled", opts:
     reportDone: (id: number, info: { ok: boolean; code: number }) => { reported.push({ id, ...info }); },
   };
   const tools = createTools({
-    store, hub: {} as any, cfg, now: () => Date.now(),
+    store, hub: {} as any, cfg, now: () => Date.now(), profile: "wa",
     ...(opts.hasGate === false ? {} : { approval: gate as any }),
   }) as any[];
   const terminal = tools.find((t) => t.name === "terminal")!;

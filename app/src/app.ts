@@ -8,7 +8,9 @@ import { Logger } from "./core/logger.ts";
 import { PlanEngine } from "./core/plans.ts";
 import { evaluateGate } from "./core/gate.ts";
 import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
-import { RunQueue } from "./core/queue.ts";
+import { RunQueue, makeWake } from "./core/queue.ts";
+import { listTasksUpdatedSince, takePendingTick } from "./core/tasks.ts";
+import { sweepExpirations } from "./core/approvals.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey } from "./core/time.ts";
@@ -89,16 +91,20 @@ export class App {
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "rabbit-bot.db"));
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
+    this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
+    this.queue = new RunQueue((w) => this.handleWake(w));
+    this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
     this.approval = new ApprovalGate(
       cfg.approval,
       this.log,
       (chatId, text) => this.hub.sendSystem(cfg.approval.platform, chatId, text),
       path.join(cfg.dataDir, "approval.jsonl"),
+      {
+        store: this.store,
+        enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
+      },
     );
     this.hub.approval = this.approval;
-    this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
-    this.queue = new RunQueue((w) => this.handleWake(w));
-    this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
@@ -114,6 +120,7 @@ export class App {
       primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
       rbExec: o.rbExec,
       approval: this.approval,
+      enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
     });
     this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
@@ -122,12 +129,14 @@ export class App {
     await this.hub.startAdapters();
     this.scheduler.start();
     this.startReflectionLoop();
+    this.startApprovalSweep();
     this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
   }
 
   async stop() {
     this.scheduler.stop();
     if (this.reflectionTimer) { clearInterval(this.reflectionTimer as any); this.reflectionTimer = null; }
+    if (this.approvalSweepTimer) { clearInterval(this.approvalSweepTimer as any); this.approvalSweepTimer = null; }
     await this.queue.idle();
     await this.hub.stopAdapters();
     await this.engine.dispose();
@@ -212,6 +221,28 @@ export class App {
     const last = this.store.lastProactiveLog(e.pool_id);
     if (last && last.reason === e.reason && e.ts - last.ts < 30 * 60e3) return;
     this.store.logProactive(e);
+  }
+
+  // ---------- 审批超时 ----------
+
+  private approvalSweepTimer: unknown = null;
+
+  /** 10–30s 扫一次：过期的 pending 落成 timeout（拒绝），并合并成一次 task-updated。 */
+  private startApprovalSweep(): void {
+    const t = setInterval(() => this.sweepApprovals(), 15_000);
+    (t as any).unref?.();
+    this.approvalSweepTimer = t;
+  }
+
+  private sweepApprovals(): void {
+    try {
+      const n = sweepExpirations(this.store, this.clock.now(), () => {
+        this.queue.enqueue(makeWake("task-updated", [], "approval timeout"));
+      });
+      if (n > 0) this.log.info(`审批超时 ${n} 条，已按拒绝处理`);
+    } catch (e) {
+      this.log.warn(`审批超时清扫失败：${(e as Error).message}`);
+    }
   }
 
   // ---------- 自省 ----------
@@ -450,6 +481,23 @@ export class App {
       this.log.info(`唤醒 ${w.type} → ${outcome}${extra.sent ? ` 发送${(extra.sent as unknown[]).length}条` : ""}`);
       this.onWakeDone?.(entry);
     };
+
+    // pending tick：一次消费掉游标之后的所有完成/失败/阻塞任务。
+    // 先取后处理——期间新完成的任务会重新置位并排下一轮，不会丢。
+    if (w.type === "task-updated") {
+      const setAt = takePendingTick(this.store);
+      if (setAt === null) return finish("skipped:no-task-tick");
+      const tasks = listTasksUpdatedSince(this.store, setAt, ["done", "failed", "blocked"]);
+      // TODO(UFA runner)：拿到 tasks 后交给人格/回复链路，一轮把多条完成情况转述给用户。
+      // 现在还没有 runner，只落唤醒日志，不假装已经转述。
+      this.log.info(`task-updated：游标 ${setAt}，命中 ${tasks.length} 条任务`);
+      return finish("task-updated:recorded", {
+        taskTickAt: setAt,
+        tasks: tasks.map((t) => ({ id: t.id, status: t.status, goal: t.goal, result: t.result, artifact: t.artifact })),
+        relayed: false,
+        paused: this.store.isPaused(),
+      });
+    }
 
     if (this.store.isPaused()) return finish("skipped:paused");
     const day = dayKey(t0, cfg.timezone);

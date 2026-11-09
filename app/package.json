@@ -14,6 +14,7 @@
     "start:dev": "tsx src/main.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "web": "tsx scripts/web-dev.ts",
     "idle": "node scripts/idle.mjs"
   },
   "keywords": [],

@@ -16,9 +16,23 @@ import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
 import type { ApprovalGate } from "../core/approval.ts";
+import {
+  APPROVAL_STATUSES, decideApproval, getApproval, isApprovalStatus, listApprovals,
+} from "../core/approvals.ts";
 import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
 import { listPools, readPool, searchPool } from "../ops/pools.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
+import {
+  TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
+} from "../core/tasks.ts";
+import { listWorkers } from "../core/workers.ts";
+import { listTaskEvents } from "../core/task-events.ts";
+import {
+  DEFAULT_CAPTURE_MS, isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc,
+  type DispatchDeps,
+} from "../core/dispatch.ts";
+import { resolveApiToken } from "../api-token.ts";
+import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
 
@@ -38,6 +52,22 @@ export interface ToolDeps {
   primaryPool?: () => string | null;
   /** 宿主机命令审批闸门（只在 exec.shell.mode=host 时被用到） */
   approval?: ApprovalGate;
+  /** 审批裁决后置位 pending tick 时喊一声（UFA 工具用） */
+  enqueue?: () => void;
+  /** 工具集归属：WA 不给 approval 工具（审批只看不批的是 UFA） */
+  profile?: "ufa" | "wa";
+  /** 任务派发依赖（测试注入假执行器）；默认从 cfg.api + data/run/api.token 组出来 */
+  dispatch?: DispatchDeps;
+}
+
+/** UFA 进程和回环 API 同机：默认走 127.0.0.1，token 取 data/run/api.token。 */
+function defaultDispatchDeps(cfg: Config): DispatchDeps {
+  return {
+    apiBase: `http://127.0.0.1:${cfg.api?.port ?? 3738}`,
+    token: resolveApiToken(cfg),
+    dataDir: cfg.dataDir,
+    captureMs: DEFAULT_CAPTURE_MS,
+  };
 }
 
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
@@ -369,6 +399,311 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
+   * 审批：worker 的权限申请会落 approvals 表，UFA 在对话里查看并裁决。
+   * Web 只读，不提供裁决入口；WA 不给这个工具（自己不能批自己）。
+   */
+  const APPROVAL_HELP = [
+    "approval 的用法（action 必填）：",
+    "  list    status? task_id? limit?    看权限申请，默认全部；看板/对话都用它",
+    "  get     id                         看一条的完整内容（worker 2s 轮询同一个 id）",
+    "  decide  id decision by             裁决：decision=approved|rejected，by 写裁决人",
+    "  help                               看这份说明",
+    "",
+    "超时按拒绝处理；只有 pending 能裁决，重复裁决会报 409。",
+  ].join("\n");
+
+  const approval = defineTool({
+    name: "approval",
+    label: "approval",
+    executionMode: "sequential",
+    description:
+      "查看和裁决 worker 的权限申请。action 决定做什么：list（看申请，可按 status/task_id/limit 筛）/ "
+      + "get（看一条）/ decide（批准 approved 或拒绝 rejected，要写 by）/ help。"
+      + "worker 要动宿主机或越权的操作会落在这里等你表态；超时算拒绝。",
+    parameters: Type.Object({
+      action: Type.String({ description: "list / get / decide / help" }),
+      id: Type.Optional(Type.Number({ description: "get、decide 用：审批 id" })),
+      status: Type.Optional(Type.String({ description: `list 用：${APPROVAL_STATUSES.join(" / ")}` })),
+      task_id: Type.Optional(Type.Number({ description: "list 用：只看某条任务的申请" })),
+      limit: Type.Optional(Type.Number({ description: "list 用：条数" })),
+      decision: Type.Optional(Type.String({ description: "decide 用：approved / rejected" })),
+      by: Type.Optional(Type.String({ description: "decide 用：谁批的（用户 id）" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        switch (action) {
+          case "help":
+            return txt(APPROVAL_HELP, { ok: true });
+          case "list": {
+            if (p.status !== undefined && !isApprovalStatus(p.status)) {
+              return txt(`status 只能是 ${APPROVAL_STATUSES.join(" / ")}。\n${APPROVAL_HELP}`, { ok: false });
+            }
+            const list = listApprovals(d.store, {
+              status: p.status as any,
+              taskId: p.task_id,
+              limit: p.limit,
+            });
+            return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length });
+          }
+          case "get": {
+            if (p.id === undefined) return txt("get 要 id。", { ok: false });
+            const a = getApproval(d.store, p.id);
+            if (!a) return txt(`没有审批 #${p.id}`, { ok: false });
+            return txt(JSON.stringify(a, null, 2), { ok: true, approval: a });
+          }
+          case "decide": {
+            if (p.id === undefined) return txt("decide 要 id。", { ok: false });
+            if (p.decision !== "approved" && p.decision !== "rejected") {
+              return txt('decision 只能是 "approved" 或 "rejected"。', { ok: false });
+            }
+            if (!p.by?.trim()) return txt("decide 要 by（谁批的）。", { ok: false });
+            const a = decideApproval(d.store, p.id, { decision: p.decision, by: p.by }, d.enqueue);
+            return txt(JSON.stringify(a, null, 2), { ok: true, approval: a });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${APPROVAL_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  const TASK_HELP = [
+    "task 的用法（action 必填）：",
+    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at? dispatch?  建任务（默认立刻起一次性进程）",
+    "  list    status? limit?                                              看任务",
+    "  get     id                                                          看一条（带最近 3 条事件）",
+    "  updates id limit?                                                   看任务池最近事件（带时间戳）",
+    "  resume  id                                                          用同一 session id 恢复执行",
+    "  note    id line                                                     追加说明",
+    "  cancel  id                                                          取消（会先杀在跑的进程）",
+    "  status  id status result? artifact?                                 改状态/回填结果",
+    "  help                                                                看这份说明",
+    "",
+    "create 的 name 必填，格式 #xxx（一眼认得出这是什么任务）；没带 # 会自动补上。",
+    "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
+    "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
+    "",
+    `status 只能是：${TASK_STATUSES.join(" / ")}`,
+  ].join("\n");
+
+  const parseStartAt = (v: unknown): number | undefined | null => {
+    if (v === undefined || v === null || v === "") return undefined;
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    const s = String(v).trim();
+    if (!s) return undefined;
+    if (/^\d+$/.test(s)) return Number(s);
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  const task = defineTool({
+    name: "task",
+    label: "task",
+    executionMode: "sequential",
+    description:
+      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / start_at；默认 dispatch 起一次性进程）/ "
+      + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
+      + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
+      + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
+      + "任务按工作目录起一次性进程，不常驻 worker；任务卡住或要权限时，把情况转述给用户。",
+    parameters: Type.Object({
+      action: Type.String({ description: "create / list / get / updates / resume / note / cancel / status / help" }),
+      id: Type.Optional(Type.Number({ description: "get、updates、resume、note、cancel、status 用：任务 id" })),
+      name: Type.Optional(Type.String({ description: "create 用：短任务名，格式 #xxx，必填；一眼认得出这是什么任务" })),
+      work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
+      executor: Type.Optional(Type.String({ description: "create 用：opencode（默认）或 mimo" })),
+      model: Type.Optional(Type.String({ description: "create 用：执行器模型，留空用执行器默认" })),
+      dispatch: Type.Optional(Type.Boolean({ description: "create 用：是否建完立刻启动一次性进程，默认 true" })),
+      goal: Type.Optional(Type.String({ description: "create 用：一句话说清要达成什么" })),
+      deliverable: Type.Optional(Type.String({ description: "create 用：交付物长什么样" })),
+      constraints: Type.Optional(Type.String({ description: "create 用：不能碰什么、必须遵守什么" })),
+      acceptance: Type.Optional(Type.String({ description: "create 用：怎么算完成" })),
+      files: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "create 用：相关文件路径" })),
+      start_at: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "create 用：ISO 时间或毫秒时间戳，默认现在" })),
+      status: Type.Optional(Type.String({ description: `list、status 用：${TASK_STATUSES.join(" / ")}` })),
+      limit: Type.Optional(Type.Number({ description: "list 用：最多几条" })),
+      line: Type.Optional(Type.String({ description: "note 用：追加的一行说明" })),
+      result: Type.Optional(Type.String({ description: "status 用：结果" })),
+      artifact: Type.Optional(Type.String({ description: "status 用：产出物路径或链接" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        switch (action) {
+          case "help":
+            return txt(TASK_HELP, { ok: true });
+
+          case "create": {
+            if (!p.name?.trim()) return txt("需要短任务名，格式 #xxx", { ok: false });
+            if (!p.goal?.trim()) return txt("create 要 goal：一句话说清要达成什么。", { ok: false });
+            const workDir = String(p.work_dir ?? "").trim();
+            if (!workDir) return txt("create 要 work_dir：任务的绝对工作目录。", { ok: false });
+            if (!path.isAbsolute(workDir)) return txt(`work_dir 必须是绝对路径：${workDir}`, { ok: false });
+            let stat: fs.Stats;
+            try { stat = fs.statSync(workDir); } catch { return txt(`work_dir 不存在：${workDir}`, { ok: false }); }
+            if (!stat.isDirectory()) return txt(`work_dir 不是目录：${workDir}`, { ok: false });
+            const executor = p.executor === undefined ? "opencode" : String(p.executor);
+            if (executor !== "opencode" && executor !== "mimo") {
+              return txt('executor 只能是 "opencode" 或 "mimo"。', { ok: false });
+            }
+            const poolId = d.primaryPool?.() ?? "";
+            if (!poolId) return txt("建任务需要知道是哪个池，这一轮没有对应的池。", { ok: false });
+            const startAt = parseStartAt(p.start_at);
+            if (startAt === null) return txt("start_at 看不懂：给 ISO 时间或毫秒时间戳。", { ok: false });
+            const created = createTask(d.store, {
+              userId: d.store.lastUserId(poolId) ?? "ufa",
+              poolId,
+              name: p.name,
+              goal: p.goal,
+              deliverable: p.deliverable,
+              constraints: p.constraints,
+              acceptance: p.acceptance,
+              files: p.files,
+              start_at: startAt,
+              work_dir: workDir,
+              executor,
+              model: p.model,
+            });
+            if (p.dispatch === false) {
+              const view = formatTask(created);
+              return txt(`已建任务 #${created.id}「${created.name}」（${created.status}）：${created.goal}（未派发）`, { ok: true, task: view });
+            }
+            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
+            writeTaskDoc(d.store, created, { apiBase: deps.apiBase });
+            const started = await startTask(d.store, getTask(d.store, created.id)!, deps);
+            const view = formatTask(started.task);
+            return txt(
+              `已建任务 #${started.task.id}「${started.task.name}」并启动 ${executor}（session=${started.session_id || "未捕获"}）：${started.task.goal}`,
+              { ok: true, task: view, session_id: started.session_id, captured: started.captured },
+            );
+          }
+
+          case "list": {
+            if (p.status !== undefined && !isTaskStatus(p.status)) {
+              return txt(`status 只能是 ${TASK_STATUSES.join(" / ")}。\n${TASK_HELP}`, { ok: false });
+            }
+            const list = listTaskViews(d.store, {
+              status: p.status as any,
+              limit: p.limit,
+            });
+            return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length, tasks: list });
+          }
+
+          case "get": {
+            if (p.id === undefined) return txt("get 要 id。", { ok: false });
+            const view = getTaskView(d.store, p.id, { recentEvents: 3 });
+            if (!view) return txt(`没有任务 #${p.id}`, { ok: false });
+            return txt(JSON.stringify(view, null, 2), { ok: true, task: view });
+          }
+
+          case "updates": {
+            if (p.id === undefined) return txt("updates 要 id。", { ok: false });
+            const task = getTask(d.store, p.id);
+            if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
+            const name = taskDisplayName(task);
+            const events = listTaskEvents(d.store, p.id, { limit: p.limit ?? 20 });
+            const body = events.map((e) => `[${e.seq}] ${e.local} ${e.sender}：${e.text}`).join("\n");
+            return txt(
+              body ? `任务 #${task.id}「${name}」\n${body}` : `任务 #${task.id}「${name}」：这个任务池里还没有事件`,
+              { ok: true, task_id: task.id, name, count: events.length, events },
+            );
+          }
+
+          case "resume": {
+            if (p.id === undefined) return txt("resume 要 id。", { ok: false });
+            const task = getTask(d.store, p.id);
+            if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
+            if (!task.session_id.trim()) {
+              return txt(`#${p.id} 没有 session_id，不能恢复；请先 start 或重新创建。`, { ok: false });
+            }
+            if (isRunnerAlive(task.runner_pid)) return txt(`#${p.id} 已在运行。`, { ok: false });
+            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
+            const resumed = await resumeTask(d.store, task, deps);
+            const view = formatTask(resumed.task);
+            return txt(`#${resumed.task.id} 恢复执行（session=${resumed.session_id}）。`, { ok: true, task: view });
+          }
+
+          case "note": {
+            if (p.id === undefined) return txt("note 要 id。", { ok: false });
+            if (!p.line?.trim()) return txt("note 要 line：追加的一行说明。", { ok: false });
+            const updated = appendNote(d.store, p.id, p.line);
+            const view = formatTask(updated);
+            return txt(`#${updated.id} 追加了说明：${p.line}`, { ok: true, task: view });
+          }
+
+          case "cancel": {
+            if (p.id === undefined) return txt("cancel 要 id。", { ok: false });
+            const task = getTask(d.store, p.id);
+            if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
+            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task);
+            const updated = cancelTask(d.store, p.id);
+            const view = formatTask(updated);
+            return txt(`#${updated.id} 已取消。`, { ok: true, task: view });
+          }
+
+          case "status": {
+            if (p.id === undefined) return txt("status 要 id。", { ok: false });
+            if (!p.status?.trim()) return txt("status 要 status。", { ok: false });
+            if (!isTaskStatus(p.status)) {
+              return txt(`status 只能是 ${TASK_STATUSES.join(" / ")}。\n${TASK_HELP}`, { ok: false });
+            }
+            const updated = updateTask(d.store, p.id, {
+              status: p.status,
+              result: p.result,
+              artifact: p.artifact,
+            });
+            const view = formatTask(updated);
+            return txt(`#${updated.id} 状态改成 ${updated.status}。`, { ok: true, task: view });
+          }
+
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${TASK_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  const WORKER_HELP = [
+    "worker 的用法（action 必填）：",
+    "  list   看已注册的 worker（worker_id / name / kind / status / last_seen_at）",
+    "  help   看这份说明",
+  ].join("\n");
+
+  const worker = defineTool({
+    name: "worker",
+    label: "worker",
+    executionMode: "sequential",
+    description:
+      "看有哪些 worker 在跑。action=list 返回 worker_id / name / kind / status / last_seen_at；"
+      + "先看有没有在线的，再决定任务怎么写。派活由 worker 自己 claim，你只负责把任务写清楚。",
+    parameters: Type.Object({
+      action: Type.String({ description: "list / help" }),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        if (action === "help") return txt(WORKER_HELP, { ok: true });
+        if (action !== "list") return txt(`没有 action=「${p.action}」这个动作。\n${WORKER_HELP}`, { ok: false });
+        const list = listWorkers(d.store).map((w) => ({
+          worker_id: w.worker_id,
+          name: w.name,
+          kind: w.kind,
+          status: w.status,
+          last_seen_at: w.last_seen_at,
+        }));
+        return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length, workers: list });
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  /**
    * 文件与 shell 也做成原生工具（对齐 hermes 的 read_file / write_file / terminal）。
    *
    * 原来这三件事挂在 `read_file|write|run` 上——那等于用一条字符串命令模拟文件读写，
@@ -400,7 +735,7 @@ export function createTools(d: ToolDeps) {
     executionMode: "sequential",
     description:
       "写沙盒里的文件（整份覆盖，不是追加）。笔记、话题库条目、技能运行时产物都写这里。"
-      + "要追加就别用这个：用 terminal 里的 printf >> 。",
+      + "要追加就先用 read_file 读出全文，合并后整份写回。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，比如 topics/life/话题.md" }),
       content: Type.String({ description: "完整内容" }),
@@ -483,11 +818,11 @@ export function createTools(d: ToolDeps) {
     label: "rb",
     executionMode: "sequential",
     description:
-      "运维与查询用：翻历史、看池、列计划、读图片、搜网页、在沙盒里跑命令。"
+      "运维与查询用：翻历史、看池、列计划、看任务和 worker、读图片、搜网页。"
       + "命令：pool-list / pool-read / pool-search / plan-list / mem-search / img-list / img-get / "
-      + "web-search / web-fetch / skills。"
-      + "记事、改记忆、加计划、标完成、读写文件、跑命令都有专门的工具（memory / plan / "
-      + "read_file / write_file / terminal），别用 rb 做这些。"
+      + "task-list / worker-list / web-search / web-fetch / skills。"
+      + "记事、改记忆、加计划、标完成、读写文件都有专门的工具（memory / plan / "
+      + "read_file / write_file），任务写操作走 task 工具，别用 rb 做这些。"
       + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
       + "args=\"sb run \\\"ls -la\\\"\"。不确定就 args=\"help\"。",
     parameters: Type.Object({ args: Type.String({ description: "命令 + 参数，例如 \"plan-list\" 或 \"sb read notes/todo.md\"" }) }),
@@ -506,6 +841,31 @@ export function createTools(d: ToolDeps) {
         return txt(`\`rb ${parts[0]}\` 已经不在这里用了，改用 ${moved[parts[0]]}（结构化参数，路径不用拼）。`, { ok: false, useTool: moved[parts[0]] });
       }
       try {
+        const flag = (name: string): string | undefined => {
+          const i = parts.indexOf(`--${name}`);
+          return i >= 0 ? parts[i + 1] : undefined;
+        };
+        if (parts[0] === "task-list") {
+          const status = flag("status") ?? (parts[1] && !parts[1].startsWith("--") ? parts[1] : undefined);
+          if (status !== undefined && !isTaskStatus(status)) {
+            return txt(`status 只能是 ${TASK_STATUSES.join(" / ")}。`, { ok: false });
+          }
+          const rawLimit = flag("limit");
+          const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+          if (limit !== undefined && !Number.isFinite(limit)) return txt("limit 要是数字。", { ok: false });
+          const list = listTaskViews(d.store, { status: status as any, limit });
+          return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length });
+        }
+        if (parts[0] === "worker-list") {
+          const list = listWorkers(d.store).map((w) => ({
+            worker_id: w.worker_id,
+            name: w.name,
+            kind: w.kind,
+            status: w.status,
+            last_seen_at: w.last_seen_at,
+          }));
+          return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length });
+        }
         // RB_NOW 让模拟器里的「现在」和这一轮一致（plan-add 的过期判断会用到）
         const opts = shellRunnerOptions(d.cfg, 60_000);
         const exec = d.rbExec ?? ((argv: string[]) => runSandboxArgv(["rb", ...argv], { ...opts, execEnv: { RB_NOW: String(d.now()) } }));
@@ -517,7 +877,13 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  // host 模式下不再给写文件工具：写盘只走 terminal（会过审批），少一条路就少一次搞不清写到哪
-  const sandboxed = d.cfg.exec.shell.mode !== "host";
-  return [chat, memory, plan, readFile, ...(sandboxed ? [writeFile] : []), runShellTool, rb];
+  // UFA 只有「宿主机 + 审批开启」时才拿 terminal：其他组合下无审批裸跑风险太大。
+  const ufaHasTerminal = d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true;
+  const ufaTools = [
+    chat, memory, plan, approval, task, worker, readFile, writeFile,
+    ...(ufaHasTerminal ? [runShellTool] : []),
+    rb,
+  ];
+  const waTools = [readFile, writeFile, runShellTool, rb];
+  return d.profile === "wa" ? waTools : ufaTools;
 }

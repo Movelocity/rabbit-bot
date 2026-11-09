@@ -5,6 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ApprovalGate, type ApprovalConfig } from "../src/core/approval.ts";
+import { Store } from "../src/core/db.ts";
+import { getApproval, listApprovals } from "../src/core/approvals.ts";
+import { takePendingTick } from "../src/core/tasks.ts";
 import type { InboundMessage } from "../src/types.ts";
 
 const ROOM = "!approval:matrix.test";
@@ -38,6 +41,10 @@ function fakeLog() {
   return { lines, log: { info: (m: string) => lines.push(m), warn: (m: string) => lines.push(m), error: (m: string) => lines.push(m) } as any };
 }
 
+function react(key: string, over: Partial<InboundMessage> = {}): InboundMessage {
+  return msg({ text: key, media_type: "reaction", reaction_key: key, reaction_to: null, ...over });
+}
+
 function tmpLogFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-approval-"));
   return path.join(dir, "approval.jsonl");
@@ -60,8 +67,8 @@ test("同意：发出去、写账、resolve approved", async () => {
   assert.equal(sent.filter((t) => t.includes("【要动本机】")).length, 1);
   assert.match(sent[0], /【要动本机】#1/);
   assert.match(sent[0], /npm run build/);
-  assert.match(sent[0], /y 1/);
-  assert.equal(g.tryHandle(msg({ text: "y 1" })), true);
+  assert.match(sent[0], /OK 表情/);
+  assert.equal(g.tryHandle(react("OK")), true);
   const r = await p;
   assert.equal(r.decision, "approved");
   assert.equal(r.by, OWNER);
@@ -74,12 +81,12 @@ test("同意：发出去、写账、resolve approved", async () => {
   assert.equal(rec.id, 1);
 });
 
-test("拒绝：n 就是不跑", async () => {
+test("拒绝：贴 No 就是不跑", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true }));
   const p = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "n" }));
+  g.tryHandle(react("No"));
   assert.equal((await p).decision, "rejected");
 });
 
@@ -93,23 +100,24 @@ test("超时＝拒绝，不是放行", async () => {
   assert.equal(g.waiting, null);
 });
 
-test("序号对不上就不批：y 99 不动 #1", async () => {
+test("文字回复不批，只有贴对表情才算数", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true }));
   const p = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "y 99" }));
+  assert.equal(g.tryHandle(msg({ text: "y 1" })), false);
+  assert.equal(g.tryHandle(msg({ text: "no" })), false);
   assert.equal(g.waiting?.id, 1);
-  g.tryHandle(msg({ text: "y 1" }));
+  g.tryHandle(react("OK"));
   assert.equal((await p).decision, "approved");
 });
 
-test("非主人回 y 不算同意（但也不进她的上下文）", async () => {
+test("非主人贴表情不算同意，消息照常进池", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg({ timeoutMs: 800 }), log, async () => ({ ok: true }));
   const p = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
   await new Promise((r) => setTimeout(r, 10));
-  assert.equal(g.tryHandle(msg({ text: "y", sender_id: "@stranger:matrix.test" })), true);
+  assert.equal(g.tryHandle(react("OK", { sender_id: "@stranger:matrix.test" })), false);
   assert.equal(g.waiting?.id, 1);
   assert.equal((await p).decision, "timeout");
 });
@@ -120,10 +128,22 @@ test("别的房间的消息不归闸门管", async () => {
   assert.equal(g.tryHandle(msg({ external_chat_id: "!闲聊:matrix.test" })), false);
 });
 
-test("审批房里的闲聊也吞掉，不给她看", async () => {
+test("审批房里的闲聊照常进池，不挡消息流", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true }));
-  assert.equal(g.tryHandle(msg({ text: "今天天气不错" })), true);
+  assert.equal(g.tryHandle(msg({ text: "今天天气不错" })), false);
+});
+
+test("有待审批时，文字聊天照常进池也不误触", async () => {
+  const { log } = fakeLog();
+  const g = new ApprovalGate(cfg(), log, async () => ({ ok: true }));
+  const p = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(g.tryHandle(msg({ text: "好 3 点见" })), false);
+  assert.equal(g.tryHandle(msg({ text: "ok 这个先别跑" })), false);
+  assert.equal(g.waiting?.id, 1);
+  g.tryHandle(react("OK"));
+  assert.equal((await p).decision, "approved");
 });
 
 test("发不出去 = 拒绝（不能悄悄放行）", async () => {
@@ -142,12 +162,12 @@ test("串行：第二条等第一条裁决完才发", async () => {
   await new Promise((r) => setTimeout(r, 20));
   const asks = () => sent.filter((t) => t.includes("【要动本机】"));
   assert.equal(asks().length, 1);
-  g.tryHandle(msg({ text: "y 1" }));
+  g.tryHandle(react("OK"));
   await p1;
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(asks().length, 2);
   assert.match(asks()[1], /#2/);
-  g.tryHandle(msg({ text: "y 2" }));
+  g.tryHandle(react("OK"));
   assert.equal((await p2).decision, "approved");
 });
 
@@ -158,7 +178,7 @@ test("拒绝 / 超时也各回一句状态", async () => {
 
   const p1 = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "n 1" }));
+  g.tryHandle(react("No"));
   await p1;
 
   const p2 = g.request({ cmd: "rm -rf build2", cwd: "/x", why: "删" });
@@ -190,7 +210,7 @@ test("没开审批时不发这些状态（别往房间里灌噪声）", async ()
 });
 
 // ---------------------------------------------------------------- 表情审批
-test("表情审批：点赞 = 批准（key 带 U+FE0F 也认）", async () => {
+test("表情审批：OK = 批准", async () => {
   const { log } = fakeLog();
   const sent: string[] = [];
   const g = new ApprovalGate(cfg(), log, async (_c, t) => { sent.push(t); return { ok: true, msgId: "$prompt1" }; });
@@ -198,31 +218,30 @@ test("表情审批：点赞 = 批准（key 带 U+FE0F 也认）", async () => {
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(g.waiting?.id, 1);
   // Element 发出来的实际是 "👍️"（U+1F44D + U+FE0F）
-  assert.equal(g.tryHandle(msg({ text: "👍\uFE0F", media_type: "reaction", reaction_to: "$prompt1" })), true);
+  assert.equal(g.tryHandle(react("OK", { reaction_to: "$prompt1" })), true);
   const r = await p;
   assert.equal(r.decision, "approved");
   assert.equal(r.by, OWNER);
 });
 
-test("表情审批：点踩 = 拒绝", async () => {
+test("表情审批：No = 拒绝", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt2" }));
   const p = g.request({ cmd: "rm -rf /tmp/x", cwd: "/x", why: "删缓存" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "👎\uFE0F", media_type: "reaction", reaction_to: "$prompt2" }));
+  g.tryHandle(react("No", { reaction_to: "$prompt2" }));
   assert.equal((await p).decision, "rejected");
 });
 
-test("表情审批：贴在别的消息上不算数", async () => {
-  const { log, lines } = fakeLog();
+test("表情审批：贴在别的消息上不算数，照常进池", async () => {
+  const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt3" }));
   const p = g.request({ cmd: "whoami", cwd: "/x", why: "看看" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$someOther" }));
+  assert.equal(g.tryHandle(react("OK", { reaction_to: "$someOther" })), false);
   assert.equal(g.waiting?.id, 1, "贴错消息不该裁决");
-  assert.ok(lines.some((l) => /表情贴在别的消息上/.test(l)), lines.join("|"));
   // 收尾：贴对的那条才生效
-  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt3" }));
+  g.tryHandle(react("OK", { reaction_to: "$prompt3" }));
   assert.equal((await p).decision, "approved");
 });
 
@@ -231,19 +250,74 @@ test("表情审批：非主人贴表情不裁决，且不报错", async () => {
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt4" }));
   const p = g.request({ cmd: "id", cwd: "/x", why: "看看" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt4", sender_id: "@stranger:matrix.test" }));
+  g.tryHandle(react("OK", { reaction_to: "$prompt4", sender_id: "@stranger:matrix.test" }));
   assert.equal(g.waiting?.id, 1);
-  g.tryHandle(msg({ text: "👍", media_type: "reaction", reaction_to: "$prompt4" }));
+  g.tryHandle(react("OK", { reaction_to: "$prompt4" }));
   assert.equal((await p).decision, "approved");
 });
 
-test("表情审批：不在名单里的表情忽略，不当作默许", async () => {
+test("表情审批：别的表情不算数，照常进池", async () => {
   const { log } = fakeLog();
   const g = new ApprovalGate(cfg(), log, async () => ({ ok: true, msgId: "$prompt5" }));
   const p = g.request({ cmd: "date", cwd: "/x", why: "看看" });
   await new Promise((r) => setTimeout(r, 10));
-  g.tryHandle(msg({ text: "🤔", media_type: "reaction", reaction_to: "$prompt5" }));
+  assert.equal(g.tryHandle(react("THUMBSUP", { reaction_to: "$prompt5" })), false);
   assert.equal(g.waiting?.id, 1);
-  g.tryHandle(msg({ text: "n 1", media_type: "text" }));
+  g.tryHandle(react("No"));
   assert.equal((await p).decision, "rejected");
+});
+
+// ---------------------------------------------------------------- 落库
+test("落库：ask 写 approvals，审批房批准后同一行改成 approved", async () => {
+  const { log } = fakeLog();
+  const store = new Store(":memory:");
+  let enqueued = 0;
+  const g = new ApprovalGate(
+    cfg(), log, async () => ({ ok: true }), undefined,
+    { store, enqueue: () => { enqueued++; } },
+  );
+
+  const p = g.request({ cmd: "npm publish", cwd: "/work", why: "发布包" });
+  await new Promise((r) => setTimeout(r, 10));
+
+  const pending = listApprovals(store, { status: "pending" });
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].worker_id, "host");
+  assert.equal(pending[0].task_id, 0);
+  assert.match(pending[0].action, /npm publish/);
+  assert.equal(pending[0].why, "发布包");
+  assert.equal(enqueued, 1, "申请落库置了一次 pending tick");
+
+  g.tryHandle(react("OK"));
+  const r = await p;
+  assert.equal(r.decision, "approved");
+
+  const row = getApproval(store, pending[0].id)!;
+  assert.equal(row.status, "approved");
+  assert.equal(row.decided_by, OWNER);
+  assert.ok(row.decided_at !== null);
+  store.close();
+});
+
+test("落库：审批房拒绝也写同一张表，并置 pending tick", async () => {
+  const { log } = fakeLog();
+  const store = new Store(":memory:");
+  let enqueued = 0;
+  const g = new ApprovalGate(
+    cfg(), log, async () => ({ ok: true }), undefined,
+    { store, enqueue: () => { enqueued++; } },
+  );
+
+  const p = g.request({ cmd: "rm -rf build", cwd: "/work", why: "删目录" });
+  await new Promise((r) => setTimeout(r, 10));
+  const row = listApprovals(store, { status: "pending" })[0];
+  takePendingTick(store);
+  enqueued = 0;
+
+  g.tryHandle(react("No"));
+  assert.equal((await p).decision, "rejected");
+  assert.equal(getApproval(store, row.id)?.status, "rejected");
+  assert.equal(getApproval(store, row.id)?.decided_by, OWNER);
+  assert.equal(enqueued, 1, "拒绝是终态，置一次 tick");
+  store.close();
 });

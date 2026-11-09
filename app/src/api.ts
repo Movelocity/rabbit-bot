@@ -11,11 +11,24 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Config } from "./config.ts";
+import { APP_ROOT, type Config } from "./config.ts";
 import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { listPools, readPool, searchPool } from "./ops/pools.ts";
 import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
+import { appendNote, cancelTask, createTask, getTask, isTaskStatus, TASK_STATUSES, taskDisplayName, updateTask } from "./core/tasks.ts";
+import {
+  WorkerMismatchError, claimNextTask, completeTask, failTask, getWorker, listWorkers, progressTask,
+  registerWorker, touchTask,
+} from "./core/workers.ts";
+import { listTaskEvents } from "./core/task-events.ts";
+import { isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
+import {
+  APPROVAL_STATUSES, ApprovalConflictError, createApproval, decideApproval, getApproval,
+  isApprovalStatus,
+} from "./core/approvals.ts";
+import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
+import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
 import { addMemory, closeMemory, searchMemories } from "./ops/memories.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
@@ -30,12 +43,52 @@ export interface ApiDeps {
   store: Store;
   log: Logger;
   token: string;
+  /** 任务完成置位 pending tick 时喊一声；没注入就只落标记（测试/只读进程） */
+  enqueue?: () => void;
 }
+
+const WEB_ROOT = path.join(APP_ROOT, "web");
 
 const MIME: Record<string, string> = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
   ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+  ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml",
+  ".ico": "image/x-icon", ".txt": "text/plain; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
 };
+
+/**
+ * 本地 Web 控制台的静态文件。未登录也能打开页面；接口仍然要 token。
+ * 只认 `/`（index.html）和 `/ui/*`，碰到路径穿越就当没这个文件，继续走 404。
+ */
+function serveStatic(pathname: string, res: http.ServerResponse, method: string): boolean {
+  if (pathname !== "/" && pathname !== "/ui" && !pathname.startsWith("/ui/")) return false;
+  let rel: string;
+  try {
+    rel = pathname === "/" || pathname === "/ui" ? "index.html" : decodeURIComponent(pathname.slice("/ui/".length));
+  } catch {
+    return false;
+  }
+  const abs = path.resolve(WEB_ROOT, rel);
+  if (!abs.startsWith(WEB_ROOT + path.sep)) return false;
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile()) return false;
+  const buf = fs.readFileSync(abs);
+  res.writeHead(200, {
+    "content-type": MIME[path.extname(abs).toLowerCase()] ?? "application/octet-stream",
+    "content-length": buf.length,
+    "cache-control": "no-cache",
+  });
+  res.end(method === "HEAD" ? undefined : buf);
+  return true;
+}
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -76,11 +129,18 @@ const qInt = (v: string | null): number | undefined => {
 };
 const qBool = (v: string | null): boolean => v === "1" || v === "true";
 
+function bodyWorkerId(body: any): string {
+  if (typeof body.worker_id !== "string" || !body.worker_id.trim()) throw new HttpError(400, "缺少 worker_id");
+  return body.worker_id.trim();
+}
+
 /** 起 API；cfg.api.enabled=false 时返回 null。 */
 export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
   if (d.cfg.api?.enabled === false) return null;
   const port = d.cfg.api?.port ?? DEFAULT_PORT;
   const host = d.cfg.api?.host ?? "0.0.0.0";
+  /** 给任务子进程的回环地址；listen 后才知道真实端口 */
+  let apiBase = "";
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -101,6 +161,13 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
     // 健康检查不需要 token（只回状态，不含业务数据）
     if (method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
       return reply(200, { status: "ok", exec: d.cfg.exec.shell.mode, time: Date.now() });
+    }
+
+    // 静态控制台也不鉴权：页面只是壳子，所有数据接口仍要 Bearer token
+    if ((method === "GET" || method === "HEAD") && serveStatic(url.pathname, res, method)) return;
+    if (method === "GET" && url.pathname === "/favicon.ico") {
+      res.writeHead(204);
+      return res.end();
     }
 
     const auth = String(req.headers.authorization ?? "");
@@ -128,6 +195,18 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET /v1/pools、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=");
         }
+        case "users": {
+          if (parts.length === 2 && method === "GET") return reply(200, d.store.listUsers());
+          if (parts.length === 3 && method === "PATCH") {
+            const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+            if (!displayName) throw new HttpError(400, "缺少 display_name");
+            const backfill = body.backfill === true || body.backfill === "1" || body.backfill === "true";
+            const result = d.store.renameUser(decodeURIComponent(parts[2]), displayName, { backfill });
+            if (!result) throw new HttpError(404, `用户不存在：${parts[2]}`);
+            return reply(200, result);
+          }
+          throw new HttpError(404, "用法：GET /v1/users、PATCH /v1/users/:user_id");
+        }
         case "plans": {
           if (parts.length === 2 && method === "GET") return reply(200, listPlans(d.store, url.searchParams.get("status") ?? "pending"));
           if (parts.length === 2 && method === "POST") {
@@ -140,6 +219,252 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, updatePlan(d.store, Number(parts[2]), String(body.status ?? "")));
           }
           throw new HttpError(404, "用法：GET /v1/plans、POST /v1/plans、PATCH /v1/plans/:id");
+        }
+        case "workers": {
+          if (parts.length === 2 && method === "GET") return reply(200, listWorkers(d.store));
+          if (parts.length === 3 && parts[2] === "register" && method === "POST") {
+            if (typeof body.worker_id !== "string" || !body.worker_id.trim()) throw new HttpError(400, "缺少 worker_id");
+            return reply(200, registerWorker(d.store, {
+              workerId: body.worker_id,
+              name: body.name,
+              kind: typeof body.kind === "string" ? body.kind : undefined,
+            }));
+          }
+          if (parts.length === 4 && parts[3] === "claim" && method === "POST") {
+            const workerId = String(parts[2] ?? "").trim();
+            if (!workerId) throw new HttpError(400, "缺少 worker id");
+            return reply(200, { task: claimNextTask(d.store, workerId) });
+          }
+          throw new HttpError(404, "用法：GET /v1/workers、POST /v1/workers/register、POST /v1/workers/:id/claim");
+        }
+        case "tasks": {
+          if (parts.length === 2 && method === "GET") {
+            const status = url.searchParams.get("status");
+            if (status && !isTaskStatus(status)) {
+              throw new HttpError(400, `status 只能是 ${TASK_STATUSES.join(" / ")}`);
+            }
+            return reply(200, listTaskViews(d.store, {
+              status: status ? status as any : undefined,
+              limit: qInt(url.searchParams.get("limit")),
+            }));
+          }
+          if (parts.length === 2 && method === "POST") {
+            if (typeof body.name !== "string" || !body.name.trim()) {
+              throw new HttpError(400, "缺少 name（短任务名，格式 #xxx）");
+            }
+            if (typeof body.goal !== "string" || !body.goal.trim()) throw new HttpError(400, "缺少 goal");
+            const workDir = typeof body.work_dir === "string" ? body.work_dir.trim() : "";
+            if (!workDir) throw new HttpError(400, "缺少 work_dir（任务工作目录，绝对路径）");
+            if (!path.isAbsolute(workDir)) throw new HttpError(400, `work_dir 必须是绝对路径：${workDir}`);
+            let workStat: fs.Stats;
+            try { workStat = fs.statSync(workDir); } catch {
+              throw new HttpError(400, `work_dir 不存在：${workDir}`);
+            }
+            if (!workStat.isDirectory()) throw new HttpError(400, `work_dir 不是目录：${workDir}`);
+            const executor = body.executor === undefined ? "opencode" : body.executor;
+            if (executor !== "opencode" && executor !== "mimo") {
+              throw new HttpError(400, 'executor 只能是 "opencode" 或 "mimo"');
+            }
+            const task = createTask(d.store, {
+              userId: typeof body.user_id === "string" ? body.user_id : "",
+              poolId: typeof body.pool_id === "string" ? body.pool_id : "",
+              name: body.name,
+              goal: body.goal,
+              deliverable: typeof body.deliverable === "string" ? body.deliverable : undefined,
+              constraints: typeof body.constraints === "string" ? body.constraints : undefined,
+              acceptance: typeof body.acceptance === "string" ? body.acceptance : undefined,
+              files: Array.isArray(body.files) || typeof body.files === "string" ? body.files : undefined,
+              start_at: typeof body.start_at === "number" ? body.start_at : undefined,
+              work_dir: workDir,
+              executor,
+              model: typeof body.model === "string" ? body.model : undefined,
+            });
+            if (body.dispatch === false) return reply(201, formatTask(task));
+            writeTaskDoc(d.store, task, { apiBase });
+            const started = await startTask(d.store, getTask(d.store, task.id)!, {
+              apiBase, token: d.token, dataDir: d.cfg.dataDir,
+            });
+            return reply(201, formatTask(started.task));
+          }
+          const id = Number(parts[2]);
+          if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "任务 id 要是正整数");
+          if (parts.length === 3 && method === "GET") {
+            const view = getTaskView(d.store, id, { recentEvents: 5 });
+            if (!view) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, view);
+          }
+          if (parts.length === 4 && parts[3] === "events" && method === "GET") {
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            const messages = listTaskEvents(d.store, id, { limit: qInt(url.searchParams.get("limit")) });
+            const task = getTask(d.store, id)!;
+            return reply(200, { task_id: id, pool_id: task.task_pool_id, messages });
+          }
+          if (parts.length === 4 && parts[3] === "note" && method === "POST") {
+            if (typeof body.line !== "string" || !body.line.trim()) throw new HttpError(400, "line 不能为空");
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(appendNote(d.store, id, body.line)));
+          }
+          if (parts.length === 4 && parts[3] === "start" && method === "POST") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            if (!task.work_dir) throw new HttpError(400, `任务 #${id} 没有 work_dir，不能启动`);
+            if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
+            writeTaskDoc(d.store, task, { apiBase });
+            const started = await startTask(d.store, getTask(d.store, id)!, {
+              apiBase, token: d.token, dataDir: d.cfg.dataDir,
+            });
+            return reply(200, formatTask(started.task));
+          }
+          if (parts.length === 4 && parts[3] === "resume" && method === "POST") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            if (!String(task.session_id ?? "").trim()) {
+              throw new HttpError(409, `任务 #${id} 没有 session_id，不能恢复；请先 start 或重新创建`);
+            }
+            if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
+            const resumed = await resumeTask(d.store, task, {
+              apiBase, token: d.token, dataDir: d.cfg.dataDir,
+            });
+            return reply(200, formatTask(resumed.task));
+          }
+          if (parts.length === 4 && parts[3] === "stop" && method === "POST") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(await stopTask(d.store, task)));
+          }
+          if (parts.length === 4 && parts[3] === "cancel" && method === "POST") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task);
+            return reply(200, formatTask(cancelTask(d.store, id)));
+          }
+          if (parts.length === 4 && parts[3] === "status" && method === "POST") {
+            if (!isTaskStatus(body.status)) throw new HttpError(400, `status 只能是 ${TASK_STATUSES.join(" / ")}`);
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(updateTask(d.store, id, {
+              status: body.status,
+              result: typeof body.result === "string" ? body.result : undefined,
+              artifact: typeof body.artifact === "string" ? body.artifact : undefined,
+            })));
+          }
+          if (parts.length === 4 && parts[3] === "touch" && method === "POST") {
+            const workerId = bodyWorkerId(body);
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            const task = touchTask(d.store, id, workerId);
+            if (!task) throw new HttpError(400, `任务 #${id} 不在运行`);
+            return reply(200, { lease_until: task.lease_until });
+          }
+          if (parts.length === 4 && parts[3] === "progress" && method === "POST") {
+            const workerId = bodyWorkerId(body);
+            if (typeof body.stage !== "string" || !body.stage.trim()) throw new HttpError(400, "缺少 stage");
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(progressTask(d.store, id, {
+              workerId,
+              stage: body.stage,
+              note: typeof body.note === "string" ? body.note : undefined,
+            })));
+          }
+          if (parts.length === 4 && parts[3] === "complete" && method === "POST") {
+            const workerId = bodyWorkerId(body);
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(completeTask(d.store, id, {
+              workerId,
+              result: typeof body.result === "string" ? body.result : undefined,
+              artifact: typeof body.artifact === "string" ? body.artifact : undefined,
+              note: typeof body.note === "string" ? body.note : undefined,
+            }, d.enqueue)));
+          }
+          if (parts.length === 4 && parts[3] === "fail" && method === "POST") {
+            const workerId = bodyWorkerId(body);
+            if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
+            return reply(200, formatTask(failTask(d.store, id, {
+              workerId,
+              error: typeof body.error === "string" ? body.error : undefined,
+              retryable: body.retryable === true,
+            }, d.enqueue)));
+          }
+          if (parts.length === 4 && parts[3] === "snapshot" && method === "GET") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            const worker = task.worker_id ? getWorker(d.store, task.worker_id) : null;
+            const recent = listTaskEvents(d.store, id, { limit: 5 });
+            const fresh = getTask(d.store, id)!;
+            return reply(200, {
+              task: {
+                id: task.id,
+                name: taskDisplayName(task),
+                goal: task.goal,
+                pool_id: task.pool_id,
+                task_pool_id: fresh.task_pool_id,
+                status: task.status,
+                stage: task.stage,
+                note: task.note,
+                result: task.result,
+                artifact: task.artifact,
+                work_dir: task.work_dir,
+                executor: task.executor,
+                model: task.model,
+                session_id: task.session_id,
+                runner_pid: task.runner_pid,
+                runner_started_at: task.runner_started_at,
+                doc_path: task.doc_path,
+                worker_id: task.worker_id,
+                claimed_at: task.claimed_at,
+                lease_until: task.lease_until,
+                attempt: task.attempt,
+                updated_at: task.updated_at,
+              },
+              recent_events: recent,
+              worker: worker ? { worker_id: worker.worker_id, name: worker.name, status: worker.status, last_seen_at: worker.last_seen_at } : null,
+            });
+          }
+          throw new HttpError(404, "用法：GET|POST /v1/tasks、GET /v1/tasks/:id、GET /v1/tasks/:id/events、POST /v1/tasks/:id/start|resume|stop|note|cancel|status|touch|progress|complete|fail、GET /v1/tasks/:id/snapshot");
+        }
+        case "approvals": {
+          if (parts.length === 2 && method === "POST") {
+            if (typeof body.action !== "string" || !body.action.trim()) throw new HttpError(400, "缺少 action");
+            if (body.timeout_s !== undefined && (typeof body.timeout_s !== "number" || !Number.isFinite(body.timeout_s) || body.timeout_s <= 0)) {
+              throw new HttpError(400, "timeout_s 要是正数");
+            }
+            return reply(201, createApproval(d.store, {
+              taskId: body.task_id,
+              workerId: typeof body.worker_id === "string" ? body.worker_id : undefined,
+              action: body.action,
+              detail: typeof body.detail === "string" ? body.detail : undefined,
+              why: typeof body.why === "string" ? body.why : undefined,
+              timeoutS: body.timeout_s,
+            }, d.enqueue));
+          }
+          if (parts.length === 2 && method === "GET") {
+            const status = url.searchParams.get("status");
+            if (status && !isApprovalStatus(status)) {
+              throw new HttpError(400, `status 只能是 ${APPROVAL_STATUSES.join(" / ")}`);
+            }
+            return reply(200, listApprovalViews(d.store, {
+              status: status ? status as any : undefined,
+              taskId: qInt(url.searchParams.get("task_id")),
+              limit: qInt(url.searchParams.get("limit")),
+            }));
+          }
+          const id = Number(parts[2]);
+          if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "审批 id 要是正整数");
+          if (parts.length === 3 && method === "GET") {
+            const a = getApprovalView(d.store, id);
+            if (!a) throw new HttpError(404, `没有审批 #${id}`);
+            return reply(200, a);
+          }
+          if (parts.length === 4 && parts[3] === "decide" && method === "POST") {
+            if (body.decision !== "approved" && body.decision !== "rejected") {
+              throw new HttpError(400, 'decision 只能是 "approved" 或 "rejected"');
+            }
+            if (typeof body.by !== "string" || !body.by.trim()) throw new HttpError(400, "缺少 by");
+            if (!getApproval(d.store, id)) throw new HttpError(404, `没有审批 #${id}`);
+            return reply(200, decideApproval(d.store, id, {
+              decision: body.decision,
+              by: body.by,
+            }, d.enqueue));
+          }
+          throw new HttpError(404, "用法：GET|POST /v1/approvals、GET /v1/approvals/:id、POST /v1/approvals/:id/decide");
         }
         case "memories": {
           if (parts.length === 2 && method === "GET") {
@@ -227,7 +552,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
       }
     } catch (e) {
       const err = e as Error;
-      const status = e instanceof HttpError ? e.status : 400;
+      const status = e instanceof HttpError ? e.status
+        : e instanceof WorkerMismatchError || e instanceof ApprovalConflictError ? 409
+        : 400;
       if (status >= 500) d.log.error(`api ${method} ${url.pathname} 失败`, e);
       return fail(status, err.message);
     }
@@ -240,6 +567,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
 
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
+  apiBase = `http://127.0.0.1:${actualPort}`;
   d.log.info(`api: 监听 ${host}:${actualPort}（沙盒用 http://host.docker.internal:${actualPort}）`);
   if (host === "0.0.0.0") d.log.warn("api: 绑定 0.0.0.0，局域网可访问，全靠 Bearer token 挡着");
   return server;

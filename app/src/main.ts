@@ -7,6 +7,7 @@ import { FeishuAdapter } from "./adapters/feishu.ts";
 import { MatrixAdapter } from "./adapters/matrix.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { Logger } from "./core/logger.ts";
+import { makeWake } from "./core/queue.ts";
 import { setOwnerIds } from "./core/owners.ts";
 import { startInjectServer } from "./inject.ts";
 import { startApiServer } from "./api.ts";
@@ -100,7 +101,10 @@ async function main() {
   // 先起服务，再按 mode=docker 把容器拉起来（容器里拿到 RB_API_URL / RB_API_TOKEN）。
   try {
     const token = resolveApiToken(cfg);
-    apiSrv = await startApiServer({ cfg, store: app.store, log, token });
+    apiSrv = await startApiServer({
+      cfg, store: app.store, log, token,
+      enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
+    });
     if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {
       const r = await ensureSandboxContainer(shellRunnerOptions(cfg));
       if (r.ok) log.info(`沙盒容器 ${cfg.exec.shell.container}：${r.message}`);

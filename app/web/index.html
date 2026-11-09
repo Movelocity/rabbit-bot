@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Rabbit Bot 只读看板</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form" class="login-card">
+      <div class="login-mark">RB</div>
+      <h1>Rabbit Bot 只读看板</h1>
+      <p class="muted">
+        输入本地 REST API token。默认从
+        <code>app/data/run/api.token</code>
+        读取，也可以用环境变量 <code>RABBIT_BOT_API_TOKEN</code>。
+      </p>
+      <label for="token-input">API token</label>
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 token">
+      <p id="login-error" class="error hidden"></p>
+      <button type="submit" class="primary">连接</button>
+      <p class="login-foot muted">只读看板，收发消息请用飞书 IM。页面可以匿名打开，但所有数据接口都要 token。</p>
+    </form>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">RB</span>
+        <span>Rabbit Bot 只读看板</span>
+        <span class="readonly-chip">只读</span>
+      </div>
+      <div class="conn">
+        <span id="health-dot" class="dot"></span>
+        <span id="health-text">连接中…</span>
+        <span class="sep">·</span>
+        <span id="base-url" class="muted"></span>
+      </div>
+      <button id="logout" class="ghost small" type="button">退出</button>
+    </header>
+
+    <nav class="tabs" aria-label="功能页签">
+      <button type="button" data-tab="chat" class="active">会话</button>
+      <button type="button" data-tab="tasks">任务</button>
+      <button type="button" data-tab="approvals">权限</button>
+      <button type="button" data-tab="workers">Worker</button>
+      <button type="button" data-tab="plans">计划</button>
+      <button type="button" data-tab="memories">记忆</button>
+      <button type="button" data-tab="skills">技能</button>
+    </nav>
+
+    <main class="main">
+      <section id="tab-chat" class="tab-panel active chat-layout">
+        <aside class="pools">
+          <div class="pools-head">
+            <span>会话池</span>
+            <button id="reload-pools" class="ghost small" type="button">刷新</button>
+          </div>
+          <div id="pool-list" class="pool-list"></div>
+        </aside>
+
+        <section class="conversation">
+          <div class="conv-head">
+            <div class="conv-title-wrap">
+              <h2 id="conv-title">选择左侧会话</h2>
+              <div id="conv-meta" class="muted"></div>
+            </div>
+            <span class="readonly-note">只读 · 收发消息请用飞书</span>
+          </div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <section id="tab-tasks" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>任务</h2>
+            <p class="muted">只读：UFA 登记、WA 执行的任务进度。创建和执行请在飞书里进行。</p>
+          </div>
+          <button id="reload-tasks" class="ghost" type="button">刷新</button>
+        </div>
+        <div class="filter-row">
+          <label class="field compact">
+            <span>status</span>
+            <select id="task-status-filter">
+              <option value="">全部</option>
+              <option value="pending">pending</option>
+              <option value="running">running</option>
+              <option value="blocked">blocked</option>
+              <option value="done">done</option>
+              <option value="failed">failed</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </label>
+          <span class="readonly-mini">只读</span>
+        </div>
+        <p id="tasks-status" class="status"></p>
+        <div id="tasks-list" class="cards"></div>
+      </section>
+
+      <section id="tab-approvals" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>权限申请</h2>
+            <p class="muted">审批请在飞书里完成，此页只展示。</p>
+          </div>
+          <button id="reload-approvals" class="ghost" type="button">刷新</button>
+        </div>
+        <div class="filter-row">
+          <label class="field compact">
+            <span>status</span>
+            <select id="approval-status-filter">
+              <option value="pending">pending</option>
+              <option value="">全部</option>
+              <option value="approved">approved</option>
+              <option value="rejected">rejected</option>
+              <option value="timeout">timeout</option>
+            </select>
+          </label>
+          <span class="readonly-mini">只读 · 不提供裁决</span>
+        </div>
+        <p id="approvals-status" class="status"></p>
+        <div id="approvals-list" class="cards"></div>
+      </section>
+
+      <section id="tab-workers" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Worker</h2>
+            <p class="muted">只读：已注册 worker 的在线状态和最后心跳。</p>
+          </div>
+          <button id="reload-workers" class="ghost" type="button">刷新</button>
+        </div>
+        <p id="workers-status" class="status"></p>
+        <div id="workers-list" class="cards"></div>
+      </section>
+
+      <section id="tab-plans" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>待办计划</h2>
+            <p class="muted">只读列表；新增和完成计划请用飞书 IM。</p>
+          </div>
+          <button id="reload-plans" class="ghost" type="button">刷新</button>
+        </div>
+        <p id="plans-status" class="status"></p>
+        <div id="plans-list" class="cards"></div>
+      </section>
+
+      <section id="tab-memories" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>长期记忆</h2>
+            <p class="muted">只读列表；记忆的新增和关闭请用飞书 IM。</p>
+          </div>
+          <button id="reload-memories" class="ghost" type="button">刷新</button>
+        </div>
+        <div class="memory-toolbar">
+          <label class="field">
+            <span>当前池</span>
+            <input id="mem-pool" type="text" readonly placeholder="先在会话页选一个池">
+          </label>
+          <label class="field">
+            <span>用户 user id</span>
+            <input id="mem-user" type="text" readonly placeholder="当前池暂无已识别用户">
+          </label>
+        </div>
+        <p id="mem-status" class="status"></p>
+        <div id="mem-list" class="cards"></div>
+      </section>
+
+      <section id="tab-skills" class="tab-panel">
+        <div class="panel-head">
+          <div>
+            <h2>技能</h2>
+            <p class="muted">只读：技能是给模型读的文件，这里只做发现。</p>
+          </div>
+          <button id="reload-skills" class="ghost" type="button">刷新</button>
+        </div>
+        <p id="skills-status" class="status"></p>
+        <div id="skills-list" class="cards"></div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

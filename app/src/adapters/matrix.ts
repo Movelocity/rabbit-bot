@@ -235,6 +235,7 @@ export class MatrixAdapter implements IMAdapter {
         from_self: this.isSelf(ev.sender),
         attachment: null,
         reaction_to: rel.event_id ?? null,
+        reaction_key: rel.key,
       });
       return;
     }

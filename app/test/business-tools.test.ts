@@ -11,6 +11,7 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { searchMemories } from "../src/ops/memories.ts";
 import { addPlan } from "../src/ops/plans.ts";
+import { createApproval, getApproval } from "../src/core/approvals.ts";
 
 function setup(opts: { withUser?: boolean } = {}) {
   const cfg = loadConfig();
@@ -188,16 +189,20 @@ test("read_file：文件不存在就报错，不返回空字符串", async () =>
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test("host 模式不再给 write_file（写盘只走 terminal 的审批）", async () => {
+test("UFA 审批关时没有 terminal，但读写文件保留（host 模式也一样）", async () => {
   const base = loadConfig();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-host-"));
-  const cfg = { ...base, exec: { ...base.exec, dir: path.join(dir, "sandbox"), shell: { ...base.exec.shell, mode: "host" as const } } };
+  const cfg = {
+    ...base,
+    approval: { ...base.approval, enabled: false },
+    exec: { ...base.exec, dir: path.join(dir, "sandbox"), shell: { ...base.exec.shell, mode: "host" as const } },
+  };
   fs.mkdirSync(cfg.exec.dir, { recursive: true });
   const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() }) as any[];
   const names2 = tools.map((t) => t.name);
-  assert.ok(!names2.includes("write_file"), `host 模式还留着 write_file：${names2.join(",")}`);
+  assert.ok(names2.includes("write_file"), `UFA 还要能写文件：${names2.join(",")}`);
   assert.ok(names2.includes("read_file"), "读文件要留着，她得看自己的 prompt/topics");
-  assert.ok(names2.includes("terminal"));
+  assert.ok(!names2.includes("terminal"), `UFA 不该有 terminal：${names2.join(",")}`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -264,12 +269,16 @@ test("plan：list 给得出刚加的，help 列出四个动作", async () => {
   assert.match(h.content.map((c: any) => c.text ?? "").join(""), /add[\s\S]*done[\s\S]*list/);
 });
 
-test("terminal：名字换了，描述里说清列目录也走它", async () => {
-  const { tools } = setup();
-  const t = tools.find((x: any) => x.name === "terminal");
-  assert.ok(t, "工具名该是 terminal");
+test("terminal：WA 始终有，描述里说清列目录也走它", async () => {
+  // UFA 有没有 terminal 由 host+审批决定，见 tool-profiles.test.ts
+  const cfg = loadConfig();
+  const waTools = createTools({
+    store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now(), profile: "wa",
+  }) as any[];
+  const t = waTools.find((x: any) => x.name === "terminal");
+  assert.ok(t, "WA 的工具名该是 terminal");
   assert.match(t.description, /列目录/);
-  assert.ok(!tools.some((x: any) => x.name === "run_shell"), "旧名字该没了");
+  assert.ok(!waTools.some((x: any) => x.name === "run_shell"), "旧名字该没了");
 });
 
 // ---------- chat：说话与翻记录收成一个入口 ----------
@@ -368,4 +377,38 @@ test("plan add：同一条没停之前不会排第二遍", async () => {
   assert.equal(a.details?.ok, true);
   assert.equal(b.details?.duplicate, true, "第二条该被认成重复");
   assert.match(b.content.map((c: any) => c.text ?? "").join(""), /已经有一条一样的/);
+});
+
+// ---------------------------------------------------------------- approval（UFA）
+test("approval：list 看申请、get 看一条、decide 写同一张表", async () => {
+  const { store, get } = setup();
+  const a = createApproval(store, { taskId: 5, workerId: "wa-1", action: "shell: npm publish", why: "发布" });
+
+  const listed = await run(get("approval"), { action: "list", status: "pending" });
+  assert.equal(listed.details?.ok, true, listed.text);
+  assert.match(listed.text, /npm publish/);
+  assert.equal(listed.details?.count, 1);
+
+  const one = await run(get("approval"), { action: "get", id: a.id });
+  assert.equal(one.details?.ok, true);
+  assert.equal(one.details?.approval?.id, a.id);
+
+  const decided = await run(get("approval"), { action: "decide", id: a.id, decision: "approved", by: "u1" });
+  assert.equal(decided.details?.ok, true, decided.text);
+  assert.equal(getApproval(store, a.id)?.status, "approved");
+  assert.equal(getApproval(store, a.id)?.decided_by, "u1");
+});
+
+test("approval 只给 UFA：WA 工具集里没有这个工具", () => {
+  const cfg = loadConfig();
+  const store = new Store(":memory:");
+  const waTools = createTools({
+    store, hub: {} as any, cfg, now: () => Date.now(), profile: "wa",
+  }) as any[];
+  assert.equal(waTools.some((t) => t.name === "approval"), false);
+
+  const ufaTools = createTools({
+    store, hub: {} as any, cfg, now: () => Date.now(),
+  }) as any[];
+  assert.equal(ufaTools.some((t) => t.name === "approval"), true);
 });

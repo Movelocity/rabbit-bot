@@ -68,6 +68,24 @@ test("健康检查不需要 token", async () => {
   assert.equal(r.body.data.status, "ok");
 });
 
+test("静态只读看板不需要 token：/ 和 /ui/* 都返回正确类型", async () => {
+  const page = await fetch(`${base}/`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-type") ?? "", /text\/html/);
+  assert.match(await page.text(), /Rabbit Bot 只读看板/);
+
+  const css = await fetch(`${base}/ui/style.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+
+  const js = await fetch(`${base}/ui/app.js`);
+  assert.equal(js.status, 200);
+  assert.match(js.headers.get("content-type") ?? "", /javascript/);
+
+  // 路径穿越不能读到 web/ 之外的文件（编码后的斜杠不会被 URL 规范化掉）
+  assert.equal((await call("/ui/..%2fpackage.json")).status, 404);
+});
+
 test("池：列表、读消息、搜索", async () => {
   const list = await call("/v1/pools");
   assert.equal(list.status, 200);
@@ -82,6 +100,38 @@ test("池：列表、读消息、搜索", async () => {
   assert.equal(found.body.data.hits, 1);
   const tooShort = await call("/v1/pools/p1/search?q=火");
   assert.equal(tooShort.status, 400);
+});
+
+test("用户：列表、手动改名、回填历史消息", async () => {
+  const before = await call("/v1/users");
+  assert.equal(before.status, 200);
+  const user = before.body.data.find((u: any) => u.identities.some((i: any) => i.platform_user_id === "u1"));
+  assert.ok(user);
+  assert.equal(user.identities[0].display_name, "小王");
+
+  const patched = await call(`/v1/users/${user.user_id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: "王小明", backfill: true }),
+  });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.data.display_name, "王小明");
+  assert.equal(patched.body.data.backfilled, 1);
+
+  const after = await call("/v1/users");
+  const updated = after.body.data.find((u: any) => u.user_id === user.user_id);
+  assert.equal(updated.display_name, "王小明");
+  assert.equal(updated.identities[0].display_name, "王小明");
+
+  const msgs = await call("/v1/pools/p1/messages?limit=5");
+  assert.equal(msgs.body.data.messages[0].sender, "王小明");
+  assert.equal(msgs.body.data.messages[0].sender_name, "王小明", "backfill 后历史消息原名也改了");
+
+  assert.equal((await call(`/v1/users/${user.user_id}`, {
+    method: "PATCH", body: JSON.stringify({ display_name: "  " }),
+  })).status, 400);
+  assert.equal((await call("/v1/users/u_nope", {
+    method: "PATCH", body: JSON.stringify({ display_name: "x" }),
+  })).status, 404);
 });
 
 test("计划：写、列、改状态", async () => {
@@ -153,7 +203,66 @@ test("图片：列表与原始字节，越界拒绝", async () => {
   assert.equal(escape.status, 400);
 });
 
+test("任务面板：6 个路由 + 鉴权与校验", async () => {
+  const created = await call("/v1/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "纪要", goal: "整理会议纪要", work_dir: dir, dispatch: false,
+      deliverable: "notes.md", constraints: "只读", acceptance: "有结论", files: ["a.txt"],
+    }),
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+  assert.equal(created.body.data.name, "#纪要");
+  assert.equal(created.body.data.status, "pending");
+  assert.equal(created.body.data.goal, "整理会议纪要");
+  assert.match(created.body.data.start_at_local, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+  const got = await call(`/v1/tasks/${id}`);
+  assert.equal(got.status, 200);
+  assert.equal(got.body.data.id, id);
+
+  const list = await call("/v1/tasks?status=pending&limit=10");
+  assert.equal(list.status, 200);
+  assert.ok(list.body.data.some((t: any) => t.id === id));
+
+  const note = await call(`/v1/tasks/${id}/note`, { method: "POST", body: JSON.stringify({ line: "开始处理" }) });
+  assert.equal(note.status, 200);
+  assert.match(note.body.data.note, /开始处理/);
+
+  const status = await call(`/v1/tasks/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status: "running", result: "进行中" }),
+  });
+  assert.equal(status.status, 200);
+  assert.equal(status.body.data.status, "running");
+  assert.equal(status.body.data.result, "进行中");
+
+  const cancelled = await call(`/v1/tasks/${id}/cancel`, { method: "POST" });
+  assert.equal(cancelled.status, 200);
+  assert.equal(cancelled.body.data.status, "cancelled");
+
+  // Bearer + 参数校验
+  assert.equal((await call("/v1/tasks", { auth: null })).status, 401);
+  assert.equal((await call("/v1/tasks", { method: "POST", body: JSON.stringify({ deliverable: "x" }) })).status, 400);
+  assert.equal((await call("/v1/tasks", {
+    method: "POST", body: JSON.stringify({ goal: "x", work_dir: dir, dispatch: false }),
+  })).status, 400, "缺 name 要 400");
+  assert.equal((await call("/v1/tasks", {
+    method: "POST", body: JSON.stringify({ name: "  ", goal: "x", work_dir: dir, dispatch: false }),
+  })).status, 400, "空白 name 要 400");
+  assert.equal((await call(`/v1/tasks/${id}/note`, { method: "POST", body: JSON.stringify({ line: "  " }) })).status, 400);
+  assert.equal((await call(`/v1/tasks/${id}/status`, { method: "POST", body: JSON.stringify({ status: "wat" }) })).status, 400);
+  assert.equal((await call("/v1/tasks/999999")).status, 404);
+  assert.equal((await call("/v1/tasks/abc")).status, 400);
+});
+
 test("未知路由 404，缺 token 时也不泄露路由", async () => {
   assert.equal((await call("/v1/nope")).status, 404);
   assert.equal((await call("/v1/nope", { auth: null })).status, 401);
+  // Web 只读：原来的发消息写接口已经移除
+  assert.equal((await call("/v1/pools/p1/messages", {
+    method: "POST",
+    body: JSON.stringify({ text: "只读看板不该能发消息" }),
+  })).status, 404);
 });
