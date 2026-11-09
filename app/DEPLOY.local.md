@@ -75,13 +75,23 @@ npm rebuild better-sqlite3
 node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # 冒烟
 ```
 
-## 飞书接入
+## IM 接入（飞书 / Matrix）
+
+### 飞书
 
 - **必须是独立飞书应用**，不能复用 Hermes 的 app：同一 app 两条长连接，事件只推给其中一条，两个服务互相抢消息且都不报错。
 - 权限：`im:message`、`im:message.p2p_msg`、`im:message.group_at_msg`（可选 `im:message.group_msg`、`im:chat:readonly`、`contact:user.base:readonly`）。
 - 事件：`im.message.receive_v1`（长连接模式）；表情回复另需 `im.message.reaction.created_v1`。
 - 池由**入站消息**建立，没有收到过消息就没有池，也不能主动给用户发（`open_id cross app`）。
 - 当前池：`feishu:oc_5756b09a832818f7bc22625cb96c7235`（私聊），user `u_ffc5015d`。
+
+### Matrix
+
+- 凭据：环境变量 `MATRIX_TOKEN`（access token，不进配置文件）。
+- 配置：`adapters.matrix.enabled`（默认 false）、`homeserver`（自建 Continuwuity）、`userId`，以及 `ownerIds`（主人自己的 mxid：群里不 @ 也要回）。
+- 事件来源是长轮询 `/sync`；`since` 令牌写在 `data/matrix-sync.json`，重启后从上次位置接着读，首次启动不回放历史。
+- 加密房间不解密：`m.room.encrypted` 只 warn 一次，消息进不来——看起来连着，其实收不到。
+- Matrix 没有「私聊」概念，按房间成员数 ≤2 判为私聊；判错会导致群聊里不 @ 就不唤醒。
 
 ## 模型与上下文
 

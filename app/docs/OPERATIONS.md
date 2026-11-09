@@ -19,7 +19,7 @@ pm2 logs rabbit-bot --lines 50
 pm2 list
 ```
 
-**不要同时用 pm2 和 `bash scripts/run.sh fg`**——两个进程会抢同一条飞书消息，表现是「图有时能看有时看不到」「日志时有时无」。
+**不要同时用 pm2 和 `bash scripts/run.sh fg`**——两个进程会抢同一条 IM 消息（飞书/Matrix），表现是「图有时能看有时看不到」「日志时有时无」。
 
 ## 注入
 

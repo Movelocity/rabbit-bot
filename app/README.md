@@ -1,6 +1,6 @@
 # rabbit-bot
 
-一个跑在飞书上的聊天 Agent。**池子就是上下文**——它没有会话记忆，每一轮都从池子里读最近的对话和记忆文件，然后决定说不说、说什么。
+一个跑在飞书、Matrix 等 IM 上的聊天 Agent。**池子就是上下文**——它没有会话记忆，每一轮都从池子里读最近的对话和记忆文件，然后决定说不说、说什么。
 
 设计原则：调度、去重、游标、预算这些**全是确定性代码**；模型只负责一件事——说话。
 
@@ -12,8 +12,11 @@ npm run build
 
 mkdir -p ~/.config/rabbit-bot && cat > ~/.config/rabbit-bot/env <<'EOF'
 DEEPSEEK_API_KEY=...
+# 至少启用一个真实适配器：飞书用 FEISHU_*，Matrix 用 MATRIX_TOKEN
 FEISHU_APP_ID=...
 FEISHU_APP_SECRET=...
+# 启用 Matrix 时再填：
+# MATRIX_TOKEN=...
 RABBIT_BOT_INJECT_TOKEN=$(openssl rand -hex 24)   # 本地注入口用，必须设
 EOF
 chmod 600 ~/.config/rabbit-bot/env
@@ -22,7 +25,8 @@ pm2 start ecosystem.config.cjs     # 用 pm2，别同时手工 run.sh（会起�
 npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 / 唤醒分布
 ```
 
-缺任一凭据进程会 `exit 2` 不启动；已经有实例在跑会 `exit 3`。
+适配器在 `config/default.json` / `config/local.json` 的 `adapters.feishu.enabled`、`adapters.matrix.enabled` 里开关（默认飞书开、Matrix 关），至少启用一个真实适配器。
+飞书启用但缺 `FEISHU_*`、或 Matrix 启用但缺 `MATRIX_TOKEN`，都会 `exit 2` 不启动（`run.sh` 预检）；已经有实例在跑会 `exit 3`。
 
 ## 定制它（人设 / 提示词 / 话题库）
 
@@ -53,7 +57,8 @@ cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然
 | 方式 | 命令 |
 |---|---|
 | 飞书私聊 / 群里 @ | 直接发 |
-| 本地注入（绕过飞书） | `npm run inject -- "在吗"` |
+| Matrix 私聊 / 群里 @ | 直接发（私聊按房间成员数 ≤2 判定） |
+| 本地注入（绕过 IM） | `npm run inject -- "在吗"` |
 | 浏览器管理台 | 打开 `http://127.0.0.1:3738/`（端口见 `config.api.port`） |
 
 ## Web 管理台
@@ -63,16 +68,16 @@ cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然
 `RABBIT_BOT_API_TOKEN`（≥16 位）。页面本身不需要登录就能打开，但所有数据接口都要
 Bearer token，token 不对会明确提示。
 
-**聊天收发和审批仍在飞书 IM；Web 只管理人格、提示词、记忆和只读面板。**
+**聊天收发走已启用的 IM（飞书 / Matrix）；Web 负责任务审批、人格、提示词、记忆和只读面板。**
 
 能做的事：
 
 - 会话：看池列表（alias / 标题 / 私聊群聊 / 最后消息时间 / 总数），看消息时间线并区分机器人自己发的；每 3 秒轮询，支持向上翻页。
-- 任务：按 status 过滤，展开看 deliverable / constraints / acceptance / result / artifact / note 和 worker 快照。
-- 权限：按 status 过滤查看权限申请；**审批请在飞书里完成，此页只展示**。
+- 任务：按 status 过滤，展开看 deliverable / constraints / acceptance / result / artifact / note 和 worker 快照；`pending_approval` 的任务可在这里改描述后通过并执行 / 驳回。
+- 权限：按 status 过滤查看权限申请；**这是运行时权限申请，审批请在已启用的 IM（飞书 / Matrix）里完成，此页只展示**。
 - Worker：只读查看 worker_id / name / kind / status / last_seen_at。
 - 计划：只读查看待办列表。
-- 记忆：按当前池和用户查看，可直接改正文或删除（新增/过期仍走飞书）。
+- 记忆：按当前池和用户查看，可直接改正文或删除（新增/过期仍走 IM）。
 - 人格：可直接编辑人设和系统提示词，保存到运行时目录；下一轮换新会话生效。
 - 技能：只读列表（名字、描述、SKILL.md / data 路径）。
 - 顶栏显示 API 健康状态和当前连接地址；移动端可用。
@@ -87,8 +92,8 @@ npm run web -- --port 3748  # 正式服务占着 3738 时换端口
 npm run web -- --host 0.0.0.0
 ```
 
-demo 模式不开飞书、不需要 LLM 凭据，提供只读会话/任务面板和人格、提示词、记忆管理。
-它没有入池能力，也不会生成回复；聊天和审批仍走飞书 IM。
+demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任务面板和人格、提示词、记忆管理。
+它没有入池能力，也不会生成回复；聊天收发走已启用的 IM（飞书 / Matrix），任务审批在 Web「任务」页。
 
 ## 真实 worker 与 e2e
 
@@ -147,7 +152,7 @@ npx tsx scripts/e2e-wa.ts
 ```
 src/core/        调度器、消息池、计划、循环守卫、读图、沙盒文件区、容器沙盒
 src/agent/       pi 会话封装（engine）、工具定义（tools）、提示词（prompt）
-src/adapters/    飞书 / mock（sim 与测试用）
+src/adapters/    飞书 / Matrix / mock（sim 与测试用）
 src/ctl.ts       运维命令（pause / resume / status / usage / wakes / plans …）
 scripts/         run.sh（pm2 的前台入口：读 env → 预检 → exec node）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
 docker/          沙盒镜像 Dockerfile
@@ -155,13 +160,16 @@ test/            257 条，node --test
 data/            运行时数据（db / media / sandbox / 会话），.gitignore
 ```
 
-## 工具清单（模型能调的 7 个）
+## 工具清单（模型能调的 10 个）
 
 | 工具 | 干什么 |
 |---|---|
 | `chat` | `send` 发消息（唯一对外出口）/ `skip` 这轮不回 / `view` 读图进上下文 / `list` 有哪些池 / `search` 翻原话 |
 | `memory` | `recent` / `search` / `add` / `expire`（不再成立，关掉）/ `update`（就地订正）/ `help` |
 | `plan` | `add` / `done` / `list` / `help` |
+| `approval` | 查看和裁决 worker 的权限申请：`list` / `get` / `decide`（approved / rejected）/ `help` |
+| `task` | 任务面板：`create`（建任务，pending_approval 等 Web 审批）/ `list` / `get` / `updates` / `resume` / `note` / `cancel` / `status` / `help` |
+| `worker` | `list` 看已注册的 worker（id / 名字 / kind / 状态 / 最近心跳）/ `help` |
 | `read_file` / `write_file` | 读写 `/work` 里的文件（整份覆盖；追加走 `terminal` 的 `>>`） |
 | `terminal` | 在 Docker 沙盒里跑命令：列目录、`rg` 搜内容、算数（碰不到宿主文件系统） |
 | `rb` | 只给运维和查询：`pool-*` / `plan-list` / `mem-search` / `img-*` / `web-*` / `skills`；业务写入会被挡住并指向对应工具 |

@@ -1,15 +1,19 @@
-# rabbit-bot —— 聊天池 Agent v1（pi + 飞书）
+# rabbit-bot —— 聊天池 Agent（pi + 多 IM）
 
 需求见 [需求文档.md](./需求文档.md)（唯一依据）。代码在 `app/`。
+
+支持飞书、Matrix 等 IM。IM 适配层是插件接口（`IMAdapter`），新增平台只需要实现并注册适配器，池 / 调度 / Agent 都不用改。
 
 用户消息不直接发给 Agent，而是进**聊天池**；程序按 tick / 私聊 / 群里被@ / 计划到点 唤醒 Agent（单实例排队）。
 **确定性逻辑全部是普通代码**，只有真正需要唤醒时才调用 LLM（pi）。
 
 ## 架构
 
+所有适配器都实现统一的 `IMAdapter` 插件接口：
+
 ```
 飞书适配器(长连接) ─┐
-QQ 适配器(空实现) ──┼→ Hub 入池(去重/身份映射/占位描述) → SQLite
+Matrix 适配器(/sync) ┼→ Hub 入池(去重/身份映射/占位描述) → SQLite
 mock 适配器(模拟) ──┘        │
                             ↓ onMessage
                  Scheduler: tick(3min，活跃时缩短) / 去抖(私聊、群@) / 计划匹配(Asia/Shanghai)
@@ -34,13 +38,23 @@ mock 适配器(模拟) ──┘        │
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
 | `src/core/tool-call.ts` | 工具调用的判定（`didSend` / `didSkip` / `didPlanAdd` / `didPlanDone`）：二级入口看名字不够，还要看 action |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
-| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（add/done/list）、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
+| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（add/done/list）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
 | `src/agent/faux.ts` | 桩 LLM（pi 自带 faux provider + 确定性脚本），用于模拟器/测试 |
-| `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`qq.ts`（空实现）；`mock.ts` |
+| `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`matrix.ts`；`mock.ts` |
 | `src/app.ts` / `main.ts` / `sim.ts` / `ctl.ts` | 组装与唤醒处理 / 正式入口 / 本地模拟器 / 运维命令 |
 
 Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.jsonl` + SQLite `wake_log`），不会发给用户。
+
+## IM 适配器
+
+| 适配器 | 状态 | 凭据 / 配置 | 说明 |
+|---|---|---|---|
+| 飞书 | 内置，默认开启 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 长连接接收事件；支持飞书表情与 reaction（表情回复） |
+| Matrix | 内置，默认关闭 | `MATRIX_TOKEN` | 自建 Continuwuity；`/sync` 长轮询；加密房间不解密；私聊按房间成员数 ≤2 判定 |
+| mock | 测试 / 模拟器用 | 无 | `npm run sim` / `npm run demo` / 测试用，不连真实 IM |
+
+其他 IM：实现 `IMAdapter`（`src/adapters/types.ts`）并注册即可，池 / 调度 / 工具都不变。
 
 ## 配置
 
@@ -71,13 +85,16 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 | 变量 | 必需 | 说明 |
 |---|---|---|
-| `FEISHU_APP_ID`、`FEISHU_APP_SECRET` | 是 | 飞书自建应用凭据 |
+| `FEISHU_APP_ID`、`FEISHU_APP_SECRET` | 飞书适配器启用时必需 | 飞书自建应用凭据 |
+| `MATRIX_TOKEN` | Matrix 适配器启用时必需 | Matrix 账号的 access token |
 | 所选 LLM 的 key，如 `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MOONSHOT_API_KEY` / `ZAI_API_KEY` / `OPENROUTER_API_KEY` / `XAI_API_KEY` / `GEMINI_API_KEY` … | 是（一个） | pi 自己从环境变量读取，变量名见 pi 文档 providers.md |
 | `RABBIT_BOT_CONFIG` | 否 | 额外配置文件路径 |
 | `RABBIT_BOT_ENV_FILE` | 否 | `scripts/run.sh` 启动时 source 的 env 文件，默认 `~/.config/rabbit-bot/env`（放仓库外，chmod 600） |
 | `PI_OFFLINE`、`PI_TELEMETRY` | 否 | 程序默认设为 1 / 0（不自动刷新模型目录、关遥测） |
 
-飞书后台需要：启用机器人；事件订阅方式选“使用长连接接收事件”，订阅 `im.message.receive_v1`；
+至少启用一个真实适配器（飞书或 Matrix）；适配器开关见 `config/default.json` / `config/local.json` 的 `adapters.*.enabled`。
+
+飞书适配器还需要在飞书后台：启用机器人；事件订阅方式选“使用长连接接收事件”，订阅 `im.message.receive_v1`；
 权限 `im:message`、`im:message.p2p_msg`、`im:message.group_at_msg`；如需在群里未被@也能读到消息，再开 `im:message.group_msg`；
 可选 `im:chat:readonly`（群名）、`contact:user.base:readonly`（发送者姓名，没有则显示“用户xxxx”）。
 
@@ -100,7 +117,8 @@ scripts/run.sh status | stop | restart | logs | fg
 
 # 运维
 npm run ctl -- pause | resume | status | usage | wakes 5 | pools | plans | handoffs | identities
-npm run ctl -- link feishu <open_id> <user_id>   # 跨平台身份合并
+npm run ctl -- link feishu <open_id> <user_id>     # 跨平台身份合并（飞书）
+npm run ctl -- link matrix <@user:server> <user_id>  # 同理可合并 Matrix 身份
 npm run ctl -- models [provider]                 # pi 支持的模型、当前有凭据的 provider
 ```
 
@@ -111,11 +129,11 @@ npm run ctl -- models [provider]                 # pi 支持的模型、当前�
 
 ## 桩 / 未实现
 
-- **QQ**：只有接口和空实现（`src/adapters/qq.ts`）。
+- **更多 IM 适配器**：目前内置飞书 + Matrix，其他平台（QQ / 微信等）按 `IMAdapter` 接口接；Matrix 加密房间暂不解密。
 - **非文字消息**：只做占位描述（`[图片]`、`[语音]`、`[文件:名字]` 等），没有识别/转写。
 - **表情映射表**：`emoji.map` 默认为空；飞书 sticker 需要 file_key（通常只能用收到过的表情包的 file_key），白名单待定。
 
-## 飞书表情
+## 飞书表情（飞书适配器专属）
 
 - 映射表 `app/config/emoji-feishu.json`：覆盖飞书官方《表情文案说明》里全部 182 个 `emoji_type`，每项有微信式中文 id + 别名，`common: true` 的 38 个写进提示词。中文 id 是按官方表情图人工定的，客户端叫法不同时在 `aliases` 里补即可（改完重启）。
 - 出站：Agent 写 `[emoji:捂脸]`；含内置表情的消息以**富文本 post** 发送（`{"tag":"emotion","emoji_type":"FACEPALM"}`，官方文档明确支持），纯文字仍发 text。id/别名都不认识 → 原样文字。
@@ -123,7 +141,6 @@ npm run ctl -- models [provider]                 # pi 支持的模型、当前�
 - 表情回复（可选）：后台“事件与回调”订阅 `im.message.reaction.created_v1`，权限 `im:message.reactions:read`（或 `im:message:readonly`）。入池为 `[表情回复] 给你「…」点了 [emoji:强]`，不立即唤醒，等 tick。
 - **潮汐闸门**：v1 不做。
 - **桩 LLM**：`llm.provider = "faux"` 只用于模拟器和测试，正式入口会拒绝。
-- 飞书适配器已按官方 SDK 编写，但因为没有凭据，**未连过真实飞书**。
 
 ## 与需求文档的差异 / 实现取舍
 

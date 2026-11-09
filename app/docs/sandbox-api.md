@@ -77,7 +77,7 @@ skills/<name>/
 - 默认绑 `0.0.0.0`（`config.api.host`），因为 Docker 容器要通过 `host.docker.internal` 连进来；局域网可访问，**全靠 Bearer token**。想只给容器用，把 `host` 改成 docker 网关地址并单独给宿主留 `127.0.0.1` 的入口。
 - token 不对的请求只回 401，不泄露路由是否存在。
 - 沙盒文件路径走 `createSandboxFs`，`../` 和符号链逃逸一律 400；图片走 `data/media|inbox` 白名单。
-- API 不返回飞书 / LLM 密钥；联网能力只代理 DeepSeek 的 search/fetch。
+- API 不返回 IM / LLM 密钥；联网能力只代理 DeepSeek 的 search/fetch。
 
 ## 本地验证
 
