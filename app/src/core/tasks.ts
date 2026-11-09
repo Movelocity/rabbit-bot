@@ -1,9 +1,9 @@
 /** 任务面板：UFA 登记、WA 执行、双方都从这里读写（SPEC §3.3）。 */
 import type { Store } from "./db.ts";
 
-export type TaskStatus = "pending" | "running" | "blocked" | "done" | "failed" | "cancelled";
+export type TaskStatus = "pending_approval" | "pending" | "running" | "blocked" | "done" | "failed" | "cancelled";
 
-export const TASK_STATUSES: TaskStatus[] = ["pending", "running", "blocked", "done", "failed", "cancelled"];
+export const TASK_STATUSES: TaskStatus[] = ["pending_approval", "pending", "running", "blocked", "done", "failed", "cancelled"];
 
 export function isTaskStatus(v: unknown): v is TaskStatus {
   return typeof v === "string" && (TASK_STATUSES as string[]).includes(v);
@@ -165,11 +165,13 @@ export function listTasks(store: Store, filter: TaskFilter = {}): Task[] {
 }
 
 export type TaskPatch = Partial<Pick<Task,
-  "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
+  "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files"
+  | "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
   | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at" | "doc_path"
 >>;
 
 const PATCH_KEYS = [
+  "name", "goal", "deliverable", "constraints", "acceptance", "files",
   "status", "stage", "worker_id", "claimed_at", "lease_until", "attempt", "note", "result", "artifact", "end_at",
   "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at", "doc_path",
 ] as const;

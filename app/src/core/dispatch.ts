@@ -127,21 +127,11 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string } = {}): stri
     `  -d '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
     "```",
     "",
-    "### 4. 权限申请",
+    "### 4. 执行边界",
     "",
-    "需要越权或动工作目录之外的东西时，先申请，再轮询结果：",
+    "本任务审批通过后以无审批模式执行，执行阶段没有运行时审批，不要调用 approvals 接口等待批准。",
     "",
-    "```bash",
-    'curl -s -X POST "$RB_API_BASE/v1/approvals" \\',
-    '  -H "Authorization: Bearer $RB_API_TOKEN" \\',
-    '  -H "Content-Type: application/json" \\',
-    `  -d '{"task_id":${id},"worker_id":"${workerId}","action":"要做的事","detail":"路径或参数","why":"为什么需要"}'`,
-    "",
-    'curl -s "$RB_API_BASE/v1/approvals/<审批id>" \\',
-    '  -H "Authorization: Bearer $RB_API_TOKEN"',
-    "```",
-    "",
-    "`status=approved` 才继续；`rejected` / `timeout` 立即停下，用 fail 回传。",
+    "只能在上面「工作目录」指定的目录内读写和运行命令，不得越出工作目录；越界视为违规，任务会按失败处理。",
     "",
     "## 执行要求",
     "",
@@ -224,6 +214,7 @@ function executorArgs(task: Task, prompt: string, resume: boolean): { bin: strin
   const executor: Executor = task.executor === "mimo" ? "mimo" : "opencode";
   const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []), "--dir", task.work_dir,
     "--title", sessionTitle(task), "--format", "json"];
+  if (executor === "opencode") args.push("--dangerously-skip-permissions");
   const model = String(task.model ?? "").trim();
   if (model) args.push(executor === "mimo" ? "--model" : "-m", model);
   return { bin: executor === "mimo" ? MIMO_BIN : "opencode", args };

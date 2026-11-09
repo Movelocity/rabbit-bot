@@ -665,7 +665,8 @@
       ? " done"
       : ["failed", "rejected", "timeout", "offline", "blocked"].includes(s)
         ? " closed"
-        : ["running", "pending"].includes(s) ? " info" : "";
+        : s === "pending_approval" ? " warn"
+          : ["running", "pending"].includes(s) ? " info" : "";
     return el("span", "badge" + cls, s || "—");
   }
 
@@ -683,6 +684,98 @@
     return first.length > 80 ? `${first.slice(0, 80)}…` : first;
   }
 
+  function formField(label, node) {
+    const field = el("label", "field");
+    field.appendChild(el("span", "", label));
+    field.appendChild(node);
+    return field;
+  }
+
+  function taskApprovalForm(t) {
+    const form = el("div", "task-approve");
+    form.appendChild(el("h3", "task-approve-title", "审批并执行"));
+
+    const name = el("input");
+    name.type = "text";
+    name.value = t.name || "";
+    const goal = el("textarea");
+    goal.value = t.goal || "";
+    const deliverable = el("textarea");
+    deliverable.value = t.deliverable || "";
+    const constraints = el("textarea");
+    constraints.value = t.constraints || "";
+    const acceptance = el("textarea");
+    acceptance.value = t.acceptance || "";
+
+    const grid = el("div", "task-approve-grid");
+    grid.appendChild(formField("name", name));
+    grid.appendChild(formField("goal", goal));
+    grid.appendChild(formField("deliverable", deliverable));
+    grid.appendChild(formField("constraints", constraints));
+    grid.appendChild(formField("acceptance", acceptance));
+    form.appendChild(grid);
+    form.appendChild(el("p", "muted task-approve-hint", "work_dir / executor / model 只读，v1 不支持在 Web 修改。"));
+
+    const actions = el("div", "card-actions");
+    const approve = el("button", "primary small", "通过并执行");
+    approve.type = "button";
+    const reject = el("button", "ghost small", "驳回");
+    reject.type = "button";
+    actions.appendChild(approve);
+    actions.appendChild(reject);
+    form.appendChild(actions);
+
+    approve.addEventListener("click", async () => {
+      const body = {};
+      const collect = (key, node) => {
+        const value = node.value;
+        if (value !== (t[key] ?? "")) body[key] = value;
+      };
+      collect("name", name);
+      collect("goal", goal);
+      collect("deliverable", deliverable);
+      collect("constraints", constraints);
+      collect("acceptance", acceptance);
+
+      const message = t.executor === "mimo"
+        ? "通过后会立即以无审批模式启动 mimo，可能执行任意命令。\n\n确定通过？"
+        : "通过后会立即以无审批模式启动 opencode（带 --dangerously-skip-permissions），可能执行任意命令。\n\n确定通过？";
+      if (!confirm(message)) return;
+
+      approve.disabled = true;
+      reject.disabled = true;
+      setPanelStatus("#tasks-status", "审批通过，正在启动…");
+      try {
+        await api(`/v1/tasks/${t.id}/approve`, { method: "POST", body });
+        setPanelStatus("#tasks-status", `任务 #${t.id} 已通过并启动。`);
+        await loadTasks();
+      } catch (e) {
+        setPanelStatus("#tasks-status", `审批失败：${friendlyError(e) || "未登录"}`, true);
+        approve.disabled = false;
+        reject.disabled = false;
+      }
+    });
+
+    reject.addEventListener("click", async () => {
+      const reason = prompt("驳回原因（可留空）");
+      if (reason === null) return;
+      approve.disabled = true;
+      reject.disabled = true;
+      setPanelStatus("#tasks-status", "正在驳回…");
+      try {
+        await api(`/v1/tasks/${t.id}/reject`, { method: "POST", body: { reason, by: "web" } });
+        setPanelStatus("#tasks-status", `任务 #${t.id} 已驳回，未执行。`);
+        await loadTasks();
+      } catch (e) {
+        setPanelStatus("#tasks-status", `驳回失败：${friendlyError(e) || "未登录"}`, true);
+        approve.disabled = false;
+        reject.disabled = false;
+      }
+    });
+
+    return form;
+  }
+
   async function loadTasks(silent) {
     if (!silent) setPanelStatus("#tasks-status", "加载中…");
     try {
@@ -692,6 +785,9 @@
       if (state.expandedTaskId !== null && !state.tasks.some((t) => t.id === state.expandedTaskId)) {
         state.expandedTaskId = null;
       }
+      const editingPending = state.expandedTaskId !== null
+        && state.tasks.some((t) => t.id === state.expandedTaskId && t.status === "pending_approval");
+      if (silent && editingPending) return;
       renderTasks();
       setPanelStatus("#tasks-status", state.tasks.length ? "" : "没有任务。");
       if (state.expandedTaskId !== null) await loadTaskSnapshot(state.expandedTaskId, true);
@@ -757,6 +853,9 @@
         detail.appendChild(detailRow("acceptance", t.acceptance));
         detail.appendChild(detailRow("result", t.result));
         detail.appendChild(detailRow("artifact", t.artifact, true));
+        detail.appendChild(detailRow("work_dir", t.work_dir, true));
+        detail.appendChild(detailRow("executor", t.executor, true));
+        detail.appendChild(detailRow("model", t.model, true));
         detail.appendChild(detailRow("note", t.note));
         detail.appendChild(detailRow("start_at", t.start_at_local || formatTs(t.start_at)));
         detail.appendChild(detailRow("end_at", t.end_at_local || (t.end_at ? formatTs(t.end_at) : "")));
@@ -769,6 +868,7 @@
             : (t.worker_id ? `${t.worker_id} · 没有 worker 快照` : "未领取"),
           true,
         ));
+        if (t.status === "pending_approval") detail.appendChild(taskApprovalForm(t));
         card.appendChild(detail);
       }
       list.appendChild(card);

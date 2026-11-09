@@ -272,7 +272,7 @@ test("任务面板：6 个路由 + 鉴权与校验", async () => {
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const id = created.body.data.id;
   assert.equal(created.body.data.name, "#纪要");
-  assert.equal(created.body.data.status, "pending");
+  assert.equal(created.body.data.status, "pending_approval");
   assert.equal(created.body.data.goal, "整理会议纪要");
   assert.match(created.body.data.start_at_local, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
 
@@ -280,7 +280,7 @@ test("任务面板：6 个路由 + 鉴权与校验", async () => {
   assert.equal(got.status, 200);
   assert.equal(got.body.data.id, id);
 
-  const list = await call("/v1/tasks?status=pending&limit=10");
+  const list = await call("/v1/tasks?status=pending_approval&limit=10");
   assert.equal(list.status, 200);
   assert.ok(list.body.data.some((t: any) => t.id === id));
 

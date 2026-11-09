@@ -28,7 +28,7 @@ import {
 import { listWorkers } from "../core/workers.ts";
 import { listTaskEvents } from "../core/task-events.ts";
 import {
-  DEFAULT_CAPTURE_MS, isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc,
+  DEFAULT_CAPTURE_MS, isRunnerAlive, resumeTask, stopTask,
   type DispatchDeps,
 } from "../core/dispatch.ts";
 import { resolveApiToken } from "../api-token.ts";
@@ -472,7 +472,7 @@ export function createTools(d: ToolDeps) {
 
   const TASK_HELP = [
     "task 的用法（action 必填）：",
-    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at? dispatch?  建任务（默认立刻起一次性进程）",
+    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at?  建任务（等 Web 审批通过后执行）",
     "  list    status? limit?                                              看任务",
     "  get     id                                                          看一条（带最近 3 条事件）",
     "  updates id limit?                                                   看任务池最近事件（带时间戳）",
@@ -484,6 +484,7 @@ export function createTools(d: ToolDeps) {
     "",
     "create 的 name 必填，格式 #xxx（一眼认得出这是什么任务）；没带 # 会自动补上。",
     "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
+    "create 只登记成 pending_approval，不会立刻执行；要在 Web 任务页改描述并点「通过并执行」后才会启动。",
     "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
     "",
     `status 只能是：${TASK_STATUSES.join(" / ")}`,
@@ -504,7 +505,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / start_at；默认 dispatch 起一次性进程）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / start_at；建完是 pending_approval，等 Web 审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -516,7 +517,6 @@ export function createTools(d: ToolDeps) {
       work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
       executor: Type.Optional(Type.String({ description: "create 用：opencode（默认）或 mimo" })),
       model: Type.Optional(Type.String({ description: "create 用：执行器模型，留空用执行器默认" })),
-      dispatch: Type.Optional(Type.Boolean({ description: "create 用：是否建完立刻启动一次性进程，默认 true" })),
       goal: Type.Optional(Type.String({ description: "create 用：一句话说清要达成什么" })),
       deliverable: Type.Optional(Type.String({ description: "create 用：交付物长什么样" })),
       constraints: Type.Optional(Type.String({ description: "create 用：不能碰什么、必须遵守什么" })),
@@ -566,18 +566,12 @@ export function createTools(d: ToolDeps) {
               work_dir: workDir,
               executor,
               model: p.model,
+              status: "pending_approval",
             });
-            if (p.dispatch === false) {
-              const view = formatTask(created);
-              return txt(`已建任务 #${created.id}「${created.name}」（${created.status}）：${created.goal}（未派发）`, { ok: true, task: view });
-            }
-            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
-            writeTaskDoc(d.store, created, { apiBase: deps.apiBase });
-            const started = await startTask(d.store, getTask(d.store, created.id)!, deps);
-            const view = formatTask(started.task);
+            const view = formatTask(created);
             return txt(
-              `已建任务 #${started.task.id}「${started.task.name}」并启动 ${executor}（session=${started.session_id || "未捕获"}）：${started.task.goal}`,
-              { ok: true, task: view, session_id: started.session_id, captured: started.captured },
+              `已建任务 #${created.id}「${created.name}」，等待 Web 审批，审批通过后才执行。`,
+              { ok: true, task: view },
             );
           }
 

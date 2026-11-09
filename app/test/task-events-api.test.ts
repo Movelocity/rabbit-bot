@@ -51,10 +51,12 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   assert.equal((await call("/v1/tasks/1/events", { auth: null })).status, 401);
   assert.equal((await call("/v1/tasks/999999/events")).status, 404);
 
-  const created = await post("/v1/tasks", { name: "#时间线", goal: "看事件时间线", work_dir: dir, dispatch: false });
+  const created = await post("/v1/tasks", { name: "#时间线", goal: "看事件时间线", work_dir: dir });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const id = created.body.data.id;
   assert.ok(created.body.data.task_pool_id);
+  const queued = await post(`/v1/tasks/${id}/status`, { status: "pending" });
+  assert.equal(queued.status, 200, JSON.stringify(queued.body));
 
   await post("/v1/workers/register", { worker_id: "wa-1", name: "本地" });
   await post("/v1/workers/wa-1/claim");

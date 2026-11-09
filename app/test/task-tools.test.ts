@@ -46,7 +46,6 @@ test("task：create → list → get → note → status → cancel", async () =
     name: "纪要",
     goal: "整理会议纪要",
     work_dir: process.cwd(),
-    dispatch: false,
     deliverable: "notes.md",
     constraints: "只读不写",
     acceptance: "有结论和待办",
@@ -56,11 +55,12 @@ test("task：create → list → get → note → status → cancel", async () =
   assert.equal(created.details?.ok, true, created.text);
   const id = created.details.task.id;
   assert.equal(created.details.task.name, "#纪要", "工具会把缺的 # 补上");
-  assert.equal(created.details.task.status, "pending");
+  assert.equal(created.details.task.status, "pending_approval");
+  assert.match(created.text, /等待 Web 审批/);
   assert.equal(getTask(store, id)?.user_id, store.lastUserId(pool!));
   assert.equal(getTask(store, id)?.start_at, 0);
 
-  const listed = await run("task", { action: "list", status: "pending" });
+  const listed = await run("task", { action: "list", status: "pending_approval" });
   assert.equal(listed.details?.ok, true, listed.text);
   assert.equal(listed.details.count, 1);
   assert.match(listed.text, /整理会议纪要/);
@@ -172,7 +172,7 @@ test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批�
 
 test("task updates / get：返回任务池里的带时间戳事件", async () => {
   const { run, store } = setup();
-  const created = await run("task", { action: "create", name: "#看进度", goal: "看进度", work_dir: process.cwd(), dispatch: false });
+  const created = await run("task", { action: "create", name: "#看进度", goal: "看进度", work_dir: process.cwd() });
   const id = created.details.task.id;
 
   appendTaskEvent(store, id, { text: "worker wa-1 领取任务，开始执行", sender: "wa-1", ts: 1000 });
@@ -199,10 +199,10 @@ test("task updates / get：返回任务池里的带时间戳事件", async () =>
 
 test("rb task-list / worker-list：只读，直接查库，不进沙盒", async () => {
   const { run, calls, store } = setup();
-  await run("task", { action: "create", name: "#查一下", goal: "查一下这个", work_dir: process.cwd(), dispatch: false });
+  await run("task", { action: "create", name: "#查一下", goal: "查一下这个", work_dir: process.cwd() });
   registerWorker(store, { workerId: "wa-1", name: "本地" });
 
-  const tasks = await run("rb", { args: "task-list --status pending" });
+  const tasks = await run("rb", { args: "task-list --status pending_approval" });
   assert.equal(tasks.details?.ok, true, tasks.text);
   assert.equal(tasks.details.count, 1);
   assert.match(tasks.text, /查一下这个/);

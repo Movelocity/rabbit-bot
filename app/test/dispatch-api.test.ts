@@ -13,6 +13,15 @@ import { getTask, updateTask } from "../src/core/tasks.ts";
 const dir = path.join(APP_ROOT, ".scratch", "dispatch-api");
 const workDir = path.join(dir, "work");
 fs.mkdirSync(workDir, { recursive: true });
+const fakeBin = path.join(dir, "fake-exec.mjs");
+fs.writeFileSync(fakeBin, `#!/usr/bin/env node
+import fs from "node:fs";
+const out = process.env.FAKE_EXEC_OUT;
+if (out) fs.writeFileSync(out, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+console.log(JSON.stringify({ type: "step_start", sessionID: "ses_api_fake" }));
+setTimeout(() => process.exit(0), 20);
+`, "utf8");
+fs.chmodSync(fakeBin, 0o755);
 const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
@@ -27,7 +36,7 @@ let server: Awaited<ReturnType<typeof startApiServer>> = null;
 let base = "";
 
 test.before(async () => {
-  server = await startApiServer({ cfg, store, log, token });
+  server = await startApiServer({ cfg, store, log, token, executorBin: fakeBin });
   const addr = server!.address() as AddressInfo;
   base = `http://127.0.0.1:${addr.port}`;
 });
@@ -58,9 +67,9 @@ test("POST /v1/tasks：name 缺失 / work_dir 缺失 / 相对 / 不存在 / exec
   assert.equal((await post("/v1/tasks", { name: "#干活", goal: "干活", work_dir: workDir, executor: "other" })).status, 400);
 });
 
-test("POST /v1/tasks dispatch=false：只登记，字段可读", async () => {
+test("POST /v1/tasks 默认 pending_approval：只登记，不写文档也不启动", async () => {
   const created = await post("/v1/tasks", {
-    name: "整理资料", goal: "整理资料", work_dir: workDir, executor: "mimo", model: "provider/model-x", dispatch: false,
+    name: "整理资料", goal: "整理资料", work_dir: workDir, executor: "mimo", model: "provider/model-x",
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const t = created.body.data;
@@ -71,7 +80,7 @@ test("POST /v1/tasks dispatch=false：只登记，字段可读", async () => {
   assert.equal(t.session_id, "");
   assert.equal(t.runner_pid, null);
   assert.equal(t.doc_path, "");
-  assert.equal(t.status, "pending");
+  assert.equal(t.status, "pending_approval");
 
   const got = await call(`/v1/tasks/${t.id}`);
   assert.equal(got.status, 200);
@@ -108,4 +117,71 @@ test("start / resume / stop：不存在 404；无 session 或已在跑 409", asy
   assert.equal(stopped.body.data.runner_pid, null);
   assert.equal(stopped.body.data.status, "pending");
   assert.equal(getTask(store, id)?.runner_pid, null);
+});
+
+test("approve：可改描述、重写任务文档、留审批痕迹，随后以无审批参数启动", async () => {
+  const created = await post("/v1/tasks", {
+    name: "#旧名", goal: "旧目标", constraints: "旧约束", work_dir: workDir,
+  });
+  const id = created.body.data.id;
+  const out = path.join(dir, `approve-${id}.json`);
+  process.env.FAKE_EXEC_OUT = out;
+
+  const approved = await post(`/v1/tasks/${id}/approve`, {
+    name: "#新名", goal: "新目标", constraints: "新约束", acceptance: "新验收", by: "tester",
+  });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const t = approved.body.data;
+  assert.equal(t.id, id);
+  assert.equal(t.name, "#新名");
+  assert.equal(t.goal, "新目标");
+  assert.equal(t.constraints, "新约束");
+  assert.equal(t.acceptance, "新验收");
+  assert.equal(t.status, "running");
+
+  const fresh = getTask(store, id)!;
+  assert.equal(fresh.doc_path, path.join(workDir, ".ufa", "tasks", `task-${id}.md`));
+  const doc = fs.readFileSync(fresh.doc_path, "utf8");
+  assert.match(doc, /新目标/);
+  assert.match(doc, /新约束/);
+  assert.match(doc, /新验收/);
+  assert.equal(doc.includes("旧目标"), false);
+  assert.match(fresh.note, /Web 审批通过（by=tester；修改字段：name, goal, constraints, acceptance）/);
+
+  const argv: string[] = JSON.parse(fs.readFileSync(out, "utf8")).argv;
+  assert.ok(argv.includes("--dangerously-skip-permissions"));
+  const runnerLog = path.join(dir, "tasks", String(id), "runner.jsonl");
+  assert.match(fs.readFileSync(runnerLog, "utf8"), /--dangerously-skip-permissions/);
+});
+
+test("reject：置 cancelled、写原因、不启动", async () => {
+  const created = await post("/v1/tasks", { name: "#驳回", goal: "别跑", work_dir: workDir });
+  const id = created.body.data.id;
+  const out = path.join(dir, `reject-${id}.json`);
+  process.env.FAKE_EXEC_OUT = out;
+
+  const rejected = await post(`/v1/tasks/${id}/reject`, { reason: "描述不清楚", by: "tester" });
+  assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.data.status, "cancelled");
+  const fresh = getTask(store, id)!;
+  assert.equal(fresh.status, "cancelled");
+  assert.match(fresh.note, /Web 驳回：描述不清楚/);
+  assert.equal(fresh.runner_pid, null);
+  assert.equal(fs.existsSync(out), false);
+  assert.equal(fs.existsSync(path.join(dir, "tasks", String(id), "runner.jsonl")), false);
+});
+
+test("approve / reject / start：只有 pending_approval 能审批，start 不能绕过", async () => {
+  const created = await post("/v1/tasks", { name: "#状态", goal: "状态测试", work_dir: workDir });
+  const id = created.body.data.id;
+
+  assert.equal((await post(`/v1/tasks/${id}/start`)).status, 409);
+  assert.equal((await post(`/v1/tasks/${id}/reject`, { reason: "不做了" })).status, 200);
+  assert.equal((await post(`/v1/tasks/${id}/approve`, { goal: "改主意了" })).status, 409);
+  assert.equal((await post(`/v1/tasks/${id}/reject`, { reason: "再拒一次" })).status, 409);
+
+  updateTask(store, id, { status: "done" });
+  assert.equal((await post(`/v1/tasks/${id}/approve`, {})).status, 409);
+  assert.equal((await post("/v1/tasks/999999/approve", {})).status, 404);
+  assert.equal((await post("/v1/tasks/999999/reject", {})).status, 404);
 });

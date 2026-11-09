@@ -86,9 +86,11 @@ test("claim：没任务返回 null，有任务原子领走并分配租约", asyn
   assert.equal(empty.status, 200);
   assert.equal(empty.body.data.task, null);
 
-  const created = await post("/v1/tasks", { name: "#验收", goal: "跑一遍验收", work_dir: dir, dispatch: false });
+  const created = await post("/v1/tasks", { name: "#验收", goal: "跑一遍验收", work_dir: dir });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const id = created.body.data.id;
+  const queued = await post(`/v1/tasks/${id}/status`, { status: "pending" });
+  assert.equal(queued.status, 200, JSON.stringify(queued.body));
 
   const claimed = await post("/v1/workers/wa-1/claim");
   assert.equal(claimed.status, 200);
@@ -161,8 +163,11 @@ test("complete：done/end_at/清 lease；重复完成 400，不匹配 409，缺 
 });
 
 test("fail：retryable 回 pending，非 retryable 置 failed", async () => {
-  const retryId = (await post("/v1/tasks", { name: "#重试", goal: "重试任务", work_dir: dir, dispatch: false })).body.data.id;
-  await post("/v1/workers/wa-1/claim");
+  const retryId = (await post("/v1/tasks", { name: "#重试", goal: "重试任务", work_dir: dir })).body.data.id;
+  const queued = await post(`/v1/tasks/${retryId}/status`, { status: "pending" });
+  assert.equal(queued.status, 200, JSON.stringify(queued.body));
+  const claimed = await post("/v1/workers/wa-1/claim");
+  assert.equal(claimed.body.data.task.id, retryId, JSON.stringify(claimed.body));
   const back = await post(`/v1/tasks/${retryId}/fail`, { worker_id: "wa-1", error: "临时错误", retryable: true });
   assert.equal(back.status, 200, JSON.stringify(back.body));
   assert.equal(back.body.data.status, "pending");

@@ -68,7 +68,9 @@ test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变�
   assert.match(text, new RegExp(`/v1/tasks/${task.id}/progress`));
   assert.match(text, new RegExp(`/v1/tasks/${task.id}/complete`));
   assert.match(text, new RegExp(`/v1/tasks/${task.id}/fail`));
-  assert.match(text, /\/v1\/approvals/);
+  assert.equal(text.includes("/v1/approvals"), false);
+  assert.match(text, /执行阶段没有运行时审批/);
+  assert.match(text, /不得越出工作目录/);
   assert.match(text, /\$RB_API_TOKEN/);
   assert.match(text, /\$RB_API_BASE/);
   assert.match(text, new RegExp(`"worker_id":"opencode-${task.id}"`));
@@ -107,6 +109,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.equal(argv[argv.indexOf("--title") + 1], `#${task.id} 纪要`);
   assert.ok(argv.includes("--format"));
   assert.equal(argv[argv.indexOf("--format") + 1], "json");
+  assert.ok(argv.includes("--dangerously-skip-permissions"), `opencode 启动参数缺无审批 flag：${argv.join(" ")}`);
   assert.equal(argv.includes("-s"), false, "新任务不该带 -s");
   assert.equal(record.cwd, workDir);
   assert.equal(record.env.RB_API_BASE, "http://127.0.0.1:9999");
@@ -123,6 +126,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   const runnerLog = path.join(root, "tasks", String(task.id), "runner.jsonl");
   const logText = fs.readFileSync(runnerLog, "utf8");
   assert.match(logText, /ses_fake_123/);
+  assert.match(logText, /--dangerously-skip-permissions/);
   assert.equal(logText.includes("secret-token-value"), false, "runner 日志不能落 token");
 
   const events = listTaskEvents(store, task.id, { limit: 1 });
@@ -217,7 +221,7 @@ test("resumeTask：没有 session_id 直接报错", async () => {
   store.close();
 });
 
-test("UFA task create：默认 dispatch，自动写文档并起一次性进程", async () => {
+test("UFA task create：只登记 pending_approval，等 Web 审批，不产生 runner", async () => {
   const cfg = loadConfig();
   const store = new Store(":memory:");
   store.insertMessage({
@@ -226,23 +230,27 @@ test("UFA task create：默认 dispatch，自动写文档并起一次性进程",
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   });
   const pool = store.listPools()[0].pool_id;
-  const out = recordPath();
+  const createScope = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const out = path.join(root, "ufa-create", `${createScope}.json`);
+  const createDataDir = path.join(root, "ufa-create", createScope);
   process.env.FAKE_EXEC_OUT = out;
   const tools = createTools({
     store, hub: {} as any, cfg, now: () => Date.now(), primaryPool: () => pool,
-    dispatch: { apiBase: "http://127.0.0.1:9999", token: "tok", dataDir: root, executorBin: fakeBin },
+    dispatch: { apiBase: "http://127.0.0.1:9999", token: "tok", dataDir: createDataDir, executorBin: fakeBin },
   }) as any[];
   const taskTool = tools.find((t) => t.name === "task");
 
   const r = await taskTool.execute("id", { action: "create", name: "#报告", goal: "写一份报告", work_dir: workDir });
   assert.equal(r.details?.ok, true, JSON.stringify(r.details));
+  assert.match(r.content?.[0]?.text ?? "", /等待 Web 审批/);
   const fresh = getTask(store, r.details.task.id)!;
-  assert.equal(fresh.session_id, "ses_fake_123");
-  assert.equal(typeof fresh.runner_pid, "number");
+  assert.equal(fresh.status, "pending_approval");
   assert.equal(fresh.executor, "opencode");
-  assert.equal(fs.existsSync(fresh.doc_path), true);
-  const argv: string[] = JSON.parse(fs.readFileSync(out, "utf8")).argv;
-  assert.equal(argv[0], "run");
+  assert.equal(fresh.session_id, "");
+  assert.equal(fresh.runner_pid, null);
+  assert.equal(fresh.doc_path, "");
+  assert.equal(fs.existsSync(out), false, "建任务阶段不该启动执行器");
+  assert.equal(fs.existsSync(path.join(createDataDir, "tasks", String(fresh.id), "runner.jsonl")), false);
   store.close();
 });
 

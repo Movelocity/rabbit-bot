@@ -311,6 +311,10 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
 .badge.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
 .badge.closed { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
 .badge.info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.badge.warn { color: #b45309; border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 12%, transparent); }
+@media (prefers-color-scheme: dark) {
+  .badge.warn { color: #fbbf24; border-color: #b45309; }
+}
 
 .task-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -334,6 +338,22 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   overflow-wrap: anywhere;
 }
 .detail-value.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.task-approve {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.task-approve-title { margin: 0 0 10px; font-size: 14px; }
+.task-approve-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+.task-approve-hint { margin: 10px 0 0; font-size: 12px; }
+.task-approve textarea { min-height: 72px; }
 
 .filter-row {
   display: flex;

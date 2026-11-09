@@ -63,7 +63,7 @@ test("任务：缺 goal、非法 status、不存在的 id 都报错", () => {
   assert.equal(getTask(s, 999999), null);
   assert.equal(isTaskStatus("pending"), true);
   assert.equal(isTaskStatus("wat"), false);
-  assert.deepEqual(TASK_STATUSES, ["pending", "running", "blocked", "done", "failed", "cancelled"]);
+  assert.deepEqual(TASK_STATUSES, ["pending_approval", "pending", "running", "blocked", "done", "failed", "cancelled"]);
 
   s.close();
 });
