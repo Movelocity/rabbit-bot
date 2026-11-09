@@ -155,6 +155,7 @@ export class App {
       kind === "group" ? { ...baseGate, ...(groupOverride ?? {}) } : baseGate;
 
     for (const pool of this.store.listPools()) {
+      if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const r = this.store.latestReflection(pid);
       const urgency = r ? Number(r.urgency) : null;
@@ -233,6 +234,15 @@ export class App {
     this.reflectionTimer = t;
   }
 
+  /**
+   * 平台适配器关掉了（例如把飞书 app 让给别人），它的历史池还留在库里给人查，
+   * 但自省和主动不该再为它跑——那只是白白烧 token、还把「没人回」当成她自己的问题。
+   */
+  private platformLive(platform: string): boolean {
+    const a = (this.o.cfg.adapters as unknown as Record<string, { enabled?: boolean }> | undefined)?.[platform];
+    return a ? a.enabled !== false : true;
+  }
+
   /** 挑一个「该想一想了」的池，跑一次自省。一次只做一个，省额度也避免打堆 */
   private async reflectDue(): Promise<void> {
     if (this.reflectionBusy || this.store.isPaused()) return;
@@ -240,6 +250,7 @@ export class App {
     const now = this.clock.now();
     const delay = cfg.proactive?.reflectionDelayMs ?? 300_000;
     for (const pool of this.store.listPools()) {
+      if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const lastUser = this.store.lastUserMessageTs(pid);
       // 刚说完话不急着想到底想说什么——先让对话自然停一停

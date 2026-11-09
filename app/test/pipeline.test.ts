@@ -229,7 +229,7 @@ test("tick：没有未读，但自省说她想说 → 仍然给一次自己找�
   let lastMsg: any = null;
   for (const [i, min] of [40, 37, 34].entries()) {
     lastMsg = t.app.store.insertMessage({
-      platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `w${i}`,
+      platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `w${i}`,
       sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
       text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
       reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
@@ -247,13 +247,29 @@ test("tick：没有未读，但自省说她想说 → 仍然给一次自己找�
   await t.done();
 });
 
+test("平台关掉后，不再为它的历史池自省（飞书腾出去后别白烧 token）", async () => {
+  // 2026-11-09：飞书适配器关掉后，库里的 feishu 池还在，自省照样每小时为它跑一次，
+  // 白白烧 token，还把「那个频道永远没人回」当成她自己的问题。
+  const t = await setup({ proactive: { enabled: true }, adapters: { mock: { enabled: false } } });
+  const now = t.clock.now();
+  const last = t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "dead1",
+    sender_id: "mia", sender_name: "mia", ts: now - 20 * 60_000, text: "先这样，我忙",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
+  t.app.store.setCursor(last.pool_id, last.seq);
+  seedReflection(t, last.pool_id);
+  assert.equal(t.app.scheduler.tick(), false, "平台已关，不该再为它的池自省");
+  await t.done();
+});
+
 test("tick 主动：说过一次之后，冷却期内不再问（也别每 3 分钟问一次）", async () => {
   const t = await setup({ proactive: { enabled: true } });
   const now = t.clock.now();
   let lastMsg: any = null;
   for (const [i, min] of [40, 37, 34].entries()) {
     lastMsg = t.app.store.insertMessage({
-      platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `r${i}`,
+      platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `r${i}`,
       sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
       text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
       reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
@@ -277,7 +293,7 @@ test("tick 主动：她想了但决定不说，也会留一行账（agent_silent
   const t = await setup({ proactive: { enabled: true } });
   const now = t.clock.now();
   const m = t.app.store.insertMessage({
-    platform: "feishu", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "s1",
+    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "s1",
     sender_id: "mia", sender_name: "mia", ts: now - 40 * 60_000, text: "睡了",
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   })!;
