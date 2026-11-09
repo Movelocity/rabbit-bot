@@ -178,6 +178,18 @@ extensionFactories: [
 
 **用法约束写在 prompt 规则 13**：多步/循环/过滤/统计才用脚本；单次调用直接调；最后发消息直接调（发消息有副作用，别放在循环里）。
 
+## 当前执行层决定（2026-11-09）
+
+**沙盒保留，但不启用**：docker 那套代码、`docker/sandbox.Dockerfile`、镜像 `poolchat-sandbox:latest` 都留着，
+`config/default.json` 里仍是 `mode: "docker"`——将来要用，改一行配置就能回去。
+但 `config/local.json` 固定 `mode: "host"`，**现在不建任何容器**：`rabbit-bot-sbx` 容器已删除
+（原 `--restart unless-stopped` 早已改成 `no`，不会随 Docker 重启自愈），`ensureSandboxContainer()`
+只会在 `mode=docker` 时被调用。
+
+所以说法要准确：**不是「关掉沙盒」，是「沙盒保留未启用」，shell 直落宿主机**。
+`terminal` 的每条命令都是宿主 `bash -c`（cwd `data/sandbox`，只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`），
+审批闸门只是**事前拦一道**，命令本身没有隔离——她的能力和宿主用户一样大。要真隔离，把 mode 改回 docker 就行。
+
 ## 沙盒 shell（2026-10-24 加）
 
 **为什么不用 macOS 自带的 `sandbox-exec`**：macOS 26 上它已经坏了——任何带 filter 参数的 `file-read*` 规则（`(subpath "/usr")`、连 `(literal ...)` 也是）直接 `Abort trap: 6`，rc=134。只有无参数的 `(allow file-read*)` 还能用，等于限制不了读，模型照样能 `cat ~/.config/rabbit-bot/env`。所以这条路排除。
