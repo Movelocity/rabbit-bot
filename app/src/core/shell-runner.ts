@@ -214,6 +214,9 @@ function hostEnv(opts: ShellRunnerOptions, extra?: Record<string, string>): Node
       ? process.env
       : Object.fromEntries(HOST_ENV_KEYS.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]]])))),
     ...opts.env,
+    // 她自己的 Matrix 身份交给 shell：外部工具（callbot 之类）要「以我的号」做事，
+    // 不该靠 --as 名字表——那是每接一个 agent 就得改一遍的写法。
+    ...(process.env.MATRIX_TOKEN ? { MATRIX_ACCESS_TOKEN: process.env.MATRIX_TOKEN } : {}),
     ...extra,
   };
 }

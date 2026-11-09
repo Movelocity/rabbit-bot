@@ -17,9 +17,12 @@ description: 要用电话把主人叫起来、给他播一段话、或者跟他�
 
 ## 怎么做
 
+**身份不用指定**：`callbot` 用你环境里的 token 去问 `/account/whoami`，自己是谁就是谁
+（你的运行时会把自己的 Matrix token 交给 shell）。所以下面这段直接能用，命令里没有 `--as`。
+
 ```bash
-CALL=~/projects/matrix-callbot/callbot
-ROOM=!MDo3XMOhFH6jIU0azKbsdZFTbyrz0Xgi6eY3np6qJSs   # 他和鱼管家的私聊房间
+CALL="~/projects/matrix-callbot/callbot"
+ROOM=!AYRlhvxJa0xQ6LvcAunEA4m5ZAiWgjTRfb1gizhGPYI   # p5，你和他的私聊
 
 $CALL ring  --room "$ROOM" --timeout 90            # 只响铃，他接了就算成功
 $CALL say   --room "$ROOM" --text "该吃药了" --interval 4   # 响了之后循环播这句话
@@ -44,6 +47,9 @@ $CALL state --room "$ROOM"                          # 谁正在通话里
 
 ## 依赖坏了怎么办
 
+- 报 403 `Event is not authorized`：先跑 `callbot whoami` 看用的是不是你自己——兜底会拿到鱼管家的号
+  （@deepseek），那个号不在你的房间，当然被拒。怪了就说明你的 token 没进到 shell 环境。
+- `callbot whoami` 就是「我是谁」的自检，打电话之前先跑一下最省事。
 - `say` / `talk` 需要本地 TTS 服务：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:12880/health`
   返回 401 是正常的（缺 token），返回 000 才是服务没起。
 - `talk` 需要 whisper 模型，第一次跑会慢几十秒（要加载）；它已经预载在 call.py 里，振铃前就绪。

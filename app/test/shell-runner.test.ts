@@ -165,3 +165,18 @@ test("host 模式：没超限就不落盘，也不加提示", async () => {
   assert.equal(r.output.trim(), "hi");
   assert.equal(fs.existsSync(overflow), false);
 });
+
+test("host 模式：把自己的 Matrix 身份交给 shell，别的密钥照旧不透传", async () => {
+  // 外部工具（callbot）要「以我的号」做事，靠的是环境里的 token，
+  // 不是 --as 名字表——每接一个 agent 就改一遍脚本那种写法。
+  process.env.MATRIX_TOKEN = "tok-test-123";
+  process.env.RB_SBX_TEST_SECRET = "should-not-leak";
+  try {
+    const r = await runShell('echo "me=${MATRIX_ACCESS_TOKEN:-none} secret=${RB_SBX_TEST_SECRET:-none}"', hostOpts);
+    assert.match(r.output, /me=tok-test-123/);
+    assert.match(r.output, /secret=none/, "白名单之外的环境变量仍然不透传");
+  } finally {
+    delete process.env.MATRIX_TOKEN;
+    delete process.env.RB_SBX_TEST_SECRET;
+  }
+});
