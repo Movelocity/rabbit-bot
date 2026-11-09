@@ -263,6 +263,44 @@ test("平台关掉后，不再为它的历史池自省（飞书腾出去后别�
   await t.done();
 });
 
+test("任务池不产生主动唤醒（进度事件不是「她想说话了」）", async () => {
+  const t = await setup({ proactive: { enabled: true } });
+  const now = t.clock.now();
+  // 有个正常的私聊池垫底，确保全局沉默时间是算得出来的
+  const dm = t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "dm-old",
+    sender_id: "mia", sender_name: "mia", ts: now - 40 * 60_000, text: "先忙了",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  t.app.store.setCursor(dm.pool_id, dm.seq);
+  const task = t.app.store.insertMessage({
+    platform: "task", external_chat_id: "task:7", pool_kind: "task", msg_id: "task-e1",
+    sender_id: "task", sender_name: "任务", ts: now - 40 * 60_000, text: "任务 #7 进度 50%",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  t.app.store.setCursor(task.pool_id, task.seq);
+  seedReflection(t, task.pool_id);
+  assert.equal(t.app.scheduler.tick(), false, "任务池不该进主动候选");
+  await t.done();
+});
+
+test("任务池不跑自省（别对任务进度做内省）", async () => {
+  const t = await setup({ proactive: { enabled: true } });
+  const now = t.clock.now();
+  const task = t.app.store.insertMessage({
+    platform: "task", external_chat_id: "task:8", pool_kind: "task", msg_id: "task-e2",
+    sender_id: "task", sender_name: "任务", ts: now - 40 * 60_000, text: "任务 #8 失败",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  t.app.store.setCursor(task.pool_id, task.seq);
+  // 到期且没有后续自省：不跳过的话这一轮就会真的调模型写一条
+  seedReflection(t, task.pool_id, { created_at: now - 1000, next_at: now - 1 });
+  const before = t.app.store.latestReflection(task.pool_id)!.created_at;
+  await (t.app as any).reflectDue();
+  assert.equal(t.app.store.latestReflection(task.pool_id)!.created_at, before, "任务池不该被自省");
+  await t.done();
+});
+
 test("tick 主动：说过一次之后，冷却期内不再问（也别每 3 分钟问一次）", async () => {
   const t = await setup({ proactive: { enabled: true } });
   const now = t.clock.now();

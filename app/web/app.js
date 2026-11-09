@@ -5,6 +5,10 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  const TAB_NAMES = new Set(["chat", "tasks", "approvals", "plans", "memories", "manage", "skills"]);
+  const MANAGE_VIEWS = new Set(["workers", "users", "persona", "settings"]);
+  const LEGACY_TAB_VIEW = { workers: "workers", users: "users", persona: "persona", settings: "settings" };
+
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     pools: [],
@@ -13,6 +17,7 @@
     total: 0,
     oldestSeq: null,
     tab: "chat",
+    manageView: "workers",
     loadingMessages: false,
     messageRequest: 0,
     loadingOlder: false,
@@ -154,6 +159,7 @@
     setHealth(true, "已连接");
     await loadPools();
     startPolling();
+    applyLocationState({ replace: true });
   }
 
   // ---------- 轮询 ----------
@@ -167,7 +173,7 @@
         if (state.tab === "chat" && state.current) await loadLatestMessages(true);
         else if (state.tab === "tasks") await loadTasks(true);
         else if (state.tab === "approvals") await loadApprovals(true);
-        else if (state.tab === "workers") await loadWorkers(true);
+        else if (state.tab === "manage" && state.manageView === "workers") await loadWorkers(true);
       } catch (e) {
         if (friendlyError(e)) setHealth(false, "API 异常");
       }
@@ -366,7 +372,7 @@
     }
 
     if (!state.messages.length) {
-      box.appendChild(el("div", "empty", "这个池还没有消息。收发消息请用飞书。"));
+      box.appendChild(el("div", "empty", "这个池还没有消息。收发消息请用已启用的 IM。"));
       return;
     }
 
@@ -989,31 +995,138 @@
     }
   }
 
+  // ---------- 调度设置 ----------
+
+  async function loadScheduler() {
+    setPanelStatus("#scheduler-status", "加载中…");
+    try {
+      const s = await api("/v1/scheduler");
+      $("#scheduler-private").value = String(Math.round(Number(s.privateWakeMs) / 1000));
+      $("#scheduler-group").value = String(Math.round(Number(s.groupWakeMs) / 1000));
+      $("#scheduler-task").value = String(Math.round(Number(s.taskWakeMs) / 1000));
+      setPanelStatus("#scheduler-status", "");
+    } catch (e) {
+      setPanelStatus("#scheduler-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
+    }
+  }
+
+  async function saveScheduler() {
+    const fields = [
+      ["privateWakeMs", "#scheduler-private", "私聊唤醒间隔"],
+      ["groupWakeMs", "#scheduler-group", "群聊唤醒间隔"],
+      ["taskWakeMs", "#scheduler-task", "任务群唤醒间隔"],
+    ];
+    const body = {};
+    for (const [key, selector, label] of fields) {
+      const seconds = Number($(selector).value);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        setPanelStatus("#scheduler-status", `${label}必须大于 0 秒`, true);
+        return;
+      }
+      body[key] = Math.round(seconds * 1000);
+    }
+
+    const btn = $("#save-scheduler");
+    btn.disabled = true;
+    setPanelStatus("#scheduler-status", "保存中…");
+    try {
+      const saved = await api("/v1/scheduler", { method: "PUT", body });
+      $("#scheduler-private").value = String(Math.round(Number(saved.privateWakeMs) / 1000));
+      $("#scheduler-group").value = String(Math.round(Number(saved.groupWakeMs) / 1000));
+      $("#scheduler-task").value = String(Math.round(Number(saved.taskWakeMs) / 1000));
+      setPanelStatus("#scheduler-status", "已保存并生效");
+    } catch (e) {
+      setPanelStatus("#scheduler-status", `保存失败：${friendlyError(e) || "未登录"}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- URL 状态 ----------
+
+  function readLocationState() {
+    const params = new URLSearchParams(location.search);
+    let tab = params.get("tab");
+    let view = params.get("view");
+    if (tab && LEGACY_TAB_VIEW[tab]) {
+      view = LEGACY_TAB_VIEW[tab];
+      tab = "manage";
+    }
+    if (!tab || !TAB_NAMES.has(tab)) tab = "chat";
+    if (tab === "manage") {
+      if (!view || !MANAGE_VIEWS.has(view)) view = "workers";
+    } else {
+      view = null;
+    }
+    return { tab, view };
+  }
+
+  function writeLocationState(tab, view, opts = {}) {
+    const params = new URLSearchParams(location.search);
+    params.set("tab", tab);
+    if (tab === "manage") params.set("view", view || state.manageView);
+    else params.delete("view");
+    const search = params.toString();
+    const url = `${location.pathname}${search ? `?${search}` : ""}${location.hash}`;
+    const current = `${location.pathname}${location.search}${location.hash}`;
+    if (url === current) return;
+    if (opts.replace) history.replaceState({ tab }, "", url);
+    else history.pushState({ tab }, "", url);
+  }
+
   // ---------- 页签 ----------
 
-  function switchTab(name) {
+  function switchManageView(view, opts = {}) {
+    if (!MANAGE_VIEWS.has(view)) view = "workers";
+    state.manageView = view;
+    $$(".manage-menu button").forEach((b) => b.classList.toggle("active", b.dataset.manage === view));
+    $$(".manage-view").forEach((v) => v.classList.toggle("active", v.id === `manage-${view}`));
+    if (view === "workers") {
+      void loadWorkers();
+    } else if (view === "users") {
+      void loadUsers();
+    } else if (view === "persona") {
+      void loadEditors();
+    } else if (view === "settings") {
+      void loadScheduler();
+    }
+    if (!opts.skipUrl && state.tab === "manage") {
+      writeLocationState("manage", view, { replace: !!opts.replace });
+    }
+  }
+
+  function switchTab(name, opts = {}) {
+    if (LEGACY_TAB_VIEW[name]) {
+      state.manageView = LEGACY_TAB_VIEW[name];
+      name = "manage";
+    }
+    if (!TAB_NAMES.has(name)) name = "chat";
     state.tab = name;
     $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
-    if (name === "chat") {
+    if (name === "manage") {
+      switchManageView(state.manageView, { skipUrl: true });
+    } else if (name === "chat") {
       if (state.current) void loadLatestMessages(true).catch(() => {});
     } else if (name === "tasks") {
       void loadTasks();
     } else if (name === "approvals") {
       void loadApprovals();
-    } else if (name === "workers") {
-      void loadWorkers();
     } else if (name === "plans") {
       void loadPlans();
     } else if (name === "memories") {
       void loadMemories();
-    } else if (name === "persona") {
-      void loadEditors();
-    } else if (name === "users") {
-      void loadUsers();
     } else if (name === "skills") {
       void loadSkills();
     }
+    if (!opts.skipUrl) writeLocationState(name, state.manageView, { replace: !!opts.replace });
+  }
+
+  function applyLocationState(opts = {}) {
+    const { tab, view } = readLocationState();
+    if (view) state.manageView = view;
+    switchTab(tab, { skipUrl: true });
+    if (opts.replace) writeLocationState(tab, state.manageView, { replace: true });
   }
 
   // ---------- 初始化 ----------
@@ -1036,6 +1149,12 @@
       btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
 
+    $$(".manage-menu button").forEach((btn) => {
+      btn.addEventListener("click", () => switchManageView(btn.dataset.manage));
+    });
+
+    window.addEventListener("popstate", () => applyLocationState({ replace: false, fromPop: true }));
+
     $("#back-to-pools").addEventListener("click", () => {
       $("#tab-chat").classList.remove("reading");
       $(".pool.active")?.focus();
@@ -1056,6 +1175,8 @@
     $("#reload-persona").addEventListener("click", () => void loadEditors(true));
     $("#save-persona").addEventListener("click", () => void savePersona());
     $("#save-prompt").addEventListener("click", () => void saveSystemPrompt());
+    $("#reload-scheduler").addEventListener("click", () => void loadScheduler());
+    $("#save-scheduler").addEventListener("click", () => void saveScheduler());
     $("#reload-skills").addEventListener("click", () => void loadSkills());
     $("#reload-tasks").addEventListener("click", () => void loadTasks());
     $("#reload-approvals").addEventListener("click", () => void loadApprovals());

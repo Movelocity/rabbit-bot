@@ -157,7 +157,7 @@ test("complete：done/end_at/清 lease；重复完成 400，不匹配 409，缺 
   assert.equal(done.body.data.result, "全部通过");
   assert.equal(done.body.data.artifact, "report.md");
   assert.ok(done.body.data.end_at > 0);
-  assert.equal(enqueued, 1, "完成触发了一次 task-updated 唤醒");
+  assert.equal(enqueued, 0, "完成不立即唤醒，等下一次任务事件 tick");
 
   assert.equal((await post(`/v1/tasks/${id}/complete`, { worker_id: "wa-1" })).status, 400);
 });

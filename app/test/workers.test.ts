@@ -80,7 +80,7 @@ test("worker：touch 续租并刷新 last_seen，非 running/非持有者被拒"
   s.close();
 });
 
-test("worker：完成写 done/end_at/清 lease，并置 pending tick", () => {
+test("worker：完成写 done/end_at/清 lease，置 pending tick 但不立即 enqueue", () => {
   const s = new Store(":memory:");
   registerWorker(s, { workerId: "wa-1", name: "本地", now: 500 });
   const t = mkTask(s, "租约测试");
@@ -97,7 +97,8 @@ test("worker：完成写 done/end_at/清 lease，并置 pending tick", () => {
   assert.equal(done.end_at, 2000);
   assert.equal(done.lease_until, null);
   assert.equal(done.worker_id, "wa-1");
-  assert.equal(enqueued, 1);
+  assert.equal(enqueued, 0, "完成不逐条 enqueue，等下一次任务 tick");
+  assert.equal(takePendingTick(s), 2000);
 
   assert.throws(() => completeTask(s, t.id, { workerId: "wa-1", now: 2100 }), /不在运行/);
   assert.throws(() => completeTask(s, 99999, { workerId: "wa-1" }), /没有任务/);
@@ -131,7 +132,8 @@ test("worker：fail retryable 回 pending 清归属，非 retryable 置 failed",
   assert.match(failed.note, /失败：脚本炸了/);
   assert.equal(failed.end_at, 2100);
   assert.equal(failed.lease_until, null);
-  assert.equal(enqueued, 1);
+  assert.equal(enqueued, 0, "失败不逐条 enqueue，等下一次任务 tick");
+  assert.equal(takePendingTick(s), 2100);
 
   assert.throws(() => failTask(s, dead.id, { workerId: "wa-1" }), /不在运行/);
   assert.throws(() => failTask(s, 99999, { workerId: "wa-1" }), /没有任务/);
@@ -153,7 +155,7 @@ test("worker：sweep 把超过阈值的 online 置 offline", () => {
   s.close();
 });
 
-test("pending tick：多任务完成只 enqueue 一次，一次消费多条，消费后可重新置位", () => {
+test("pending tick：多任务完成只置位一次，一次消费多条，消费后可重新置位", () => {
   const s = new Store(":memory:");
   registerWorker(s, { workerId: "wa-1", name: "本地", now: 100 });
   const ids = [mkTask(s, "A"), mkTask(s, "B"), mkTask(s, "C")].map((t) => t.id);
@@ -167,7 +169,7 @@ test("pending tick：多任务完成只 enqueue 一次，一次消费多条，�
     tick += 2;
   }
 
-  assert.equal(enqueued, 1, "三个任务先后完成只产生一次唤醒");
+  assert.equal(enqueued, 0, "完成不再逐条 enqueue");
   const setAt = takePendingTick(s);
   assert.equal(setAt, 1001, "游标保留第一次置位时间");
   const batch = listTasksUpdatedSince(s, setAt!, ["done", "failed", "blocked"]);
@@ -177,7 +179,7 @@ test("pending tick：多任务完成只 enqueue 一次，一次消费多条，�
   const d = mkTask(s, "D");
   claimNextTask(s, "wa-1", { now: 2000, leaseMs: 100 });
   completeTask(s, d.id, { workerId: "wa-1", now: 2001 }, enqueue);
-  assert.equal(enqueued, 2, "消费完成后新的完成会重新置位");
+  assert.equal(enqueued, 0, "消费完成后新的完成仍不立即 enqueue");
   assert.equal(takePendingTick(s), 2001);
   s.close();
 });

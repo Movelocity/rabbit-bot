@@ -14,6 +14,7 @@ import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
 import { resolveApiToken } from "../src/api-token.ts";
+import { loadSchedulerSettings } from "../src/ops/scheduler-settings.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -32,6 +33,8 @@ async function main() {
   cfg.api = { enabled: true, port, host };
 
   const log = new Logger(cfg.logDir);
+  // demo 页面也显示正式服务保存过的调度值
+  loadSchedulerSettings(cfg, log);
   const dbArg = arg("--db");
   const dbFile = dbArg ? path.resolve(dbArg) : path.join(cfg.dataDir, "rabbit-bot.db");
   const store = new Store(dbFile);

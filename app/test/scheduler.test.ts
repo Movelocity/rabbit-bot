@@ -6,13 +6,17 @@ import type { Wake } from "../src/types.ts";
 
 const cfg = { tickMs: 180_000, activeTickMs: 60_000, activeWindowMs: 600_000, debounceMs: 30_000, debounceMaxWaitMs: 120_000 };
 
-function setup(over: Partial<typeof cfg> = {}) {
+function setup(
+  over: Partial<typeof cfg> = {},
+  extra: { poolKind?: (poolId: string) => "private" | "group" | "task" | undefined } = {},
+) {
   const clock = new FakeClock();
   const wakes: Wake[] = [];
   const state = { paused: false, unread: [] as string[], plans: [] as Wake["planFires"] };
   const s = new Scheduler({ ...cfg, ...over }, {
     clock, queue: { enqueue: (w: Wake) => { wakes.push(w); return "queued" as const; } },
     isPaused: () => state.paused, poolsWithUnread: () => state.unread, duePlans: () => { const p = state.plans; state.plans = []; return p; },
+    poolKind: extra.poolKind,
   });
   return { clock, wakes, state, s };
 }
@@ -118,4 +122,119 @@ test("batchToTick 关掉时，消息照旧走去抖单独唤醒", () => {
   clock.advance(30_000);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0].type, "message");
+});
+
+test("私聊去抖用 privateWakeMs，不是 debounceMs", () => {
+  const { clock, wakes, s } = setup({ privateWakeMs: 5_000 });
+  s.onMessage("p1", true, "私聊新消息", "private");
+  clock.advance(4_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].type, "message");
+});
+
+test("私聊最长等待至少覆盖 privateWakeMs，不会被 debounceMaxWaitMs 截断", () => {
+  const { clock, wakes, s } = setup({ privateWakeMs: 60_000, debounceMaxWaitMs: 20_000 });
+  s.onMessage("p1", true, "私聊新消息", "private");
+  clock.advance(10_000);
+  s.onMessage("p1", true, "私聊新消息", "private");
+  clock.advance(49_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1);
+});
+
+test("群聊被@仍用 debounceMs 快速去抖，不受 privateWakeMs 影响", () => {
+  const { clock, wakes, s } = setup({ privateWakeMs: 300_000 });
+  s.onMessage("g1", true, "群聊被@", "group", true);
+  clock.advance(29_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].type, "message");
+});
+
+test("任务池未读不会被普通 tick 唤醒", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task", g1: "group" };
+  const { wakes, s, state } = setup({}, { poolKind: (id) => kinds[id] });
+  state.unread = ["t1"];
+  assert.equal(s.tick(), false, "普通 tick 不碰任务池");
+  assert.equal(wakes.length, 0);
+});
+
+test("普通 tick 只唤醒非任务池的未读", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task", g1: "group" };
+  const { wakes, s, state } = setup({}, { poolKind: (id) => kinds[id] });
+  state.unread = ["t1", "g1"];
+  assert.equal(s.tick(), true);
+  assert.equal(wakes.length, 1);
+  assert.deepEqual([...wakes[0].pools], ["g1"]);
+});
+
+test("任务事件 tick 到点只入队一次，把所有任务池未读合并成 batch", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task", t2: "task", g1: "group" };
+  const { clock, wakes, s, state } = setup(
+    { tickMs: 180_000, taskTickMs: 45_000 },
+    { poolKind: (id) => kinds[id] },
+  );
+  s.start();
+  state.unread = ["t1", "t2", "g1"];
+  clock.advance(44_999);
+  assert.equal(wakes.length, 0, "未到任务 tick 不唤醒");
+  clock.advance(1);
+  assert.equal(wakes.length, 1, "一次任务 tick 只入队一次");
+  assert.equal(wakes[0].type, "tick");
+  assert.deepEqual([...wakes[0].pools], ["t1", "t2"], "多个任务池合并；普通池不混进来");
+  assert.match(wakes[0].reasons[0], /任务事件 batch/);
+  s.stop();
+});
+
+test("任务事件到达后要等到任务 tick 才唤醒", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task" };
+  const { clock, wakes, s, state } = setup(
+    { tickMs: 180_000, taskTickMs: 45_000 },
+    { poolKind: (id) => kinds[id] },
+  );
+  s.start();
+  clock.advance(10_000);
+  state.unread = ["t1"]; // 事件此刻写进任务池
+  assert.equal(wakes.length, 0, "事件本身不叫醒");
+  clock.advance(34_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1, "下一次任务 tick 才 batch 唤醒");
+  assert.match(wakes[0].reasons[0], /任务事件 batch/);
+  s.stop();
+});
+
+test("updateConfig 改变任务 tick 间隔后重新排期", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task" };
+  const { clock, wakes, s, state } = setup(
+    { tickMs: 180_000, taskTickMs: 180_000 },
+    { poolKind: (id) => kinds[id] },
+  );
+  s.start();
+  state.unread = ["t1"];
+  s.updateConfig({ taskTickMs: 45_000 });
+  clock.advance(44_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].type, "tick");
+  assert.match(wakes[0].reasons[0], /任务事件 batch/);
+  s.stop();
+});
+
+test("updateConfig 改变群聊间隔后重新排期", () => {
+  const { clock, wakes, s, state } = setup({ tickMs: 180_000 });
+  s.start();
+  state.unread = ["g1"];
+  s.updateConfig({ tickMs: 60_000 });
+  clock.advance(59_999);
+  assert.equal(wakes.length, 0);
+  clock.advance(1);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].type, "tick");
+  s.stop();
 });

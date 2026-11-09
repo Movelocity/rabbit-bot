@@ -26,6 +26,19 @@ test("入池去重、游标、未读不含自己的消息", () => {
   assert.equal(s.resolvePool("p1")!.pool_id, a.pool_id);
 });
 
+test("lastUserMessageTs(null) 跨池不把任务池事件算作用户说话", () => {
+  const s = new Store(":memory:");
+  const early = Date.now() - 60_000;
+  s.insertMessage(msg({ msg_id: "chat1", external_chat_id: "oc_1", ts: early }));
+  s.insertMessage(msg({
+    msg_id: "task1", platform: "task", external_chat_id: "task:1", pool_kind: "task",
+    sender_id: "task", sender_name: "任务", ts: Date.now(),
+  }));
+  assert.equal(s.lastUserMessageTs(null), early);
+  // 指定任务池时保持原样（调用方自己跳过任务池）
+  assert.ok(s.lastUserMessageTs("task:task:1") > early);
+});
+
 test("身份映射：同一人跨平台映射到同一 user_id", () => {
   const s = new Store(":memory:");
   const u1 = s.resolveUser("feishu", "ou_a", "A");

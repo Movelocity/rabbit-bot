@@ -22,11 +22,17 @@ export interface SchedulerDeps {
   duePlans: (now: number) => Wake["planFires"];
   /** 水位退潮到档的池（tick 用）：没有未读也可能因为这些池唤醒 agent 自己找话题 */
   proactivePools?: (now: number) => NonNullable<Wake["proactive"]>;
+  /** 池的类型；不提供时一律按 group 处理（老测试/只读进程兼容） */
+  poolKind?: (poolId: string) => "private" | "group" | "task" | undefined;
   log?: (msg: string) => void;
   warn?: (msg: string) => void;
 }
 export interface SchedulerConfig {
   tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number;
+  /** 私聊消息后的唤醒延迟；缺省沿用 debounceMs */
+  privateWakeMs?: number;
+  /** 任务事件 tick 周期；缺省沿用 tickMs */
+  taskTickMs?: number;
   /** 看门狗间隔，0/缺省 = 关闭 */
   watchdogMs?: number;
   /** 逾期多少毫秒算“丢了”，默认 2000 */
@@ -47,12 +53,14 @@ export interface SchedulerConfig {
 
 interface Debounce { timer: unknown; firstAt: number; dueAt: number; count: number; reason: string }
 
-export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
+export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; nextTaskAt?: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
 
 export class Scheduler {
   private debounces = new Map<string, Debounce>();
   private tickTimer: unknown = null;
   private tickDueAt: number | null = null;
+  private taskTimer: unknown = null;
+  private taskDueAt: number | null = null;
   private lastTickAt: number | null = null;
   private lastActivity = -Infinity;
   private running = false;
@@ -66,6 +74,7 @@ export class Scheduler {
     if (this.running) return;
     this.running = true;
     this.scheduleTick();
+    this.scheduleTaskTick();
     if (this.cfg.watchdogMs && this.cfg.watchdogMs > 0) this.scheduleWatchdog();
   }
   stop() {
@@ -73,10 +82,21 @@ export class Scheduler {
     if (this.tickTimer) this.d.clock.clearTimeout(this.tickTimer);
     this.tickTimer = null;
     this.tickDueAt = null;
+    if (this.taskTimer) this.d.clock.clearTimeout(this.taskTimer);
+    this.taskTimer = null;
+    this.taskDueAt = null;
     if (this.wdTimer) this.d.clock.clearTimeout(this.wdTimer);
     this.wdTimer = null;
     for (const db of this.debounces.values()) this.d.clock.clearTimeout(db.timer);
     this.debounces.clear();
+  }
+
+  /** Web 保存后立即生效：合并配置并按新间隔重新排期 */
+  updateConfig(patch: Partial<SchedulerConfig>) {
+    this.cfg = { ...this.cfg, ...patch };
+    if (!this.running) return;
+    this.scheduleTick();
+    this.scheduleTaskTick();
   }
 
   currentTickMs(): number {
@@ -94,10 +114,11 @@ export class Scheduler {
   onMessage(poolId: string, urgent: boolean, reason: string, kind?: "private" | "group", forceDirect = false) {
     this.markActive();
     if (!urgent) return; // 群里未 @：等 tick
+    const resolvedKind = kind ?? this.d.poolKind?.(poolId) ?? "group";
     const now = this.d.clock.now();
     // 攒给 tick：不做单独唤醒。tick 会把未读一起读走，上下文还是同一个 session，
     // 前缀缓存命中（pi 报 cacheRead，按 1/10 计价）。
-    const direct = forceDirect || (this.cfg.directPrivate !== false && kind === "private");
+    const direct = forceDirect || (this.cfg.directPrivate !== false && resolvedKind === "private");
     if (this.cfg.batchToTick && !direct) {
       this.d.log?.(`message 攒着等 tick ${poolId}（${reason}）`);
       return;
@@ -105,8 +126,12 @@ export class Scheduler {
     const prev = this.debounces.get(poolId);
     if (prev) this.d.clock.clearTimeout(prev.timer);
     const firstAt = prev?.firstAt ?? now;
-    const remainingMax = firstAt + this.cfg.debounceMaxWaitMs - now;
-    const delay = Math.max(0, Math.min(this.cfg.debounceMs, remainingMax));
+    // 私聊用自己的唤醒延迟，且最长等待必须覆盖它——否则用户设的 60s 会被 20s 的最长等待截断
+    const isPrivate = resolvedKind === "private";
+    const wakeMs = isPrivate ? (this.cfg.privateWakeMs ?? this.cfg.debounceMs) : this.cfg.debounceMs;
+    const maxWait = isPrivate ? Math.max(this.cfg.debounceMaxWaitMs, wakeMs) : this.cfg.debounceMaxWaitMs;
+    const remainingMax = firstAt + maxWait - now;
+    const delay = Math.max(0, Math.min(wakeMs, remainingMax));
     const db: Debounce = { timer: null, firstAt, dueAt: now + delay, count: (prev?.count ?? 0) + 1, reason: prev?.reason ?? reason };
     db.timer = this.d.clock.setTimeout(() => { if (this.debounces.get(poolId) === db) this.fireDebounce(poolId, "timer"); }, delay);
     this.debounces.set(poolId, db);
@@ -167,13 +192,55 @@ export class Scheduler {
       this.d.queue.enqueue(makeWake("tick", proPools, `她想说话了：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
       enqueued = true;
     }
-    // 正在去抖的池交给去抖处理，tick 不重复唤醒
-    const pools = this.d.poolsWithUnread().filter((p) => !this.debounces.has(p));
+    // 正在去抖的池交给去抖处理，tick 不重复唤醒；
+    // 任务池走独立的任务事件 tick，不在这里逐条/逐池唤醒
+    const pools = this.d.poolsWithUnread()
+      .filter((p) => !this.debounces.has(p))
+      .filter((p) => (this.d.poolKind?.(p) ?? "group") !== "task");
     if (pools.length) {
       this.d.queue.enqueue(makeWake("tick", pools, "tick: 有未读", [], now));
       enqueued = true;
     }
     return enqueued;
+  }
+
+  /**
+   * 按池类型触发一次 tick（测试/手动用）。任务池 tick 只碰 kind === "task" 的未读池；
+   * 多个任务池的未读合并成一次唤醒，窗口内的多条事件由 handleWake 一次读走。
+   */
+  tickKind(kind: "private" | "group" | "task"): boolean {
+    if (this.d.isPaused()) return false;
+    const now = this.d.clock.now();
+    const pools = this.d.poolsWithUnread()
+      .filter((p) => !this.debounces.has(p))
+      .filter((p) => (this.d.poolKind?.(p) ?? "group") === kind);
+    if (!pools.length) return false;
+    const reason = kind === "task" ? "任务事件 batch: 有未读" : kind === "private" ? "私聊 tick: 有未读" : "tick: 有未读";
+    this.d.queue.enqueue(makeWake("tick", pools, reason, [], now));
+    return true;
+  }
+
+  private taskIntervalMs(): number {
+    const ms = this.cfg.taskTickMs ?? this.cfg.tickMs;
+    return ms > 0 ? ms : 1000;
+  }
+  private scheduleTaskTick() {
+    if (this.taskTimer) this.d.clock.clearTimeout(this.taskTimer);
+    const ms = this.taskIntervalMs();
+    this.taskDueAt = this.d.clock.now() + ms;
+    const handle = this.d.clock.setTimeout(() => { if (this.taskTimer === handle) this.runTaskTick("timer"); }, ms);
+    this.taskTimer = handle;
+  }
+  private runTaskTick(via: "timer" | "watchdog") {
+    this.taskTimer = null;
+    try {
+      if (via === "watchdog") this.d.log?.(`任务事件 tick 逾期 ${Math.round((this.d.clock.now() - (this.taskDueAt ?? 0)) / 1000)}s，看门狗补触发`);
+      this.tickKind("task");
+    } catch (e) {
+      this.d.warn?.(`任务事件 tick 出错：${(e as Error).message}`);
+    } finally {
+      if (this.running) this.scheduleTaskTick();
+    }
   }
 
   // ---------- 看门狗 ----------
@@ -203,6 +270,11 @@ export class Scheduler {
       if (this.tickTimer) c.clearTimeout(this.tickTimer);
       this.runTick("watchdog");
     }
+    if (this.running && this.taskDueAt !== null && wall - this.taskDueAt > grace) {
+      this.recovered++;
+      if (this.taskTimer) c.clearTimeout(this.taskTimer);
+      this.runTaskTick("watchdog");
+    }
     for (const [pool, db] of [...this.debounces]) {
       if (wall - db.dueAt > grace) { this.recovered++; this.fireDebounce(pool, "watchdog"); }
     }
@@ -210,7 +282,7 @@ export class Scheduler {
 
   stats(): SchedulerStats {
     return {
-      lastTickAt: this.lastTickAt, nextTickAt: this.tickDueAt,
+      lastTickAt: this.lastTickAt, nextTickAt: this.tickDueAt, nextTaskAt: this.taskDueAt,
       debouncing: [...this.debounces].map(([pool, d]) => ({ pool, dueAt: d.dueAt, count: d.count })),
       recovered: this.recovered, pausesDetected: this.pausesDetected,
     };

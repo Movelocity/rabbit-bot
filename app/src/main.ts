@@ -18,11 +18,14 @@ import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
 import { ensureRuntime, ensureHostSandboxLinks, RUNTIME_SUBDIRS } from "./core/runtime.ts";
 import { useRuntimePrompts } from "./agent/template.ts";
+import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import path from "node:path";
 
 async function main() {
   const cfg = loadConfig();
   const log = new Logger(cfg.logDir);
+  // Web 管理台保存过的调度间隔：先应用再建 App，重启后照旧生效
+  loadSchedulerSettings(cfg, log);
   // 运行时内容（人设/提示词/话题库）在仓库外：先保证目录在，再把模板目录指过去
   ensureRuntime(cfg, [...RUNTIME_SUBDIRS]);
   log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
@@ -103,6 +106,7 @@ async function main() {
     const token = resolveApiToken(cfg);
     apiSrv = await startApiServer({
       cfg, store: app.store, log, token,
+      scheduler: app.scheduler,
       enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
     });
     if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {

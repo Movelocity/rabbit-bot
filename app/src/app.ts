@@ -108,6 +108,7 @@ export class App {
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
+      poolKind: (id) => this.store.getPool(id)?.kind,
       proactivePools: (now) => this.proactivePools(now),
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
@@ -130,7 +131,7 @@ export class App {
     this.scheduler.start();
     this.startReflectionLoop();
     this.startApprovalSweep();
-    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
+    this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms taskTick=${this.o.cfg.scheduler.taskTickMs}ms privateWake=${this.o.cfg.scheduler.privateWakeMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
   }
 
   async stop() {
@@ -164,6 +165,8 @@ export class App {
       kind === "group" ? { ...baseGate, ...(groupOverride ?? {}) } : baseGate;
 
     for (const pool of this.store.listPools()) {
+      // 任务池是任务事件的落点，不是她跟人说话的地方：不主动、不自省
+      if (pool.kind === "task") continue;
       if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const r = this.store.latestReflection(pid);
@@ -281,6 +284,8 @@ export class App {
     const now = this.clock.now();
     const delay = cfg.proactive?.reflectionDelayMs ?? 300_000;
     for (const pool of this.store.listPools()) {
+      // 任务池的进度/完成事件不该触发「她想说话了」
+      if (pool.kind === "task") continue;
       if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const lastUser = this.store.lastUserMessageTs(pid);
@@ -398,7 +403,8 @@ export class App {
     if (!n?.enabled) return null;
     const key = `capNotice.${day}`;
     if (n.oncePerDay && this.store.getKv(key)) return null;
-    const waiting = this.store.poolsWithUnread();
+    const waiting = this.store.poolsWithUnread()
+      .filter((id) => this.store.getPool(id)?.kind !== "task");
     if (!waiting.length) return null;
     const sent: string[] = [];
     for (const pool of waiting) {
@@ -428,7 +434,8 @@ export class App {
   private async notifySys(kind: string, text: string): Promise<void> {
     const n = this.o.cfg.limits.errorNotice;
     if (!n?.enabled) return;
-    const waiting = this.store.poolsWithUnread();
+    const waiting = this.store.poolsWithUnread()
+      .filter((id) => this.store.getPool(id)?.kind !== "task");
     if (!waiting.length) return;
     const key = `sysNotice.${kind}`;
     const now = this.clock.now();

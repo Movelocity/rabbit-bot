@@ -21,7 +21,7 @@ import {
   WorkerMismatchError, claimNextTask, completeTask, failTask, getWorker, listWorkers, progressTask,
   registerWorker, touchTask,
 } from "./core/workers.ts";
-import { listTaskEvents } from "./core/task-events.ts";
+import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
 import { isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
 import {
   APPROVAL_STATUSES, ApprovalConflictError, createApproval, decideApproval, getApproval,
@@ -35,6 +35,10 @@ import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
+import {
+  applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
+} from "./ops/scheduler-settings.ts";
+import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 512 * 1024;
 const DEFAULT_PORT = 3738;
@@ -48,6 +52,8 @@ export interface ApiDeps {
   enqueue?: () => void;
   /** 测试注入：替换任务执行器可执行文件 */
   executorBin?: string;
+  /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；不传则只持久化 */
+  scheduler?: Pick<Scheduler, "updateConfig">;
 }
 
 const WEB_ROOT = path.join(APP_ROOT, "web");
@@ -440,11 +446,20 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 4 && parts[3] === "status" && method === "POST") {
             if (!isTaskStatus(body.status)) throw new HttpError(400, `status 只能是 ${TASK_STATUSES.join(" / ")}`);
             if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
-            return reply(200, formatTask(updateTask(d.store, id, {
+            const updated = updateTask(d.store, id, {
               status: body.status,
               result: typeof body.result === "string" ? body.result : undefined,
               artifact: typeof body.artifact === "string" ? body.artifact : undefined,
-            })));
+            });
+            // 终态写一条任务事件，交给下一次任务事件 tick 批量带走；这里不立即 enqueue。
+            if (body.status === "done" || body.status === "failed" || body.status === "blocked") {
+              appendTaskEvent(d.store, id, {
+                text: `任务状态：${body.status}`,
+                sender: "dispatcher",
+                senderName: "调度器",
+              });
+            }
+            return reply(200, formatTask(updated));
           }
           if (parts.length === 4 && parts[3] === "touch" && method === "POST") {
             const workerId = bodyWorkerId(body);
@@ -564,6 +579,31 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }, d.enqueue));
           }
           throw new HttpError(404, "用法：GET|POST /v1/approvals、GET /v1/approvals/:id、POST /v1/approvals/:id/decide");
+        }
+        case "scheduler": {
+          if (parts.length === 2 && method === "GET") return reply(200, effectiveSchedulerSettings(d.cfg));
+          if (parts.length === 2 && method === "PUT") {
+            let settings;
+            try {
+              settings = validateSchedulerSettings(body);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            // 先落盘再应用：写文件失败就整体不动，不出现「接口回了 200 但重启后丢」
+            try {
+              saveSchedulerSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入调度设置失败：${(e as Error).message}`);
+            }
+            applySchedulerSettings(d.cfg, settings);
+            d.scheduler?.updateConfig({
+              privateWakeMs: settings.privateWakeMs,
+              tickMs: settings.groupWakeMs,
+              taskTickMs: settings.taskWakeMs,
+            });
+            return reply(200, effectiveSchedulerSettings(d.cfg));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/scheduler");
         }
         case "persona": {
           if (parts.length === 2 && method === "GET") return reply(200, readPersona(d.cfg));

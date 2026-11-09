@@ -29,7 +29,7 @@ mock 适配器(模拟) ──┘        │
 |---|---|
 | `src/core/db.ts` | SQLite：pools、messages、cursors、users/identities（跨平台 user_id）、plans/plan_fires、memories（来源池+可见范围）、handoffs、wake_log、usage_daily、kv（暂停开关） |
 | `src/core/hub.ts` | 入池、未读收集与游标推进、send（表情解析/确认等待/收集新消息） |
-| `src/core/scheduler.ts` | tick、活跃期短 tick、去抖（含最长等待）、群未@只等 tick |
+| `src/core/scheduler.ts` | 群聊 tick、任务事件 batch tick、活跃期短 tick、私聊/被@去抖（含最长等待） |
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
 | `src/core/reflection.ts` | 自省：没人说话时让模型想一下，输出 `urgency`（有多想说）+ 念头 |
 | `src/core/gate.ts` | 主动开口的六道门：低分 / 刚聊完 / 夜间 / 冷却 / 日上限 / 连说没人回 |
@@ -62,9 +62,11 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `scheduler.tickMs` | 180000 | 默认 tick 3 分钟 |
+| `scheduler.tickMs` | 180000 | 群聊 tick 周期（默认 3 分钟） |
+| `scheduler.taskTickMs` | 180000 | 任务事件 tick 周期：窗口内的任务事件合并成一次唤醒，不逐条叫醒 |
+| `scheduler.privateWakeMs` | 5000 | 私聊消息后的唤醒延迟（被 @ 仍走 `debounceMs` 快速去抖） |
 | `scheduler.activeTickMs` / `activeWindowMs` | 60000 / 600000 | 活跃对话期间 tick 缩短，静默 10 分钟后恢复 |
-| `scheduler.debounceMs` / `debounceMaxWaitMs` | 30000 / 120000 | 去抖静默时长 / 最长等待 |
+| `scheduler.debounceMs` / `debounceMaxWaitMs` | 5000 / 20000 | 群聊被 @ 时的去抖静默时长 / 最长等待 |
 | `send.confirmWaitMs` | 1000 | send 后等待时长 |
 | `send.confirmViaApi` | false | true 时用飞书“获取消息”接口确认消息存在 |
 | `loopGuard` | impl=pi-death-loop-guard, warn 5, block 10, abortAfterBlocks 1 | 连续 10 次一模一样 → 第 10 次被拦截并结束本轮 |
@@ -78,6 +80,8 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `adapters.feishu.logRawEmoji` | true | 把含表情的入站原始 content 记到 app.log，便于核对 |
 | `context.recentContextMessages` | 8 | 池首次出现在会话中时附带的近期上下文条数 |
 | `runtimeDir` | `~/.config/rabbit-bot/runtime` | 人设 / 提示词 / 话题库的真身目录（`RABBIT_BOT_RUNTIME` 可改），见 app/README「定制它」 |
+
+任务事件（进度、开始、退出、note、完成、失败、阻塞）都不逐条唤醒 UFA；它们先写进任务池，由下一次任务事件 tick 批量带走。审批仍走立即唤醒。
 
 **人设默认是简单助手**（`agent.name=小池`），仓库里不含任何人的真身设定：运行时目录有 `persona.md` 就用它，没有就用 `agent.persona` 那一句。想给它性格，照着 `app/config/persona.example.md` 写一份放进运行时目录。
 

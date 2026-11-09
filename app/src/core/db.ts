@@ -478,7 +478,9 @@ export class Store {
   lastUserMessageTs(poolId?: string | null): number {
     const row = poolId
       ? this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE pool_id=? AND from_self=0").get(poolId)
-      : this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE from_self=0").get();
+      // 跨池时排除任务池：任务进度不是「他说话了」，否则任务跑着全局静默永远不增长
+      : this.db.prepare(`SELECT MAX(m.ts) AS t FROM messages m JOIN pools p ON p.pool_id=m.pool_id
+          WHERE m.from_self=0 AND p.kind!='task'`).get();
     return Number((row as any)?.t ?? 0) || 0;
   }
 

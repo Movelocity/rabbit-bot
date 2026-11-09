@@ -25,10 +25,15 @@ function setup() {
     msg_id: msgId, sender_id: "u1", sender_name: "他", ts: Date.now(), text,
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   });
+  const taskSays = (text: string, msgId: string) => hub.ingest({
+    platform: "task", external_chat_id: "task:1", pool_kind: "task",
+    msg_id: msgId, sender_id: "task", sender_name: "任务", ts: Date.now(), text,
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
   // 第一句建池、并且模拟「wake 已经把未读抽走了」
   userSays("在吗", "u0");
   hub.takeUnread();
-  return { hub, store, sent, userSays };
+  return { hub, store, sent, userSays, taskSays };
 }
 
 test("发之前来了新消息：这句不发，原话退回", async () => {
@@ -74,4 +79,28 @@ test("没新消息的时候不受影响（别把正常发送也拦了）", async
   assert.equal(r.held, undefined);
   assert.equal(r.ok, true);
   assert.deepEqual(sent, ["在"]);
+});
+
+test("任务池的进度事件不算新消息：不压住发送，也不进 newMessages", async () => {
+  const { hub, store, sent, taskSays } = setup();
+  taskSays("任务 #1 进度 50%", "task1");
+  const r = await hub.send("feishu:oc_hold", "在");
+  assert.equal(r.ok, true);
+  assert.equal(r.held, undefined);
+  assert.deepEqual(r.newMessages, []);
+  assert.deepEqual(sent, ["在"]);
+  // 任务进度还留在池里，任务 tick / UI 照常能看
+  assert.equal(store.unread("task:task:1").length, 1);
+  assert.deepEqual(store.poolsWithUnread(), ["task:task:1"]);
+});
+
+test("任务池未读不影响普通私聊照常压住，且只退回私聊新消息", async () => {
+  const { hub, taskSays, userSays } = setup();
+  taskSays("任务 #1 退出", "task1");
+  userSays("钥匙的事你别管了", "u1");
+  const r = await hub.send("feishu:oc_hold", "那你自己去弄");
+  assert.equal(r.held, true);
+  assert.equal(r.newMessages.length, 1);
+  assert.match(r.newMessages[0].text, /钥匙/);
+  assert.ok(r.newMessages.every((m) => m.pool_id !== "task:task:1"));
 });

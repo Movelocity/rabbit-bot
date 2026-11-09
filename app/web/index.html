@@ -22,7 +22,7 @@
       <input id="token-input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 token">
       <p id="login-error" class="error hidden"></p>
       <button type="submit" class="primary">连接</button>
-      <p class="login-foot muted">会话收发仍在飞书 IM；这里管理人格、提示词、记忆和只读面板。页面可以匿名打开，但所有数据接口都要 token。</p>
+      <p class="login-foot muted">会话收发走已启用的 IM；这里管理人格、提示词、记忆、调度和只读面板。页面可以匿名打开，但所有数据接口都要 token。</p>
     </form>
   </div>
 
@@ -46,11 +46,9 @@
       <button type="button" data-tab="chat" class="active">会话</button>
       <button type="button" data-tab="tasks">任务</button>
       <button type="button" data-tab="approvals">权限</button>
-      <button type="button" data-tab="workers">Worker</button>
       <button type="button" data-tab="plans">计划</button>
       <button type="button" data-tab="memories">记忆</button>
-      <button type="button" data-tab="users">用户</button>
-      <button type="button" data-tab="persona">人格</button>
+      <button type="button" data-tab="manage">管理</button>
       <button type="button" data-tab="skills">技能</button>
     </nav>
 
@@ -74,7 +72,7 @@
           </div>
           <p id="chat-status" class="chat-status hidden" role="status"></p>
           <div id="messages" class="messages" tabindex="0" aria-label="消息记录"></div>
-          <div class="conversation-foot"><span>只读 · 收发请用飞书</span><button id="jump-latest" class="ghost small" type="button">回到最新</button></div>
+          <div class="conversation-foot"><span>只读 · 收发走已启用的 IM</span><button id="jump-latest" class="ghost small" type="button">回到最新</button></div>
         </section>
       </section>
 
@@ -131,18 +129,6 @@
         <div id="approvals-list" class="cards"></div>
       </section>
 
-      <section id="tab-workers" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Worker</h2>
-            <p class="muted">只读：已注册 worker 的在线状态和最后心跳。</p>
-          </div>
-          <button id="reload-workers" class="ghost" type="button">刷新</button>
-        </div>
-        <p id="workers-status" class="status"></p>
-        <div id="workers-list" class="cards"></div>
-      </section>
-
       <section id="tab-plans" class="tab-panel">
         <div class="panel-head">
           <div>
@@ -177,42 +163,93 @@
         <div id="mem-list" class="cards"></div>
       </section>
 
-      <section id="tab-users" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>飞书用户别名</h2>
-            <p class="muted">按飞书 sender open_id 绑定；别名优先于通讯录名字，后续自动改名不会冲掉。</p>
-          </div>
-          <button id="reload-users" class="ghost" type="button">刷新</button>
-        </div>
-        <p id="users-status" class="status"></p>
-        <div id="users-list" class="cards"></div>
-      </section>
+      <section id="tab-manage" class="tab-panel manage-layout">
+        <aside class="manage-menu">
+          <button type="button" data-manage="workers" class="active">Worker</button>
+          <button type="button" data-manage="users">用户</button>
+          <button type="button" data-manage="persona">人格</button>
+          <button type="button" data-manage="settings">调度</button>
+        </aside>
+        <div class="manage-content">
+          <section id="manage-workers" class="manage-view active">
+            <div class="panel-head">
+              <div>
+                <h2>Worker</h2>
+                <p class="muted">只读：已注册 worker 的在线状态和最后心跳。</p>
+              </div>
+              <button id="reload-workers" class="ghost" type="button">刷新</button>
+            </div>
+            <p id="workers-status" class="status"></p>
+            <div id="workers-list" class="cards"></div>
+          </section>
 
-      <section id="tab-persona" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>人格与系统提示词</h2>
-            <p class="muted">保存到运行时目录；下一轮会换新会话生效（当前会话上下文不保留）。系统提示词是模板，{{agent_name}}、{{persona}}、{{emoji_block}} 会在运行时替换。</p>
-          </div>
-          <button id="reload-persona" class="ghost" type="button">重新读取</button>
-        </div>
-        <p id="persona-status" class="status"></p>
-        <div class="editor-grid">
-          <label class="editor-card">
-            <span class="editor-label">人设 <span id="persona-path" class="muted"></span></span>
-            <textarea id="persona-editor" spellcheck="false" rows="18"></textarea>
-            <div class="editor-actions">
-              <button id="save-persona" class="primary small" type="button">保存人设</button>
+          <section id="manage-users" class="manage-view">
+            <div class="panel-head">
+              <div>
+                <h2>飞书用户别名</h2>
+                <p class="muted">按飞书 sender open_id 绑定；别名优先于通讯录名字，后续自动改名不会冲掉。</p>
+              </div>
+              <button id="reload-users" class="ghost" type="button">刷新</button>
             </div>
-          </label>
-          <label class="editor-card">
-            <span class="editor-label">系统提示词 <span id="prompt-path" class="muted"></span></span>
-            <textarea id="prompt-editor" spellcheck="false" rows="18"></textarea>
-            <div class="editor-actions">
-              <button id="save-prompt" class="primary small" type="button">保存系统提示词</button>
+            <p id="users-status" class="status"></p>
+            <div id="users-list" class="cards"></div>
+          </section>
+
+          <section id="manage-persona" class="manage-view">
+            <div class="panel-head">
+              <div>
+                <h2>人格与系统提示词</h2>
+                <p class="muted">保存到运行时目录；下一轮会换新会话生效（当前会话上下文不保留）。系统提示词是模板，{{agent_name}}、{{persona}}、{{emoji_block}} 会在运行时替换。</p>
+              </div>
+              <button id="reload-persona" class="ghost" type="button">重新读取</button>
             </div>
-          </label>
+            <p id="persona-status" class="status"></p>
+            <div class="editor-grid">
+              <label class="editor-card">
+                <span class="editor-label">人设 <span id="persona-path" class="muted"></span></span>
+                <textarea id="persona-editor" spellcheck="false" rows="18"></textarea>
+                <div class="editor-actions">
+                  <button id="save-persona" class="primary small" type="button">保存人设</button>
+                </div>
+              </label>
+              <label class="editor-card">
+                <span class="editor-label">系统提示词 <span id="prompt-path" class="muted"></span></span>
+                <textarea id="prompt-editor" spellcheck="false" rows="18"></textarea>
+                <div class="editor-actions">
+                  <button id="save-prompt" class="primary small" type="button">保存系统提示词</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <section id="manage-settings" class="manage-view">
+            <div class="panel-head">
+              <div>
+                <h2>调度设置</h2>
+                <p class="muted">私聊是收到消息后的唤醒延迟；群聊是定时 tick 周期；任务群是任务事件的批处理周期。被 @ 的消息仍按快速去抖立即处理。任务事件按这个周期 batch 进下一次 tick，不对每条进度单独唤醒。保存后立即生效，重启后保留。</p>
+              </div>
+              <button id="reload-scheduler" class="ghost" type="button">刷新</button>
+            </div>
+            <div class="memory-toolbar">
+              <label class="field">
+                <span>私聊唤醒间隔（秒）</span>
+                <input id="scheduler-private" type="number" min="1" step="1">
+              </label>
+              <label class="field">
+                <span>群聊唤醒间隔（秒）</span>
+                <input id="scheduler-group" type="number" min="1" step="1">
+              </label>
+              <label class="field">
+                <span>任务群唤醒间隔（秒）</span>
+                <input id="scheduler-task" type="number" min="1" step="1">
+              </label>
+            </div>
+            <div class="filter-row">
+              <button id="save-scheduler" class="primary" type="button">保存</button>
+              <span class="readonly-mini">单位：秒 · 保存后立即生效</span>
+            </div>
+            <p id="scheduler-status" class="status"></p>
+          </section>
         </div>
       </section>
 

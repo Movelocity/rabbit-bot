@@ -21,7 +21,7 @@ export interface Config {
   runtimeDir: string;
   dataDir: string;
   logDir: string;
-  scheduler: { tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
+  scheduler: { tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
   send: {
     confirmWaitMs: number; confirmViaApi: boolean;
     /** 分条投递的间隔（按上一条长度缩放，见 core/pacing.ts）。关掉=所有句子立刻连发 */
@@ -208,6 +208,8 @@ export function validateConfig(cfg: Config): void {
     if (!(typeof n === "number" && n > 0)) throw new Error(`config: ${name} 必须是正数`);
   };
   pos(cfg.scheduler.tickMs, "scheduler.tickMs");
+  pos(cfg.scheduler.taskTickMs, "scheduler.taskTickMs");
+  pos(cfg.scheduler.privateWakeMs, "scheduler.privateWakeMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");
   // 缓存折算汇率：0~1 之间（1 = 不打折）
   const rate = cfg.limits.cacheReadRate;

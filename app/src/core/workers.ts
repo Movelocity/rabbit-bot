@@ -194,8 +194,8 @@ function requireRunning(task: Task, id: number, workerId: string): void {
   if (task.worker_id !== workerId) throw new WorkerMismatchError(id, task.worker_id, workerId);
 }
 
-/** 完成：done + end_at + 清 lease；置 pending tick，0→1 时才调 enqueue。 */
-export function completeTask(store: Store, id: number, input: CompleteTaskInput, enqueue?: () => void): Task {
+/** 完成：done + end_at + 清 lease；置 pending tick，事件由下一次任务 tick 批量带走（不立即 enqueue）。 */
+export function completeTask(store: Store, id: number, input: CompleteTaskInput, _enqueue?: () => void): Task {
   const workerId = requireWorkerId(input.workerId);
   const task = getTask(store, id);
   if (!task) throw new Error(`没有任务 #${id}`);
@@ -215,15 +215,15 @@ export function completeTask(store: Store, id: number, input: CompleteTaskInput,
     senderName: workerName(store, workerId),
     ts: now,
   });
-  if (markPendingTick(store, now)) enqueue?.();
+  markPendingTick(store, now);
   return getTask(store, id)!;
 }
 
 /**
  * 失败：retryable 回 pending 并清 worker/lease；否则 failed + 写 note/result。
- * 只有落到 failed 才置 pending tick——回 pending 不是终态。
+ * 只有落到 failed 才置 pending tick——回 pending 不是终态；事件由下一次任务 tick 批量带走。
  */
-export function failTask(store: Store, id: number, input: FailTaskInput, enqueue?: () => void): Task {
+export function failTask(store: Store, id: number, input: FailTaskInput, _enqueue?: () => void): Task {
   const workerId = requireWorkerId(input.workerId);
   const task = getTask(store, id);
   if (!task) throw new Error(`没有任务 #${id}`);
@@ -259,6 +259,6 @@ export function failTask(store: Store, id: number, input: FailTaskInput, enqueue
     senderName: workerName(store, workerId),
     ts: now,
   });
-  if (markPendingTick(store, now)) enqueue?.();
+  markPendingTick(store, now);
   return getTask(store, id)!;
 }

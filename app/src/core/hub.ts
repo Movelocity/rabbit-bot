@@ -94,10 +94,12 @@ export class Hub {
   }
 
   /** 收集所有池的未读并推进游标（send 返回值、唤醒时读池都走这里） */
-  takeUnread(poolIds?: string[]): StoredMessage[] {
+  takeUnread(poolIds?: string[], opts: { excludeTask?: boolean } = {}): StoredMessage[] {
     const ids = poolIds ?? this.store.poolsWithUnread();
     const out: StoredMessage[] = [];
     for (const id of ids) {
+      // 任务池事件只是进度，不是「他又说话了」：send 时不拿它打断正常对话
+      if (opts.excludeTask && this.store.getPool(id)?.kind === "task") continue;
       const msgs = this.store.unread(id, this.cfg.context.maxUnreadPerPool);
       if (!msgs.length) continue;
       out.push(...msgs);
@@ -141,7 +143,7 @@ export class Hub {
     // 她是在「上一条消息」的基础上想好这几句的；人已经补了新信息，
     // 照着旧前提继续说是最像机器的一件事。原话退回去，让她看完再决定发不发、改不改。
     if (!opts.internal) {
-      const fresh = this.takeUnread();
+      const fresh = this.takeUnread(undefined, { excludeTask: true });
       if (fresh.length) {
         return { ok: false, held: true, heldText: content, error: "发之前来了新消息", sentParts: [], newMessages: fresh };
       }
@@ -175,7 +177,7 @@ export class Hub {
       await flush();
     } catch (e) {
       this.log.error(`发送失败 ${pool.pool_id}`, e);
-      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread() };
+      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread(undefined, { excludeTask: true }) };
     }
     // 节奏的基准：这一条发出去的时刻和长度，决定下一条要等多久
     if (!opts.internal && parts.length) {
@@ -198,6 +200,6 @@ export class Hub {
     this.scheduler?.markActive();
     this.onSent?.(pool.pool_id, content);
     // internal 的系统提示不能吃掉未读：它只是通知，用户的话还得等下次唤醒去读
-    return { ok: true, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread() };
+    return { ok: true, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread(undefined, { excludeTask: true }) };
   }
 }

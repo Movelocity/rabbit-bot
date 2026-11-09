@@ -5,6 +5,8 @@
   "logDir": "./logs",
   "scheduler": {
     "tickMs": 180000,
+    "taskTickMs": 180000,
+    "privateWakeMs": 5000,
     "activeTickMs": 60000,
     "activeWindowMs": 600000,
     "debounceMs": 5000,
