@@ -357,7 +357,7 @@ textarea { resize: vertical; min-height: 44px; }
 
 /* ---------- 通用面板 ---------- */
 
-#tab-plans, #tab-memories, #tab-skills,
+#tab-plans, #tab-memories, #tab-persona, #tab-skills,
 #tab-tasks, #tab-approvals, #tab-workers {
   overflow-y: auto;
   padding: 22px clamp(16px, 4vw, 44px) 60px;
@@ -480,7 +480,7 @@ textarea { resize: vertical; min-height: 44px; }
   .pools { border-right: 0; border-bottom: 1px solid var(--border); }
   .messages { padding: 12px; }
   .msg { max-width: 92%; }
-  #tab-plans, #tab-memories, #tab-skills,
+  #tab-plans, #tab-memories, #tab-persona, #tab-skills,
   #tab-tasks, #tab-approvals, #tab-workers { padding: 16px 14px 48px; }
   .memory-toolbar { grid-template-columns: 1fr; }
   .task-detail { grid-template-columns: 1fr; gap: 2px; }
@@ -489,4 +489,41 @@ textarea { resize: vertical; min-height: 44px; }
 
 @media (max-width: 480px) {
   .brand > span:last-child { display: none; }
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.editor-label { font-size: 13px; font-weight: 600; }
+.editor-label .muted { display: block; margin-top: 2px; font-weight: 400; font-size: 11px; overflow-wrap: anywhere; }
+.editor-card textarea {
+  width: 100%;
+  min-height: 420px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.editor-actions { display: flex; justify-content: flex-end; }
+.card-actions { display: flex; gap: 8px; margin-top: 10px; }
+.memory-edit { width: 100%; min-height: 76px; font-size: 14px; }
+button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); background: transparent; }
+button.danger:hover { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+
+@media (max-width: 820px) {
+  .editor-grid { grid-template-columns: 1fr; }
+  .editor-card textarea { min-height: 300px; }
 }

@@ -1,4 +1,4 @@
-/** UFA 的 terminal 只在「宿主机 + 审批开启」时下发；WA 始终有 terminal。 */
+/** UFA：沙盒模式始终有 terminal；宿主机模式必须有审批。WA 始终有 terminal。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTools } from "../src/agent/tools.ts";
@@ -22,11 +22,13 @@ test("UFA：host + approval=true 时包含 terminal", () => {
   }
 });
 
-test("UFA：docker 模式或 approval=false 时没有 terminal", () => {
-  for (const [mode, approval] of [["docker", true], ["host", false], ["docker", false]] as const) {
-    const names = namesFor("ufa", mode, approval);
-    assert.ok(!names.includes("terminal"), `${mode}/${approval} 不该给 terminal：${names.join(",")}`);
+test("UFA：docker 模式始终有 terminal；host 无审批时没有", () => {
+  for (const approval of [true, false]) {
+    const names = namesFor("ufa", "docker", approval);
+    assert.ok(names.includes("terminal"), `docker/${approval} 该有 terminal：${names.join(",")}`);
   }
+  const noApproval = namesFor("ufa", "host", false);
+  assert.ok(!noApproval.includes("terminal"), `host/审批关不该给 terminal：${noApproval.join(",")}`);
 });
 
 test("WA：始终有 terminal，且没有 chat/task/approval", () => {

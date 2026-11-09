@@ -725,6 +725,12 @@ export class Store {
     return Number(r.changes) > 0;
   }
 
+  /** 硬删除一条记忆（Web 管理台用）；日常过期请走 closeMemoryRow。 */
+  deleteMemoryRow(id: number): boolean {
+    const r = this.db.prepare("DELETE FROM memories WHERE id=?").run(id);
+    return Number(r.changes) > 0;
+  }
+
   /**
    * 把一条记忆标成「到此为止」。
    * COALESCE 保证已经失效的不被后来的时间覆盖——失效时刻只有第一次算数。

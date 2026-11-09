@@ -29,7 +29,8 @@ import {
 } from "./core/approvals.ts";
 import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
-import { addMemory, closeMemory, searchMemories } from "./ops/memories.ts";
+import { addMemory, closeMemory, deleteMemory, searchMemories, updateMemory } from "./ops/memories.ts";
+import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
@@ -466,6 +467,27 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET|POST /v1/approvals、GET /v1/approvals/:id、POST /v1/approvals/:id/decide");
         }
+        case "persona": {
+          if (parts.length === 2 && method === "GET") return reply(200, readPersona(d.cfg));
+          if (parts.length === 2 && method === "PUT") {
+            if (typeof body.content !== "string") throw new HttpError(400, "缺少 content");
+            const saved = writePersona(d.cfg, body.content);
+            markFreshSession(d.cfg);
+            return reply(200, saved);
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/persona {content}");
+        }
+        case "prompts": {
+          if (parts.length === 2 && method === "GET") return reply(200, listPrompts(d.cfg));
+          if (parts.length === 3 && method === "GET") return reply(200, readPrompt(d.cfg, parts[2]));
+          if (parts.length === 3 && method === "PUT") {
+            if (typeof body.content !== "string") throw new HttpError(400, "缺少 content");
+            const saved = writePrompt(d.cfg, parts[2], body.content);
+            markFreshSession(d.cfg);
+            return reply(200, saved);
+          }
+          throw new HttpError(404, "用法：GET /v1/prompts、GET|PUT /v1/prompts/:name {content}");
+        }
         case "memories": {
           if (parts.length === 2 && method === "GET") {
             const all = url.searchParams.get("all");
@@ -487,7 +509,18 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             // 只关掉，不写新的：事实过期但没有替代的说法时用这个
             return reply(200, closeMemory(d.store, { user: body.user, id: parts[2], at: body.at }));
           }
-          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories、PATCH /v1/memories/:id");
+          if (parts.length === 3 && method === "PUT") {
+            return reply(200, updateMemory(d.store, {
+              user: body.user, id: parts[2], content: body.content, from: body.from,
+            }));
+          }
+          if (parts.length === 3 && method === "DELETE") {
+            return reply(200, deleteMemory(d.store, {
+              user: body.user ?? url.searchParams.get("user") ?? undefined,
+              id: parts[2],
+            }));
+          }
+          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories、PATCH /v1/memories/:id（关闭）、PUT /v1/memories/:id（改正文）、DELETE /v1/memories/:id?user=");
         }
         case "images": {
           if (parts.length === 2 && method === "GET") {

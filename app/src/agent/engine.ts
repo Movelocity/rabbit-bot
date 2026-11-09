@@ -69,7 +69,7 @@ export interface PiEngineDeps {
   store: Store;
   log: Logger;
   tools: ToolDefinition[];
-  systemPrompt: string;
+  systemPrompt: string | (() => string);
   model: Model<any>;
   modelRuntime: ModelRuntime;
   /** 测试时用内存会话 */
@@ -105,6 +105,10 @@ export class PiEngine implements AgentEngine {
 
   takePendingHandoff() { const h = this.pendingHandoff; this.pendingHandoff = null; return h; }
 
+  private systemPromptText(): string {
+    return typeof this.d.systemPrompt === "function" ? this.d.systemPrompt() : this.d.systemPrompt;
+  }
+
   private async buildLoader(settingsManager: SettingsManager, useCommunity: boolean, systemPrompt?: string) {
     const lg = this.d.cfg.loopGuard;
     const communityPath = useCommunity ? communityLoopGuardPath() : null;
@@ -112,7 +116,7 @@ export class PiEngine implements AgentEngine {
     const loader = new DefaultResourceLoader({
       cwd: this.cwd, agentDir: this.piDir, settingsManager,
       noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      systemPrompt: systemPrompt ?? this.d.systemPrompt,
+      systemPrompt: systemPrompt ?? this.systemPromptText(),
       additionalExtensionPaths: communityPath ? [communityPath] : [],
       // codemode：模型写的 JS 跑在 QuickJS(WASM) 里，唯一能力是调用这些工具。
       // SDK 不会自动加载内置扩展，必须自己注册；不注册的话 tools 里写 codemode 只是个空名字。

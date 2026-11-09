@@ -212,10 +212,18 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** 会话标题：任务号 + 短名（老任务没名字就用目标），让人一眼看出这条会话在干什么。 */
+export function sessionTitle(task: Task): string {
+  const name = String(task.name ?? "").replace(/^#+\s*/, "").trim();
+  const goal = String(task.goal ?? "").replace(/\s+/g, " ").trim();
+  const label = name || goal;
+  return `#${task.id} ${label.length > 48 ? label.slice(0, 47) + "…" : label || "任务"}`;
+}
+
 function executorArgs(task: Task, prompt: string, resume: boolean): { bin: string; args: string[] } {
   const executor: Executor = task.executor === "mimo" ? "mimo" : "opencode";
   const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []), "--dir", task.work_dir,
-    "--title", `WA-task-${task.id}`, "--format", "json"];
+    "--title", sessionTitle(task), "--format", "json"];
   const model = String(task.model ?? "").trim();
   if (model) args.push(executor === "mimo" ? "--model" : "-m", model);
   return { bin: executor === "mimo" ? MIMO_BIN : "opencode", args };
@@ -368,6 +376,33 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
     sender: "dispatcher",
     senderName: "调度器",
   });
+
+  // 自然退出也要留痕：退出码、信号、耗时，别让任务永远停在 running 还没人知道
+  const recordExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    try {
+      const ms = Date.now() - startedAt;
+      const secs = (ms / 1000).toFixed(1);
+      const how = code === 0 ? "正常退出" : signal ? `被信号 ${signal} 终止` : `退出码 ${code ?? "?"}`;
+      appendTaskEvent(store, fresh.id, {
+        text: `执行器进程已退出：${how}（pid=${pid ?? "?"}，session=${sessionId || "（未捕获）"}，${secs}s）`,
+        sender: "dispatcher",
+        senderName: "调度器",
+      });
+      const now = getTask(store, fresh.id);
+      if (pid !== null && now?.runner_pid === pid) {
+        const patch: Parameters<typeof updateTask>[2] = { runner_pid: null, runner_started_at: null };
+        if (now.status === "running") patch.stage = "exited";
+        updateTask(store, fresh.id, patch);
+      }
+      fs.appendFileSync(logFile, `${JSON.stringify({
+        type: "ufa-dispatch", note: "process exited", code, signal, ms, at: Date.now(),
+      })}\n`);
+    } catch (e) {
+      process.stderr.write(`记录执行器退出失败：${(e as Error).message}\n`);
+    }
+  };
+  child.once("exit", recordExit);
+  if (child.exitCode !== null || child.signalCode !== null) recordExit(child.exitCode, child.signalCode);
 
   child.unref();
   return { task: updated, pid, session_id: sessionId, captured };

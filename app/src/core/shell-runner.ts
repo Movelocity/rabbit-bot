@@ -132,10 +132,11 @@ async function envMatches(container: string, env: Record<string, string>): Promi
  * 运行时目录（人设/话题库）第一次接进来时不重建，容器里看到的还是旧的空壳。
  */
 async function mountsMatch(container: string, volumes: ShellRunnerOptions["volumes"]): Promise<boolean> {
-  const r = await run("docker", ["inspect", "-f", "{{range .Mounts}}{{.Source}}=>{{.Destination}};{{end}}", container], 15000);
+  // 连读写模式一起比：shared-skills 从 rw 改成 ro 也要重建容器
+  const r = await run("docker", ["inspect", "-f", "{{range .Mounts}}{{.Source}}=>{{.Destination}}={{.RW}};{{end}}", container], 15000);
   if (r.code !== 0) return false;
   const cur = new Set(r.out.trim().split(";").filter(Boolean));
-  const want = new Set(volumes.map((v) => `${v.host}=>${v.container}`));
+  const want = new Set(volumes.map((v) => `${v.host}=>${v.container}=${(v.mode ?? "rw") === "rw"}`));
   if (cur.size !== want.size) return false;
   for (const w of want) if (!cur.has(w)) return false;
   return true;

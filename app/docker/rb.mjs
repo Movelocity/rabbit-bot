@@ -124,7 +124,6 @@ const HELP = `用法：rb <命令> [参数…]
   img-get <media/…|inbox/…> [--out 文件名]
   web-search <查询> [--count 6] [--content]
   web-fetch <url>
-  skills
 
 沙盒（直接操作 /work）：
   sb list [子目录]
@@ -224,8 +223,6 @@ async function main() {
       });
     case "web-fetch":
       return api("POST", "/v1/web/fetch", { body: { url: pos[1] ?? str(flags, "url") } });
-    case "skills":
-      return api("GET", "/v1/skills");
     case "sb": {
       const sub = pos[1];
       if (sub === "list") return listDir(pos[2] ?? "");

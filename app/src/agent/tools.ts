@@ -820,7 +820,7 @@ export function createTools(d: ToolDeps) {
     description:
       "运维与查询用：翻历史、看池、列计划、看任务和 worker、读图片、搜网页。"
       + "命令：pool-list / pool-read / pool-search / plan-list / mem-search / img-list / img-get / "
-      + "task-list / worker-list / web-search / web-fetch / skills。"
+      + "task-list / worker-list / web-search / web-fetch。"
       + "记事、改记忆、加计划、标完成、读写文件都有专门的工具（memory / plan / "
       + "read_file / write_file），任务写操作走 task 工具，别用 rb 做这些。"
       + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
@@ -877,8 +877,9 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  // UFA 只有「宿主机 + 审批开启」时才拿 terminal：其他组合下无审批裸跑风险太大。
-  const ufaHasTerminal = d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true;
+  // 沙盒本身就是边界，不用审批；宿主机裸跑才必须审批。
+  const ufaHasTerminal = d.cfg.exec.shell.mode === "docker"
+    || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   const ufaTools = [
     chat, memory, plan, approval, task, worker, readFile, writeFile,
     ...(ufaHasTerminal ? [runShellTool] : []),

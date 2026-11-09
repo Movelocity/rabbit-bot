@@ -27,7 +27,8 @@ function sbox(cfg: Config) {
 function withRuntimeVolumes(cfg: Config): SandboxArgvOptions["volumes"] {
   const vols = [...cfg.exec.shell.volumes];
   for (const [name, host] of Object.entries(runtimeOverlays(cfg))) {
-    vols.push({ host, container: `/work/${name}`, mode: "rw" });
+    // 外部技能库只读：容器里 cat 得到，改不了别人的库
+    vols.push({ host, container: `/work/${name}`, mode: name === "shared-skills" ? "ro" : "rw" });
   }
   return vols;
 }

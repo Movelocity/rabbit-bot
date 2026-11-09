@@ -15,6 +15,20 @@ skills/<name>/
 - 以 `_` 开头的目录（如 `_template`）不算技能，不会自动建 data。
 - 写运行时文件只写 `data/`；别改 `SKILL.md` 以外的设计文件来存状态。
 
+## 快速索引
+
+容器里直接跑 `skills`（宿主对应 `python3 docker/skills.py`）：
+
+```bash
+skills                 # 按「自己的 / 共享库」分组，带一句描述
+skills --full          # 不截断描述
+skills --paths         # 只输出 SKILL.md 路径
+skills --json          # 机器可读
+skills 关键词           # 按名字或描述过滤
+```
+
+读全文还是 `cat skills/<name>/SKILL.md` 或 `cat shared-skills/<name>/SKILL.md`。
+
 ## 技能里怎么访问业务数据
 
 沙盒不挂数据库，走宿主 REST API：

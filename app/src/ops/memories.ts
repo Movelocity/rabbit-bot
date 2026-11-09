@@ -168,3 +168,15 @@ export function updateMemory(store: Store, input: { user?: string; id?: string |
   store.updateMemoryRow(id, patch);
   return { id, content: patch.content ?? m.content, from: patch.valid_from ?? m.valid_from ?? m.created_at };
 }
+
+/** Web 管理台：硬删除一条记忆。日常「不再成立」仍应走 closeMemory。 */
+export function deleteMemory(store: Store, input: { user?: string; id?: string | number }) {
+  if (!input.user) throw new Error("缺少 user");
+  const id = Number(input.id);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`要的是记忆 id（整数），收到 ${input.id}`);
+  const m = store.getMemory(id);
+  if (!m) throw new Error(`没有 id=${id} 这条记忆`);
+  if (m.user_id !== input.user) throw new Error(`id=${id} 不是 ${input.user} 的记忆，不能删`);
+  store.deleteMemoryRow(id);
+  return { id, deleted: true };
+}

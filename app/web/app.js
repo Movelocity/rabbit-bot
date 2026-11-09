@@ -16,6 +16,7 @@
     loadingMessages: false,
     pollTimer: null,
     memUser: "",
+    personaLoaded: false,
     tasks: [],
     taskStatus: "",
     expandedTaskId: null,
@@ -436,7 +437,8 @@
     for (const m of rows) {
       const card = el("article", "card");
       const head = el("div", "card-head");
-      head.appendChild(el("div", "card-title", m.content));
+      const title = el("div", "card-title", m.content);
+      head.appendChild(title);
       head.appendChild(el("span", "badge" + (m.to ? " closed" : ""), m.to ? "已失效" : "有效"));
       card.appendChild(head);
 
@@ -447,7 +449,104 @@
       meta.appendChild(el("span", "", `有效 ${formatTs(m.from)} → ${m.to ? formatTs(m.to) : "至今"}`));
       if (m.replaced_by) meta.appendChild(el("span", "", `被 #${m.replaced_by} 顶替`));
       card.appendChild(meta);
+
+      const actions = el("div", "card-actions");
+      const editBtn = el("button", "ghost small", "编辑");
+      const delBtn = el("button", "danger small", "删除");
+      editBtn.addEventListener("click", () => {
+        const ta = el("textarea", "memory-edit");
+        ta.value = m.content;
+        ta.rows = 3;
+        const save = el("button", "primary small", "保存");
+        const cancel = el("button", "ghost small", "取消");
+        head.replaceChild(ta, title);
+        actions.replaceChildren(save, cancel);
+        save.addEventListener("click", async () => {
+          const content = ta.value.trim();
+          if (!content) {
+            setPanelStatus("#mem-status", "正文不能为空；不想留了就删除。", true);
+            return;
+          }
+          save.disabled = true;
+          try {
+            await api(`/v1/memories/${m.id}`, { method: "PUT", body: { user: state.memUser, content } });
+            await loadMemories();
+          } catch (e) {
+            save.disabled = false;
+            setPanelStatus("#mem-status", `保存失败：${friendlyError(e) || "未登录"}`, true);
+          }
+        });
+        cancel.addEventListener("click", () => void loadMemories());
+      });
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`删除记忆 #${m.id}？\n\n${m.content}`)) return;
+        delBtn.disabled = true;
+        try {
+          await api(`/v1/memories/${m.id}?user=${encodeURIComponent(state.memUser)}`, { method: "DELETE" });
+          await loadMemories();
+        } catch (e) {
+          delBtn.disabled = false;
+          setPanelStatus("#mem-status", `删除失败：${friendlyError(e) || "未登录"}`, true);
+        }
+      });
+      actions.append(editBtn, delBtn);
+      card.appendChild(actions);
       list.appendChild(card);
+    }
+  }
+
+  // ---------- 人格与提示词 ----------
+
+  async function loadEditors(force) {
+    if (state.personaLoaded && !force) return;
+    setPanelStatus("#persona-status", "加载中…");
+    try {
+      const [persona, prompt] = await Promise.all([api("/v1/persona"), api("/v1/prompts/system")]);
+      $("#persona-editor").value = persona.content;
+      $("#persona-path").textContent = `${persona.source} · ${persona.path}`;
+      $("#prompt-editor").value = prompt.content;
+      $("#prompt-path").textContent = `${prompt.source} · ${prompt.path}`;
+      state.personaLoaded = true;
+      setPanelStatus("#persona-status", "");
+    } catch (e) {
+      state.personaLoaded = false;
+      setPanelStatus("#persona-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
+    }
+  }
+
+  async function savePersona() {
+    const btn = $("#save-persona");
+    btn.disabled = true;
+    setPanelStatus("#persona-status", "保存中…");
+    try {
+      const saved = await api("/v1/persona", {
+        method: "PUT",
+        body: { content: $("#persona-editor").value },
+      });
+      $("#persona-path").textContent = `${saved.source} · ${saved.path}`;
+      setPanelStatus("#persona-status", "人设已保存，下一轮换新会话生效。");
+    } catch (e) {
+      setPanelStatus("#persona-status", `保存失败：${friendlyError(e) || "未登录"}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function saveSystemPrompt() {
+    const btn = $("#save-prompt");
+    btn.disabled = true;
+    setPanelStatus("#persona-status", "保存中…");
+    try {
+      const saved = await api("/v1/prompts/system", {
+        method: "PUT",
+        body: { content: $("#prompt-editor").value },
+      });
+      $("#prompt-path").textContent = `${saved.source} · ${saved.path}`;
+      setPanelStatus("#persona-status", "系统提示词已保存，下一轮换新会话生效。");
+    } catch (e) {
+      setPanelStatus("#persona-status", `保存失败：${friendlyError(e) || "未登录"}`, true);
+    } finally {
+      btn.disabled = false;
     }
   }
 
@@ -701,6 +800,8 @@
       void loadPlans();
     } else if (name === "memories") {
       void loadMemories();
+    } else if (name === "persona") {
+      void loadEditors();
     } else if (name === "skills") {
       void loadSkills();
     }
@@ -734,6 +835,9 @@
     });
     $("#reload-plans").addEventListener("click", () => void loadPlans());
     $("#reload-memories").addEventListener("click", () => void loadMemories());
+    $("#reload-persona").addEventListener("click", () => void loadEditors(true));
+    $("#save-persona").addEventListener("click", () => void savePersona());
+    $("#save-prompt").addEventListener("click", () => void saveSystemPrompt());
     $("#reload-skills").addEventListener("click", () => void loadSkills());
     $("#reload-tasks").addEventListener("click", () => void loadTasks());
     $("#reload-approvals").addEventListener("click", () => void loadApprovals());

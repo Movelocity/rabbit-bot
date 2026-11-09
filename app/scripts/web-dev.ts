@@ -1,5 +1,5 @@
 /**
- * 本地 Web 只读看板 demo：不开飞书、不调模型，直接用现有 data/rabbit-bot.db 起 API + 静态页。
+ * 本地 Web 管理台 demo：不开飞书、不调模型，直接用现有 data/rabbit-bot.db 起 API + 静态页。
  *
  *   npm run web
  *   npm run web -- --port 3748          # 正式服务已经占着 3738 时
@@ -53,12 +53,12 @@ async function main() {
   const shownHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const tokenFile = path.join(cfg.dataDir, "run", "api.token");
   console.log("");
-  console.log(`Web 只读看板：http://${shownHost}:${port}/`);
+  console.log(`Web 管理台：http://${shownHost}:${port}/`);
   console.log(`数据库：${dbFile}`);
   console.log(`token：${token}`);
   console.log(`token 文件：${tokenFile}`);
   console.log("");
-  console.log("只读看板：只查询现有数据库，不改任何数据；收发消息请用飞书。Ctrl+C 退出。");
+  console.log("管理台：会话/审批只读；人格、提示词、记忆可改。聊天和审批仍走飞书。Ctrl+C 退出。");
 
   const shutdown = () => {
     console.log("\n退出中…");

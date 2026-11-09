@@ -15,7 +15,8 @@ const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
   api: { enabled: true, port: 0, host: "127.0.0.1" },
-  // 单测会合并线上 local.json，外部技能库要显式关掉，否则列的是本机真库
+  // 单测会合并线上 local.json，外部技能库和运行时目录都要指到临时目录
+  runtimeDir: path.join(dir, "runtime"),
   exec: { dir: path.join(dir, "sandbox"), sharedSkillsDir: "" },
 });
 const store = new Store(path.join(dir, "test.db"));
@@ -72,7 +73,7 @@ test("静态只读看板不需要 token：/ 和 /ui/* 都返回正确类型", as
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") ?? "", /text\/html/);
-  assert.match(await page.text(), /Rabbit Bot 只读看板/);
+  assert.match(await page.text(), /Rabbit Bot 管理台/);
 
   const css = await fetch(`${base}/ui/style.css`);
   assert.equal(css.status, 200);
@@ -165,6 +166,56 @@ test("记忆：写、查；scope 按池类型推导", async () => {
   const found = await call("/v1/memories?user=u1&pool=p1");
   assert.equal(found.body.data.length, 1);
   assert.equal(found.body.data[0].content, "他对花生过敏");
+});
+
+test("记忆：PUT 改正文，DELETE 删除", async () => {
+  const add = await call("/v1/memories", {
+    method: "POST",
+    body: JSON.stringify({ user: "u-edit", content: "旧正文", pool: "p1" }),
+  });
+  const id = add.body.data.id;
+  const put = await call(`/v1/memories/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ user: "u-edit", content: "新正文" }),
+  });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  const found = await call("/v1/memories?user=u-edit&pool=p1");
+  assert.equal(found.body.data[0].content, "新正文");
+
+  const del = await call(`/v1/memories/${id}?user=u-edit`, { method: "DELETE" });
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.equal(del.body.data.deleted, true);
+  const after = await call("/v1/memories?user=u-edit&pool=p1");
+  assert.equal(after.body.data.length, 0);
+});
+
+test("人设与系统提示词：读默认、写运行时、读回", async () => {
+  const persona = await call("/v1/persona");
+  assert.equal(persona.status, 200);
+  assert.equal(typeof persona.body.data.content, "string");
+
+  const savedPersona = await call("/v1/persona", {
+    method: "PUT",
+    body: JSON.stringify({ content: "新的人设正文" }),
+  });
+  assert.equal(savedPersona.status, 200, JSON.stringify(savedPersona.body));
+  assert.equal(savedPersona.body.data.source, "runtime");
+  const readPersona = await call("/v1/persona");
+  assert.equal(readPersona.body.data.content, "新的人设正文");
+  assert.equal(fs.existsSync(path.join(cfg.runtimeDir, "persona.md")), true);
+
+  const prompt = await call("/v1/prompts/system");
+  assert.equal(prompt.status, 200);
+  assert.ok(prompt.body.data.content.length > 0);
+
+  const savedPrompt = await call("/v1/prompts/system", {
+    method: "PUT",
+    body: JSON.stringify({ content: "新的系统提示词" }),
+  });
+  assert.equal(savedPrompt.status, 200, JSON.stringify(savedPrompt.body));
+  assert.equal(savedPrompt.body.data.source, "runtime");
+  const readPrompt = await call("/v1/prompts/system");
+  assert.equal(readPrompt.body.data.content, "新的系统提示词");
 });
 
 test("技能：列出设计文件和数据目录", async () => {

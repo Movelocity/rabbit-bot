@@ -36,7 +36,7 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 | 方法 | 路径 | 对应 rb 命令 |
 |---|---|---|
 | GET | `/health` | — |
-| GET | `/`、`/ui/*` | 本地 Web 只读看板静态文件（不需要 token） |
+| GET | `/`、`/ui/*` | 本地 Web 管理台静态文件（不需要 token；页面里的数据接口仍要 token） |
 | GET | `/v1/pools` | `pool-list` |
 | GET | `/v1/pools/:ref/messages?limit=15&before_seq=300` | `pool-read` |
 | GET | `/v1/pools/:ref/search?q=火锅&limit=15` | `pool-search` |

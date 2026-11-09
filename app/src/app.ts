@@ -122,7 +122,7 @@ export class App {
       approval: this.approval,
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
     });
-    this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
+    this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
   }
 
   async start() {

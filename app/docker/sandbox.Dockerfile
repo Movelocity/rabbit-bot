@@ -25,4 +25,5 @@ WORKDIR /work
 
 # 沙盒内的 rb 客户端：业务数据走宿主 REST API，文件/shell 直接操作 /work。
 COPY rb.mjs /usr/local/bin/rb
-RUN chmod +x /usr/local/bin/rb && /usr/local/bin/rb help >/dev/null
+COPY skills.py /usr/local/bin/skills
+RUN chmod +x /usr/local/bin/rb /usr/local/bin/skills && /usr/local/bin/rb help >/dev/null && /usr/local/bin/skills >/dev/null

@@ -104,7 +104,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.ok(argv.includes("--dir"));
   assert.equal(argv[argv.indexOf("--dir") + 1], workDir);
   assert.ok(argv.includes("--title"));
-  assert.equal(argv[argv.indexOf("--title") + 1], `WA-task-${task.id}`);
+  assert.equal(argv[argv.indexOf("--title") + 1], `#${task.id} 纪要`);
   assert.ok(argv.includes("--format"));
   assert.equal(argv[argv.indexOf("--format") + 1], "json");
   assert.equal(argv.includes("-s"), false, "新任务不该带 -s");
@@ -129,6 +129,29 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.match(events[0].text, /已启动 opencode/);
   assert.match(events[0].text, /session=ses_fake_123/);
   assert.match(events[0].text, /工作目录=/);
+  store.close();
+});
+
+test("进程自然退出：写事件、清 runner_pid、stage=exited", async () => {
+  const { store, task } = setup();
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  process.env.FAKE_EXEC_OUT = recordPath();
+  process.env.FAKE_EXEC_SLEEP = "20";
+  await startTask(store, task, {
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+  });
+  const deadline = Date.now() + 3000;
+  let events = listTaskEvents(store, task.id);
+  while (Date.now() < deadline && !events.some((e) => /执行器进程已退出/.test(e.text))) {
+    await new Promise((r) => setTimeout(r, 20));
+    events = listTaskEvents(store, task.id);
+  }
+  const exitEvent = events.find((e) => /执行器进程已退出/.test(e.text));
+  assert.ok(exitEvent, `没记到退出：${events.map((e) => e.text).join(" | ")}`);
+  assert.match(exitEvent.text, /正常退出/);
+  const fresh = getTask(store, task.id)!;
+  assert.equal(fresh.runner_pid, null);
+  assert.equal(fresh.stage, "exited");
   store.close();
 });
 

@@ -1,4 +1,4 @@
-/** Web 只读看板的 API 契约：四个 GET 的鉴权与字段，静态页 200，前端不含写方法。 */
+/** Web 管理台的 API 契约：只读视图字段 + 静态页可登录。 */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -18,6 +18,7 @@ const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
   api: { enabled: true, port: 0, host: "127.0.0.1" },
+  runtimeDir: path.join(dir, "runtime"),
   exec: { dir: path.join(dir, "sandbox") },
 });
 const store = new Store(":memory:");
@@ -70,18 +71,18 @@ const call = async (p: string, auth = true) => {
   return { status: res.status, body };
 };
 
-test("静态页仍 200，页面写明只读，前端源码没有 POST/PATCH/DELETE", async () => {
+test("静态页 200：管理台可打开，审批仍提示去飞书", async () => {
   const page = await fetch(`${base}/`);
   const html = await page.text();
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") ?? "", /text\/html/);
-  assert.match(html, /只读/);
+  assert.match(html, /Rabbit Bot 管理台/);
   assert.match(html, /审批请在飞书里完成/);
 
-  for (const file of ["index.html", "app.js", "style.css"]) {
-    const text = fs.readFileSync(path.join(APP_ROOT, "web", file), "utf8");
-    assert.doesNotMatch(text, /\b(POST|PATCH|DELETE)\b/, `${file} 不应包含写方法`);
-  }
+  const js = fs.readFileSync(path.join(APP_ROOT, "web", "app.js"), "utf8");
+  assert.match(js, /\/v1\/persona/);
+  assert.match(js, /\/v1\/memories\//);
+  assert.match(js, /DELETE/);
 });
 
 test("任务 / 快照 / worker / 审批：带 token 200，无 token 401", async () => {
