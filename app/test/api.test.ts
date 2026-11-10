@@ -231,6 +231,34 @@ test("技能：列出设计文件和数据目录", async () => {
   assert.deepEqual(r.body.data, [{ name: "demo", description: "", skill: "skills/demo/SKILL.md", data: "skills/demo/data", has_data: false, readonly: false }]);
 });
 
+test("业务知识：没有地图返回空；有地图返回对象/关系/动作/术语", async () => {
+  const empty = await call("/v1/business");
+  assert.equal(empty.status, 200, JSON.stringify(empty.body));
+  assert.equal(empty.body.data.exists, false);
+  assert.equal(empty.body.data.dir, path.join(cfg.runtimeDir, "business"));
+  assert.deepEqual(empty.body.data.objects, []);
+
+  const examples = path.resolve(import.meta.dirname, "../../docs/examples/business");
+  const target = path.join(cfg.runtimeDir, "business");
+  fs.cpSync(examples, target, { recursive: true });
+
+  const r = await call("/v1/business");
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const d = r.body.data;
+  assert.equal(d.exists, true);
+  assert.equal(d.version, 1);
+  assert.ok(d.types.length >= 5);
+  assert.ok(d.objects.some((o: any) => o.id === "project:rabbit-bot"));
+  assert.ok(d.relations.some((rel: any) => rel.id === "repo_belongs_to_project" && rel.edge_count === 1));
+  assert.ok(d.edges.some((e: any) => e.relation === "repo_belongs_to_project" && e.from === "repo:rabbit-bot" && e.to === "project:rabbit-bot"));
+  assert.ok(d.edge_total >= d.edges.length);
+  assert.equal(d.edges_truncated, false);
+  assert.ok(d.actions.some((a: any) => a.id === "deploy"));
+  assert.ok(d.terms.some((t: any) => t.term === "老地方"));
+
+  fs.rmSync(target, { recursive: true, force: true });
+});
+
 test("沙盒文件：写读、越界拒绝", async () => {
   const put = await call("/v1/sandbox/file?path=notes/todo.md", {
     method: "PUT",

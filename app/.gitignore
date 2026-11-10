@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/*
+.ufa/
 # 默认提示词是代码资产，进 git；真实的提示词/话题库/技能都在运行时目录（家目录外）
 !prompts/
 logs/

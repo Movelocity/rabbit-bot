@@ -48,7 +48,9 @@
       <button type="button" data-tab="approvals">权限</button>
       <button type="button" data-tab="plans">计划</button>
       <button type="button" data-tab="memories">记忆</button>
+      <button type="button" data-tab="business">业务知识</button>
       <button type="button" data-tab="manage">管理</button>
+      <button id="reload-current" class="ghost small tab-refresh" type="button" aria-label="刷新当前页" title="刷新当前页">刷新</button>
     </nav>
 
     <main class="main">
@@ -56,7 +58,6 @@
         <aside class="pools">
           <div class="pools-head">
             <span>会话池</span>
-            <button id="reload-pools" class="ghost small" type="button">刷新</button>
           </div>
           <div id="pool-list" class="pool-list"></div>
         </aside>
@@ -75,14 +76,7 @@
         </section>
       </section>
 
-      <section id="tab-tasks" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>任务</h2>
-            <p class="muted">UFA 建任务，进入待审批；在这里改任务描述、审批并执行。</p>
-          </div>
-          <button id="reload-tasks" class="ghost" type="button">刷新</button>
-        </div>
+      <section id="tab-tasks" class="tab-panel" data-hint="飞书审批为主 · Web 备用">
         <div class="filter-row">
           <label class="field compact">
             <span>status</span>
@@ -97,20 +91,25 @@
               <option value="cancelled">cancelled</option>
             </select>
           </label>
-          <span class="readonly-mini">飞书审批为主 · Web 备用</span>
+          <label class="field compact">
+            <span>executor</span>
+            <select id="task-executor-filter">
+              <option value="">全部</option>
+              <option value="opencode">opencode</option>
+              <option value="mimo">mimo</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span>搜索</span>
+            <input id="task-search" type="search" placeholder="id / 任务名 / 目标 / worker / note">
+          </label>
         </div>
         <p id="tasks-status" class="status"></p>
         <div id="tasks-list" class="cards"></div>
+        <div id="tasks-pager" class="pager" hidden></div>
       </section>
 
-      <section id="tab-approvals" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>权限申请</h2>
-            <p class="muted">审批请在飞书里完成，此页只展示。</p>
-          </div>
-          <button id="reload-approvals" class="ghost" type="button">刷新</button>
-        </div>
+      <section id="tab-approvals" class="tab-panel" data-hint="只读 · 审批请在飞书里完成">
         <div class="filter-row">
           <label class="field compact">
             <span>status</span>
@@ -122,32 +121,17 @@
               <option value="timeout">timeout</option>
             </select>
           </label>
-          <span class="readonly-mini">只读 · 不提供裁决</span>
         </div>
         <p id="approvals-status" class="status"></p>
         <div id="approvals-list" class="cards"></div>
       </section>
 
-      <section id="tab-plans" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>待办计划</h2>
-            <p class="muted">只读列表；新增和完成计划请用飞书 IM。</p>
-          </div>
-          <button id="reload-plans" class="ghost" type="button">刷新</button>
-        </div>
+      <section id="tab-plans" class="tab-panel" data-hint="只读 · 新增/完成走 IM">
         <p id="plans-status" class="status"></p>
         <div id="plans-list" class="cards"></div>
       </section>
 
-      <section id="tab-memories" class="tab-panel">
-        <div class="panel-head">
-          <div>
-            <h2>长期记忆</h2>
-            <p class="muted">可以直接改正文或删除；新增和「过期」仍走飞书 IM。</p>
-          </div>
-          <button id="reload-memories" class="ghost" type="button">刷新</button>
-        </div>
+      <section id="tab-memories" class="tab-panel" data-hint="可直接改正文或删除 · 新增/过期走 IM">
         <div class="memory-toolbar">
           <label class="field">
             <span>当前池</span>
@@ -162,6 +146,35 @@
         <div id="mem-list" class="cards"></div>
       </section>
 
+      <section id="tab-business" class="tab-panel" data-hint="只读 · runtime/business">
+        <div class="business-toolbar">
+          <label class="field compact">
+            <span>搜索</span>
+            <input id="business-search" type="search" placeholder="对象 / 关系 / 术语">
+          </label>
+          <div class="segmented" id="business-view-switch" aria-label="业务知识视图">
+            <button type="button" data-business-view="list" class="active">列表</button>
+            <button type="button" data-business-view="graph">关系图</button>
+          </div>
+        </div>
+        <div id="business-summary" class="business-summary"></div>
+        <p id="business-status" class="status"></p>
+        <div id="business-list-view" class="business-layout">
+          <aside class="business-sidebar">
+            <nav id="business-categories" class="business-categories" aria-label="业务知识分类"></nav>
+            <div id="business-items" class="business-items"></div>
+          </aside>
+          <div id="business-detail" class="business-detail"></div>
+        </div>
+        <div id="business-graph-view" class="business-graph-layout" hidden>
+          <div class="business-graph-main">
+            <div id="business-graph" class="business-graph"></div>
+            <p id="business-graph-note" class="business-graph-note muted"></p>
+          </div>
+          <aside id="business-graph-detail" class="business-detail"></aside>
+        </div>
+      </section>
+
       <section id="tab-manage" class="tab-panel manage-layout">
         <aside class="manage-menu">
           <button type="button" data-manage="workers" class="active">Worker</button>
@@ -172,38 +185,17 @@
           <button type="button" data-manage="skills">技能</button>
         </aside>
         <div class="manage-content">
-          <section id="manage-workers" class="manage-view active">
-            <div class="panel-head">
-              <div>
-                <h2>Worker</h2>
-                <p class="muted">只读：已注册 worker 的在线状态和最后心跳。</p>
-              </div>
-              <button id="reload-workers" class="ghost" type="button">刷新</button>
-            </div>
+          <section id="manage-workers" class="manage-view active" data-hint="只读 · 在线状态与心跳">
             <p id="workers-status" class="status"></p>
             <div id="workers-list" class="cards"></div>
           </section>
 
-          <section id="manage-users" class="manage-view">
-            <div class="panel-head">
-              <div>
-                <h2>飞书用户别名</h2>
-                <p class="muted">按飞书 sender open_id 绑定；别名优先于通讯录名字，后续自动改名不会冲掉。</p>
-              </div>
-              <button id="reload-users" class="ghost" type="button">刷新</button>
-            </div>
+          <section id="manage-users" class="manage-view" data-hint="别名优先于通讯录名字">
             <p id="users-status" class="status"></p>
             <div id="users-list" class="cards"></div>
           </section>
 
-          <section id="manage-persona" class="manage-view">
-            <div class="panel-head">
-              <div>
-                <h2>人格与系统提示词</h2>
-                <p class="muted">保存到运行时目录；下一轮会换新会话生效（当前会话上下文不保留）。系统提示词是模板，{{agent_name}}、{{persona}}、{{emoji_block}} 会在运行时替换。</p>
-              </div>
-              <button id="reload-persona" class="ghost" type="button">重新读取</button>
-            </div>
+          <section id="manage-persona" class="manage-view" data-hint="保存到运行时 · 下一轮换新会话生效">
             <p id="persona-status" class="status"></p>
             <div class="editor-grid">
               <label class="editor-card">
@@ -223,14 +215,7 @@
             </div>
           </section>
 
-          <section id="manage-settings" class="manage-view">
-            <div class="panel-head">
-              <div>
-                <h2>调度设置</h2>
-                <p class="muted">私聊是收到消息后的唤醒延迟；群聊是定时 tick 周期；任务群是任务事件的批处理周期。被 @ 的消息仍按快速去抖立即处理。任务事件按这个周期 batch 进下一次 tick，不对每条进度单独唤醒。保存后立即生效，重启后保留。</p>
-              </div>
-              <button id="reload-scheduler" class="ghost" type="button">刷新</button>
-            </div>
+          <section id="manage-settings" class="manage-view" data-hint="单位：秒 · 保存后立即生效">
             <div class="memory-toolbar">
               <label class="field">
                 <span>私聊唤醒间隔（秒）</span>
@@ -247,19 +232,11 @@
             </div>
             <div class="filter-row">
               <button id="save-scheduler" class="primary" type="button">保存</button>
-              <span class="readonly-mini">单位：秒 · 保存后立即生效</span>
             </div>
             <p id="scheduler-status" class="status"></p>
           </section>
 
           <section id="manage-usage" class="manage-view">
-        <div class="panel-head">
-          <div>
-            <h2>Token 用量</h2>
-            <p class="muted">按小时或按天统计模型 token 消耗；下方逐条列出每次调用的明细。</p>
-          </div>
-          <button id="reload-usage" class="ghost" type="button">刷新</button>
-        </div>
         <div class="filter-row">
           <label class="field compact">
             <span>粒度</span>
@@ -283,20 +260,26 @@
         <p id="usage-status" class="status"></p>
           </section>
 
-          <section id="manage-skills" class="manage-view">
-        <div class="panel-head">
-          <div>
-            <h2>技能</h2>
-            <p class="muted">只读：技能是给模型读的文件，这里只做发现。</p>
-          </div>
-          <button id="reload-skills" class="ghost" type="button">刷新</button>
-        </div>
+          <section id="manage-skills" class="manage-view" data-hint="只读 · 技能只做发现">
         <p id="skills-status" class="status"></p>
         <div id="skills-list" class="cards"></div>
           </section>
+
         </div>
       </section>
     </main>
+    <footer id="app-foot" class="app-foot" hidden></footer>
+  </div>
+
+  <div id="task-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+    <div class="modal-backdrop" data-close-task-modal></div>
+    <div class="modal-panel" role="document">
+      <div class="modal-head">
+        <h2 id="task-modal-title">任务详情</h2>
+        <button id="task-modal-close" class="ghost small" type="button" aria-label="关闭任务详情">关闭</button>
+      </div>
+      <div id="task-modal-body" class="modal-body"></div>
+    </div>
   </div>
 </body>
 </html>

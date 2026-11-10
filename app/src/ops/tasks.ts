@@ -19,6 +19,7 @@ export function formatTask(t: Task) {
     deliverable: t.deliverable,
     constraints: t.constraints,
     acceptance: t.acceptance,
+    files: t.files,
     context: parseTaskContext(t.context),
     result: t.result,
     artifact: t.artifact,

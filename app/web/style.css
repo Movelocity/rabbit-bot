@@ -47,6 +47,7 @@ body {
 }
 
 .hidden { display: none !important; }
+[hidden] { display: none !important; }
 .muted { color: var(--muted); }
 .error { color: var(--bad); }
 
@@ -204,8 +205,36 @@ textarea { resize: vertical; min-height: 44px; }
   border-bottom-color: var(--accent);
   font-weight: 600;
 }
+.tabs .tab-refresh {
+  flex: none;
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  align-self: center;
+  margin-left: auto;
+  margin-bottom: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+.tabs .tab-refresh:hover { color: var(--text); }
 
 .main { flex: 1; min-height: 0; }
+.app-foot {
+  flex: none;
+  padding: 6px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.app-foot[hidden] { display: none; }
 .tab-panel { display: none; height: 100%; }
 .tab-panel.active { display: block; }
 
@@ -255,7 +284,7 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
 
 /* ---------- 通用面板 ---------- */
 
-#tab-plans, #tab-memories,
+#tab-plans, #tab-memories, #tab-business,
 #tab-tasks, #tab-approvals {
   overflow-y: auto;
   padding: 22px clamp(16px, 4vw, 44px) 60px;
@@ -299,15 +328,6 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
 }
 .manage-view { display: none; }
 .manage-view.active { display: block; }
-.panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 6px;
-}
-.panel-head h2 { margin: 0; font-size: 21px; }
-.panel-head p { margin: 3px 0 0; font-size: 13px; }
 .status { min-height: 20px; margin: 8px 0 14px; font-size: 13px; color: var(--muted); }
 .status.error { color: var(--bad); }
 .cards { display: grid; gap: 10px; }
@@ -355,6 +375,145 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   .badge.warn { color: #fbbf24; border-color: #b45309; }
 }
 
+.business-toolbar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--surface-2);
+}
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.segmented button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.business-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+.business-summary .badge { font-size: 12px; padding: 3px 9px; }
+.business-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 310px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.business-sidebar { min-width: 0; }
+.business-categories { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.business-category {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.business-category.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.business-items {
+  display: grid;
+  gap: 6px;
+  max-height: min(62vh, 640px);
+  overflow: auto;
+  padding-right: 4px;
+}
+.business-item {
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.business-item:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.business-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.business-item-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.business-item-sub { margin-top: 3px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.business-detail {
+  min-width: 0;
+  min-height: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+.business-detail h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.business-detail .detail-body { margin-top: 10px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.business-detail .business-hint { margin: 30px auto; max-width: 320px; text-align: center; color: var(--muted); font-size: 13px; }
+.business-detail .task-detail .detail-row { display: contents; }
+.business-subhead { margin: 18px 0 2px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.business-link {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.business-link:hover { text-decoration: underline; }
+.business-edge {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.business-edge:first-child { border-top: 0; }
+.business-edge .edge-arrow { color: var(--muted); flex: none; }
+.business-graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+  gap: 16px;
+  align-items: start;
+}
+.business-graph-main { min-width: 0; }
+.business-graph {
+  min-height: 480px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.business-graph svg { display: block; width: 100%; height: 100%; }
+.business-graph-note { margin: 8px 0 0; font-size: 12px; }
+.business-node circle { stroke: var(--surface); stroke-width: 2; cursor: pointer; }
+.business-node text { fill: var(--text); font-size: 11px; pointer-events: none; }
+.business-node.dim { opacity: .22; }
+.business-node.selected circle { stroke: var(--accent); stroke-width: 4; }
+.business-edge-line { stroke: var(--border); stroke-width: 1.5; }
+.business-edge-label { fill: var(--muted); font-size: 9px; pointer-events: none; }
+.business-edge.dim { opacity: .15; }
+.business-edge.hot .business-edge-line { stroke: var(--accent); }
+@media (max-width: 1100px) {
+  .business-layout, .business-graph-layout { grid-template-columns: 1fr; }
+  .business-items { max-height: none; }
+}
+
 .task-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--muted);
@@ -370,6 +529,7 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   padding-top: 12px;
   border-top: 1px dashed var(--border);
 }
+.task-detail .detail-row { display: contents; }
 .detail-label { font-size: 12px; color: var(--muted); }
 .detail-value {
   font-size: 13px;
@@ -403,13 +563,78 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
 }
 .field.compact { width: min(220px, 100%); }
 .field.compact select { padding: 7px 10px; }
-.readonly-mini {
+.field.grow { flex: 1 1 260px; min-width: 220px; }
+
+.pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 14px;
   font-size: 12px;
   color: var(--muted);
-  border: 1px dashed var(--border);
-  border-radius: 99px;
-  padding: 3px 9px;
 }
+.pager[hidden] { display: none; }
+.pager .pager-spacer { flex: 1 1 auto; }
+.pager select { width: auto; padding: 5px 8px; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal.hidden { display: none; }
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, .58);
+  backdrop-filter: blur(2px);
+}
+.modal-panel {
+  position: relative;
+  width: min(940px, 100%);
+  max-height: min(90vh, 920px);
+  overflow: auto;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.modal-head h2 { margin: 0; font-size: 18px; }
+.modal-body { min-width: 0; }
+.task-detail.in-modal { margin-top: 0; padding-top: 0; border-top: 0; }
+.task-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.task-events li {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-events .event-meta { color: var(--muted); }
+.task-events .event-text { margin-top: 3px; }
+.task-modal-empty { color: var(--muted); font-size: 13px; }
+body.modal-open { overflow: hidden; }
 
 .memory-toolbar {
   display: grid;
@@ -430,6 +655,7 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   .conn { margin-left: 0; order: 3; width: 100%; }
   .brand { margin-right: auto; }
   .tabs { padding: 6px 12px 0; }
+  .app-foot { padding: 5px 12px; }
   .chat-layout {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
@@ -446,7 +672,7 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   .msg-text { padding: 10px 13px; }
   .conversation-foot { padding: 10px 16px; }
   .chat-status { padding: 10px 16px; }
-  #tab-plans, #tab-memories,
+  #tab-plans, #tab-memories, #tab-business,
   #tab-tasks, #tab-approvals { padding: 16px 14px 48px; }
   .manage-layout.tab-panel.active {
     grid-template-columns: 1fr;
@@ -465,6 +691,9 @@ button:focus-visible, .messages:focus-visible { outline: 2px solid var(--accent)
   .memory-toolbar { grid-template-columns: 1fr; }
   .task-detail { grid-template-columns: 1fr; gap: 2px; }
   .task-detail .detail-label { margin-top: 7px; }
+  .modal { padding: 10px; }
+  .modal-panel { padding: 14px; max-height: 94vh; border-radius: 12px; }
+  .field.grow { min-width: 100%; }
 }
 
 @media (max-width: 480px) {

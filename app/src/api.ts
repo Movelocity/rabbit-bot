@@ -35,6 +35,7 @@ import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
+import { loadBusinessMap, relationEdges } from "./ops/business-map.ts";
 import { businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
@@ -44,6 +45,7 @@ import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 512 * 1024;
 const DEFAULT_PORT = 3738;
+const MAX_BUSINESS_EDGES = 1000;
 
 export interface ApiDeps {
   cfg: Config;
@@ -749,6 +751,52 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             })));
           }
           throw new HttpError(404, "用法：GET /v1/skills");
+        }
+        case "business": {
+          if (parts.length === 2 && method === "GET") {
+            let map;
+            try {
+              map = loadBusinessMap(d.cfg);
+            } catch (e) {
+              throw new HttpError(400, `业务地图读取失败：${(e as Error).message}`);
+            }
+            if (!map) {
+              return reply(200, {
+                exists: false, dir: businessDir(d.cfg), version: null,
+                types: [], objects: [], relations: [], actions: [], terms: [], edges: [],
+                edge_total: 0, edges_truncated: false,
+              });
+            }
+            const relations = map.relations.map((r) => ({
+              id: r.id, name: r.name, fromType: r.fromType, toType: r.toType,
+              kind: r.kind, cardinality: r.cardinality, direction: r.direction,
+              risk: r.risk, semantics: r.semantics,
+              mapping: { kind: r.mapping.kind, file: r.mapping.file, select: r.mapping.select },
+              edge_count: relationEdges(map, r.id).length,
+            }));
+            const edges: { relation: string; relation_name: string; from: string; to: string }[] = [];
+            let edgeTotal = 0;
+            for (const r of map.relations) {
+              const es = relationEdges(map, r.id);
+              edgeTotal += es.length;
+              for (const e of es) {
+                if (edges.length >= MAX_BUSINESS_EDGES) continue;
+                edges.push({ relation: r.id, relation_name: r.name, from: e.from, to: e.to });
+              }
+            }
+            return reply(200, {
+              exists: true, dir: map.dir, version: map.version,
+              types: map.types,
+              objects: map.objects,
+              relations,
+              actions: map.actions,
+              terms: map.terms,
+              edges,
+              edge_total: edgeTotal,
+              edges_truncated: edgeTotal > edges.length,
+            });
+          }
+          throw new HttpError(404, "用法：GET /v1/business");
         }
         case "sandbox": {
           // 只暴露文件区；`sb run` 不给 —— 技能脚本本来就在 shell 里

@@ -91,7 +91,7 @@ Bearer token，token 不对会明确提示。
 能做的事：
 
 - 会话：看池列表（alias / 标题 / 私聊群聊 / 最后消息时间 / 总数），看消息时间线并区分机器人自己发的；每 3 秒轮询，支持向上翻页。
-- 任务：按 status 过滤，展开看 deliverable / constraints / acceptance / result / artifact / note 和 worker 快照；`pending_approval` 的任务可在这里改描述后通过并执行 / 驳回。开启 `taskApproval` 后，任务提示会发到任务发起的聊天（或固定的 IM 审批房），主人贴 OK 就直接启动，Web 只是可选的备用入口。
+- 任务：按 status / executor / 关键词过滤，分页浏览；点“预览详情”在弹窗里看完整字段、最近事件和 worker 快照；`pending_approval` 的任务可在弹窗里改描述后通过并执行 / 驳回。开启 `taskApproval` 后，任务提示会发到任务发起的聊天（或固定的 IM 审批房），主人贴 OK 就直接启动，Web 只是可选的备用入口。
 - 权限：按 status 过滤查看权限申请；**这是运行时权限申请，审批请在已启用的 IM（飞书 / Matrix）里完成，此页只展示**。
 - Worker：只读查看 worker_id / name / kind / status / last_seen_at。
 - 计划：只读查看待办列表。
@@ -99,6 +99,7 @@ Bearer token，token 不对会明确提示。
 - 人格：可直接编辑人设和系统提示词，保存到运行时目录；下一轮换新会话生效。
 - 调度：私聊唤醒间隔、群聊 tick 周期、任务群 tick 周期三个值（按秒展示）；保存后立即生效，并写入 `<dataDir>/run/scheduler.json`，重启后仍保留。被 @ 的消息仍走快速去抖。任务事件按任务群周期 batch 进下一次 tick，不对每条进度单独唤醒。
 - 技能：只读列表（名字、描述、SKILL.md / data 路径）。
+- 业务知识：只读预览 `runtime/business` 的业务地图：左侧分类/列表，右侧详情；支持搜索和只读关系图（点节点看详情）。
 - 顶栏显示 API 健康状态和当前连接地址；移动端可用。
 
 前端在 `app/web/`，原生 HTML/CSS/JS，没有构建链，也不引用任何 CDN、外部字体或图片。

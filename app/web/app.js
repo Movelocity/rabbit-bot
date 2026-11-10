@@ -5,7 +5,7 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const TAB_NAMES = new Set(["chat", "tasks", "approvals", "plans", "memories", "manage"]);
+  const TAB_NAMES = new Set(["chat", "tasks", "approvals", "plans", "memories", "business", "manage"]);
   const MANAGE_VIEWS = new Set(["workers", "users", "persona", "settings", "usage", "skills"]);
   const LEGACY_TAB_VIEW = { workers: "workers", users: "users", persona: "persona", settings: "settings", usage: "usage", skills: "skills" };
 
@@ -26,13 +26,22 @@
     personaLoaded: false,
     tasks: [],
     taskStatus: "",
-    expandedTaskId: null,
+    taskSearch: "",
+    taskExecutor: "",
+    taskPage: 1,
+    taskPageSize: 20,
+    taskModalId: null,
+    taskModalLoading: false,
     taskSnapshots: {},
     approvals: [],
     approvalStatus: "pending",
     usageBucket: "hour",
     usageRange: "24h",
     workers: [],
+    business: null,
+    businessView: "list",
+    businessCategory: "objects",
+    businessSelected: null,
     logoutRequested: false,
   };
 
@@ -118,6 +127,7 @@
 
   function showLogin(message) {
     stopPolling();
+    closeTaskModal();
     $("#login").classList.remove("hidden");
     $("#app").classList.add("hidden");
     const err = $("#login-error");
@@ -756,6 +766,7 @@
       try {
         await api(`/v1/tasks/${t.id}/approve`, { method: "POST", body });
         setPanelStatus("#tasks-status", `任务 #${t.id} 已通过并启动。`);
+        closeTaskModal();
         await loadTasks();
       } catch (e) {
         setPanelStatus("#tasks-status", `审批失败：${friendlyError(e) || "未登录"}`, true);
@@ -773,6 +784,7 @@
       try {
         await api(`/v1/tasks/${t.id}/reject`, { method: "POST", body: { reason, by: "web" } });
         setPanelStatus("#tasks-status", `任务 #${t.id} 已驳回，未执行。`);
+        closeTaskModal();
         await loadTasks();
       } catch (e) {
         setPanelStatus("#tasks-status", `驳回失败：${friendlyError(e) || "未登录"}`, true);
@@ -784,21 +796,45 @@
     return form;
   }
 
+  function taskMatches(t) {
+    if (state.taskExecutor && String(t.executor || "") !== state.taskExecutor) return false;
+    const q = state.taskSearch.trim().toLowerCase();
+    if (!q) return true;
+    const hay = [
+      t.id, t.name, t.goal, t.deliverable, t.constraints, t.acceptance,
+      t.result, t.artifact, t.files, t.status, t.stage, t.worker_id,
+      t.executor, t.model, t.note,
+    ].map((v) => String(v ?? "")).join(" ").toLowerCase();
+    return hay.includes(q);
+  }
+
+  function filteredTasks() {
+    return state.tasks.filter(taskMatches);
+  }
+
+  function taskPageCount(total) {
+    return Math.max(1, Math.ceil(total / state.taskPageSize));
+  }
+
+  function clampTaskPage(total) {
+    const pages = taskPageCount(total);
+    if (state.taskPage > pages) state.taskPage = pages;
+    if (state.taskPage < 1) state.taskPage = 1;
+    return pages;
+  }
+
   async function loadTasks(silent) {
     if (!silent) setPanelStatus("#tasks-status", "加载中…");
     try {
       const query = state.taskStatus ? `?status=${encodeURIComponent(state.taskStatus)}` : "";
       const rows = await api(`/v1/tasks${query}`);
       state.tasks = Array.isArray(rows) ? rows : [];
-      if (state.expandedTaskId !== null && !state.tasks.some((t) => t.id === state.expandedTaskId)) {
-        state.expandedTaskId = null;
+      if (state.taskModalId !== null && !state.tasks.some((t) => t.id === state.taskModalId)) {
+        closeTaskModal();
       }
-      const editingPending = state.expandedTaskId !== null
-        && state.tasks.some((t) => t.id === state.expandedTaskId && t.status === "pending_approval");
-      if (silent && editingPending) return;
       renderTasks();
       setPanelStatus("#tasks-status", state.tasks.length ? "" : "没有任务。");
-      if (state.expandedTaskId !== null) await loadTaskSnapshot(state.expandedTaskId, true);
+      if (state.taskModalId !== null) await loadTaskSnapshot(state.taskModalId, true);
     } catch (e) {
       setPanelStatus("#tasks-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
     }
@@ -808,41 +844,179 @@
     try {
       const snapshot = await api(`/v1/tasks/${id}/snapshot`);
       state.taskSnapshots[id] = snapshot;
-      if (state.expandedTaskId === id) renderTasks();
+      if (state.taskModalId === id) {
+        state.taskModalLoading = false;
+        if (!silent) renderTaskModal();
+      }
     } catch (e) {
+      if (state.taskModalId === id) {
+        state.taskModalLoading = false;
+        if (!silent) renderTaskModal();
+      }
       if (!silent) setPanelStatus("#tasks-status", `任务快照加载失败：${friendlyError(e) || "未登录"}`, true);
     }
   }
 
-  async function toggleTask(id) {
-    if (state.expandedTaskId === id) {
-      state.expandedTaskId = null;
-      renderTasks();
-      return;
+  function openTaskModal(id) {
+    state.taskModalId = id;
+    state.taskModalLoading = !state.taskSnapshots[id];
+    renderTaskModal();
+    $("#task-modal").classList.remove("hidden");
+    document.body.classList.add("modal-open");
+    $("#task-modal-close").focus();
+    void loadTaskSnapshot(id, false);
+  }
+
+  function closeTaskModal() {
+    state.taskModalId = null;
+    state.taskModalLoading = false;
+    $("#task-modal").classList.add("hidden");
+    document.body.classList.remove("modal-open");
+    $("#task-modal-body").replaceChildren();
+  }
+
+  function modalDetailRows(t, snap) {
+    const detail = el("div", "task-detail in-modal");
+    const add = (label, value, mono) => {
+      if (value === null || value === undefined || String(value).trim() === "") return;
+      detail.appendChild(detailRow(label, value, mono));
+    };
+    add("goal", t.goal);
+    add("deliverable", t.deliverable);
+    add("constraints", t.constraints);
+    add("acceptance", t.acceptance);
+    add("result", t.result);
+    add("artifact", t.artifact, true);
+    add("work_dir", t.work_dir, true);
+    add("model", t.model, true);
+    add("stage", t.stage);
+    add("worker", t.worker_id, true);
+    add("start_at", t.start_at_local || formatTs(t.start_at));
+    add("end_at", t.end_at_local || (t.end_at ? formatTs(t.end_at) : ""));
+    add("updated", t.updated_at_local || formatTs(t.updated_at));
+    add("session_id", t.session_id, true);
+    add("doc_path", t.doc_path, true);
+    add("note", t.note);
+    const ctx = t.context || {};
+    const ctxLines = [
+      ctx.objects?.length ? `objects: ${ctx.objects.join(", ")}` : "",
+      ctx.relations?.length ? `relations: ${ctx.relations.join(", ")}` : "",
+      ctx.forbidden?.length ? `forbidden: ${ctx.forbidden.join(", ")}` : "",
+    ].filter(Boolean);
+    if (ctxLines.length) add("context", ctxLines.join("\n"));
+    if (t.files && t.files !== "[]") {
+      let files = t.files;
+      try { files = JSON.parse(t.files).join("\n"); } catch { /* keep raw */ }
+      add("files", files, true);
     }
-    state.expandedTaskId = id;
-    renderTasks();
-    await loadTaskSnapshot(id, false);
+    const worker = snap && snap.worker;
+    detail.appendChild(detailRow(
+      "worker 快照",
+      worker
+        ? `${worker.worker_id} · ${worker.status} · 最后心跳 ${formatTs(worker.last_seen_at)}`
+        : (t.worker_id ? `${t.worker_id} · 没有 worker 快照` : "未领取"),
+      true,
+    ));
+    return detail;
+  }
+
+  function modalEvents(snap) {
+    const box = el("section", "task-modal-section");
+    box.appendChild(el("h3", "", "最近事件"));
+    const events = snap && Array.isArray(snap.recent_events) ? snap.recent_events : [];
+    if (!events.length) {
+      box.appendChild(el("p", "task-modal-empty", "还没收到任务事件。"));
+      return box;
+    }
+    const list = el("ol", "task-events");
+    for (const ev of events) {
+      const li = el("li");
+      li.appendChild(el("div", "event-meta", `${ev.local || formatTs(ev.ts)} · ${ev.sender || "task"}`));
+      li.appendChild(el("div", "event-text", ev.text || ""));
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+    return box;
+  }
+
+  function renderTaskModal() {
+    const id = state.taskModalId;
+    if (id === null) return;
+    const task = state.tasks.find((t) => t.id === id);
+    if (!task) { closeTaskModal(); return; }
+    $("#task-modal-title").textContent = `#${task.id} ${task.name || "任务详情"}`;
+    const body = $("#task-modal-body");
+    body.replaceChildren();
+    const head = el("div", "card-meta");
+    head.appendChild(statusBadge(task.status));
+    head.appendChild(el("span", "", `executor ${task.executor || "—"}`));
+    head.appendChild(el("span", "", `更新 ${task.updated_at_local || formatTs(task.updated_at)}`));
+    body.appendChild(head);
+    const snap = state.taskSnapshots[id] || null;
+    body.appendChild(modalDetailRows(task, snap));
+    if (state.taskModalLoading) {
+      body.appendChild(el("p", "task-modal-empty", "正在加载任务快照…"));
+    } else {
+      body.appendChild(modalEvents(snap));
+      if (task.status === "pending_approval") body.appendChild(taskApprovalForm(task));
+    }
+  }
+
+  function renderTaskPager(total) {
+    const pager = $("#tasks-pager");
+    pager.replaceChildren();
+    if (!total) { pager.hidden = true; return; }
+    pager.hidden = false;
+    const pages = clampTaskPage(total);
+    const start = (state.taskPage - 1) * state.taskPageSize + 1;
+    const end = Math.min(total, state.taskPage * state.taskPageSize);
+    const prev = el("button", "ghost small", "上一页");
+    prev.type = "button";
+    prev.dataset.taskPage = String(state.taskPage - 1);
+    prev.disabled = state.taskPage <= 1;
+    const next = el("button", "ghost small", "下一页");
+    next.type = "button";
+    next.dataset.taskPage = String(state.taskPage + 1);
+    next.disabled = state.taskPage >= pages;
+    const size = el("select");
+    size.id = "task-page-size";
+    size.setAttribute("aria-label", "每页条数");
+    for (const n of [10, 20, 50, 100]) {
+      const opt = el("option", "", `${n} 条/页`);
+      opt.value = String(n);
+      if (n === state.taskPageSize) opt.selected = true;
+      size.appendChild(opt);
+    }
+    pager.appendChild(prev);
+    pager.appendChild(el("span", "", `${start}–${end} / 共 ${total} 条 · 第 ${state.taskPage} / ${pages} 页`));
+    pager.appendChild(next);
+    pager.appendChild(el("span", "pager-spacer"));
+    pager.appendChild(size);
   }
 
   function renderTasks() {
     const list = $("#tasks-list");
     list.replaceChildren();
-    if (!state.tasks.length) {
-      list.appendChild(el("p", "empty", "没有任务。"));
+    const rows = filteredTasks();
+    if (!rows.length) {
+      list.appendChild(el("p", "empty", state.tasks.length ? "没有匹配的任务。" : "没有任务。"));
+      renderTaskPager(0);
       return;
     }
-    for (const t of state.tasks) {
+    clampTaskPage(rows.length);
+    const start = (state.taskPage - 1) * state.taskPageSize;
+    const pageRows = rows.slice(start, start + state.taskPageSize);
+    for (const t of pageRows) {
       const card = el("article", "card");
       const head = el("div", "card-head");
       const title = el("div", "card-title");
       title.appendChild(el("span", "task-id", `#${t.id}`));
       title.appendChild(document.createTextNode(` ${t.goal || "（无目标）"}`));
       head.appendChild(title);
-      const expand = el("button", "ghost small", state.expandedTaskId === t.id ? "收起" : "展开详情");
-      expand.type = "button";
-      expand.addEventListener("click", () => void toggleTask(t.id));
-      head.appendChild(expand);
+      const preview = el("button", "ghost small", t.status === "pending_approval" ? "审批 / 预览" : "预览详情");
+      preview.type = "button";
+      preview.addEventListener("click", () => openTaskModal(t.id));
+      head.appendChild(preview);
       card.appendChild(head);
 
       const meta = el("div", "card-meta");
@@ -853,34 +1027,9 @@
       const summary = noteSummary(t.note);
       if (summary) meta.appendChild(el("span", "meta-wide", `note ${summary}`));
       card.appendChild(meta);
-
-      if (state.expandedTaskId === t.id) {
-        const detail = el("div", "task-detail");
-        detail.appendChild(detailRow("deliverable", t.deliverable));
-        detail.appendChild(detailRow("constraints", t.constraints));
-        detail.appendChild(detailRow("acceptance", t.acceptance));
-        detail.appendChild(detailRow("result", t.result));
-        detail.appendChild(detailRow("artifact", t.artifact, true));
-        detail.appendChild(detailRow("work_dir", t.work_dir, true));
-        detail.appendChild(detailRow("executor", t.executor, true));
-        detail.appendChild(detailRow("model", t.model, true));
-        detail.appendChild(detailRow("note", t.note));
-        detail.appendChild(detailRow("start_at", t.start_at_local || formatTs(t.start_at)));
-        detail.appendChild(detailRow("end_at", t.end_at_local || (t.end_at ? formatTs(t.end_at) : "")));
-        const snap = state.taskSnapshots[t.id];
-        const worker = snap && snap.worker;
-        detail.appendChild(detailRow(
-          "worker 快照",
-          worker
-            ? `${worker.worker_id} · ${worker.status} · 最后心跳 ${formatTs(worker.last_seen_at)}`
-            : (t.worker_id ? `${t.worker_id} · 没有 worker 快照` : "未领取"),
-          true,
-        ));
-        if (t.status === "pending_approval") detail.appendChild(taskApprovalForm(t));
-        card.appendChild(detail);
-      }
       list.appendChild(card);
     }
+    renderTaskPager(rows.length);
   }
 
   // ---------- 权限申请 ----------
@@ -996,6 +1145,545 @@
       list.appendChild(card);
     }
   }
+
+  // ---------- 业务知识 ----------
+
+  const BUSINESS_CATEGORIES = [
+    { id: "objects", label: "对象" },
+    { id: "relations", label: "关系" },
+    { id: "actions", label: "动作" },
+    { id: "terms", label: "术语" },
+    { id: "types", label: "类型" },
+  ];
+
+  async function loadBusiness() {
+    setPanelStatus("#business-status", "加载中…");
+    try {
+      const data = await api("/v1/business");
+      state.business = data;
+      updateFooter();
+      ensureBusinessSelection(data);
+      renderBusiness();
+      setPanelStatus("#business-status", data.exists ? "" : "还没有业务地图。");
+    } catch (e) {
+      state.business = null;
+      state.businessSelected = null;
+      updateFooter();
+      $("#business-summary").replaceChildren();
+      $("#business-categories").replaceChildren();
+      $("#business-items").replaceChildren();
+      $("#business-detail").replaceChildren();
+      $("#business-graph").replaceChildren();
+      $("#business-graph-detail").replaceChildren();
+      setPanelStatus("#business-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
+    }
+  }
+
+  function businessQuery() {
+    return ($("#business-search").value || "").trim().toLowerCase();
+  }
+
+  function businessTypeName(data, id) {
+    return (data.types || []).find((t) => t.id === id)?.name || id;
+  }
+
+  function businessObjectName(data, id) {
+    const o = (data.objects || []).find((x) => x.id === id);
+    return o ? (o.name || o.id) : id;
+  }
+
+  function businessRelationName(data, id) {
+    const r = (data.relations || []).find((x) => x.id === id);
+    return r ? (r.name || r.id) : id;
+  }
+
+  function businessItemsFor(data, category, q) {
+    const hit = (...vals) => !q || vals.filter(Boolean).join(" ").toLowerCase().includes(q);
+    if (category === "objects") {
+      return (data.objects || [])
+        .filter((o) => hit(o.id, o.type, o.name, ...(o.aliases || []), o.description, ...(o.tags || [])))
+        .map((o) => ({
+          kind: "objects", id: o.id,
+          title: o.name || o.id,
+          subtitle: `${businessTypeName(data, o.type)} · ${o.id}`,
+        }));
+    }
+    if (category === "relations") {
+      return (data.relations || [])
+        .filter((r) => hit(r.id, r.name, r.fromType, r.toType, r.semantics))
+        .map((r) => ({
+          kind: "relations", id: r.id,
+          title: `${businessTypeName(data, r.fromType)} → ${businessTypeName(data, r.toType)}`,
+          subtitle: `${r.name || r.id} · ${r.edge_count ?? 0} 条边`,
+        }));
+    }
+    if (category === "actions") {
+      return (data.actions || [])
+        .filter((a) => hit(a.id, a.name, a.description, ...(a.appliesTo || []), ...(a.requiresRelations || [])))
+        .map((a) => ({
+          kind: "actions", id: a.id,
+          title: a.name || a.id,
+          subtitle: `${(a.appliesTo || []).map((t) => businessTypeName(data, t)).join(" / ") || "未限定类型"}${a.risk ? ` · ${a.risk}` : ""}`,
+        }));
+    }
+    if (category === "terms") {
+      return (data.terms || [])
+        .filter((t) => hit(t.term, t.objectId, t.note))
+        .map((t) => ({
+          kind: "terms", id: t.term,
+          title: t.term,
+          subtitle: `${t.objectId}${t.note ? ` · ${t.note}` : ""}`,
+        }));
+    }
+    const typeCounts = new Map();
+    for (const o of data.objects || []) typeCounts.set(o.type, (typeCounts.get(o.type) || 0) + 1);
+    return (data.types || [])
+      .filter((t) => hit(t.id, t.name, t.description))
+      .map((t) => ({
+        kind: "types", id: t.id,
+        title: t.name || t.id,
+        subtitle: `${t.id} · ${typeCounts.get(t.id) || 0} 个对象`,
+      }));
+  }
+
+  function ensureBusinessSelection(data) {
+    const items = businessItemsFor(data, state.businessCategory, businessQuery());
+    const cur = state.businessSelected;
+    if (cur && items.some((i) => i.kind === cur.kind && i.id === cur.id)) return;
+    state.businessSelected = items.length ? { kind: items[0].kind, id: items[0].id } : null;
+  }
+
+  function selectBusinessItem(kind, id) {
+    state.businessSelected = { kind, id };
+    state.businessCategory = kind;
+    renderBusiness();
+  }
+
+  function syncBusinessView() {
+    $$("#business-view-switch button").forEach((b) => b.classList.toggle("active", b.dataset.businessView === state.businessView));
+    $("#business-list-view").hidden = state.businessView !== "list";
+    $("#business-graph-view").hidden = state.businessView !== "graph";
+  }
+
+  function renderBusiness() {
+    const data = state.business;
+    const summary = $("#business-summary");
+    summary.replaceChildren();
+    if (!data) return;
+    const counts = [
+      ["对象类型", data.types?.length || 0],
+      ["对象", data.objects?.length || 0],
+      ["关系", data.relations?.length || 0],
+      ["动作", data.actions?.length || 0],
+      ["术语", data.terms?.length || 0],
+    ];
+    for (const [label, count] of counts) summary.appendChild(el("span", "badge", `${label} ${count}`));
+    syncBusinessView();
+
+    if (!data.exists) {
+      $("#business-categories").replaceChildren();
+      $("#business-items").replaceChildren();
+      $("#business-graph").replaceChildren(el("p", "empty", "没有可展示的关系图。"));
+      $("#business-graph-note").textContent = "";
+      const hint = `还没有业务地图。在 ${data.dir || "runtime/business"} 下放 objects.json / relations.json 后再刷新。`;
+      $("#business-detail").replaceChildren(el("p", "business-hint", hint));
+      $("#business-graph-detail").replaceChildren(el("p", "business-hint", "没有可展示的关系图。"));
+      return;
+    }
+
+    renderBusinessCategories(data);
+    renderBusinessItems(data);
+    renderBusinessDetail($("#business-detail"), data, state.businessSelected);
+    renderBusinessDetail($("#business-graph-detail"), data, state.businessSelected);
+    if (state.businessView === "graph") renderBusinessGraph(data);
+  }
+
+  function renderBusinessCategories(data) {
+    const nav = $("#business-categories");
+    nav.replaceChildren();
+    const counts = {
+      objects: data.objects?.length || 0,
+      relations: data.relations?.length || 0,
+      actions: data.actions?.length || 0,
+      terms: data.terms?.length || 0,
+      types: data.types?.length || 0,
+    };
+    for (const c of BUSINESS_CATEGORIES) {
+      const btn = el("button", "business-category" + (state.businessCategory === c.id ? " active" : ""), `${c.label} ${counts[c.id] || 0}`);
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        state.businessCategory = c.id;
+        ensureBusinessSelection(data);
+        renderBusiness();
+      });
+      nav.appendChild(btn);
+    }
+  }
+
+  function renderBusinessItems(data) {
+    const box = $("#business-items");
+    box.replaceChildren();
+    const q = businessQuery();
+    const items = businessItemsFor(data, state.businessCategory, q);
+    if (!items.length) {
+      box.appendChild(el("p", "empty", q ? `没有匹配「${q}」的条目。` : "这一分类还没有条目。"));
+      return;
+    }
+    for (const item of items) {
+      const active = state.businessSelected?.kind === item.kind && state.businessSelected?.id === item.id;
+      const btn = el("button", "business-item" + (active ? " active" : ""));
+      btn.type = "button";
+      btn.appendChild(el("div", "business-item-title", item.title));
+      if (item.subtitle) btn.appendChild(el("div", "business-item-sub", item.subtitle));
+      btn.addEventListener("click", () => selectBusinessItem(item.kind, item.id));
+      box.appendChild(btn);
+    }
+  }
+
+  function businessDetailHead(container, title, badge, cls) {
+    const head = el("div", "card-head");
+    head.appendChild(el("h3", "", title));
+    if (badge) head.appendChild(el("span", `badge ${cls || "info"}`, badge));
+    container.appendChild(head);
+  }
+
+  function businessDetailBody(container, text) {
+    if (text) container.appendChild(el("div", "detail-body", text));
+  }
+
+  function businessDetailRows(container, rows) {
+    const grid = el("div", "task-detail");
+    for (const [label, value, mono] of rows) {
+      if (value === undefined || value === null || value === "") continue;
+      const row = el("div", "detail-row");
+      row.appendChild(el("span", "detail-label", label));
+      row.appendChild(el("div", "detail-value" + (mono ? " mono" : ""), String(value)));
+      grid.appendChild(row);
+    }
+    container.appendChild(grid);
+  }
+
+  function businessDetailSubhead(container, text) {
+    container.appendChild(el("h4", "business-subhead", text));
+  }
+
+  function businessLink(text, onClick) {
+    const btn = el("button", "business-link", text);
+    btn.type = "button";
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function businessEdgeRow(data, edge, selectedId) {
+    const row = el("div", "business-edge");
+    const outgoing = edge.from === selectedId;
+    row.appendChild(el("span", "edge-arrow", outgoing ? "→" : "←"));
+    row.appendChild(el("span", "", businessRelationName(data, edge.relation)));
+    const other = outgoing ? edge.to : edge.from;
+    row.appendChild(businessLink(businessObjectName(data, other), () => selectBusinessItem("objects", other)));
+    return row;
+  }
+
+  function renderBusinessDetail(container, data, sel) {
+    container.replaceChildren();
+    if (!data || !data.exists) {
+      container.appendChild(el("p", "business-hint", "还没有业务地图。"));
+      return;
+    }
+    if (!sel) {
+      container.appendChild(el("p", "business-hint", "选一个条目看详情，或切到关系图点节点。"));
+      return;
+    }
+    const typeName = (id) => businessTypeName(data, id);
+    const objName = (id) => businessObjectName(data, id);
+    const relName = (id) => businessRelationName(data, id);
+    if (sel.kind === "objects") {
+      const o = (data.objects || []).find((x) => x.id === sel.id);
+      if (!o) { container.appendChild(el("p", "business-hint", `对象 ${sel.id} 不存在。`)); return; }
+      businessDetailHead(container, o.name || o.id, typeName(o.type));
+      businessDetailBody(container, o.description);
+      businessDetailRows(container, [
+        ["id", o.id, true],
+        ["type", `${typeName(o.type)}（${o.type}）`],
+        ["别名", (o.aliases || []).join(" / ")],
+        ["key", o.key?.value ? `${o.key.kind ? `${o.key.kind}:` : ""}${o.key.value}` : "", true],
+        ["source", o.source?.value ? `${o.source.kind ? `${o.source.kind}:` : ""}${o.source.value}` : "", true],
+        ["tags", (o.tags || []).join(" / ")],
+      ]);
+      const edges = (data.edges || []).filter((e) => e.from === o.id || e.to === o.id);
+      businessDetailSubhead(container, `关系（${edges.length}）`);
+      if (!edges.length) container.appendChild(el("p", "muted", "没有解析出边。"));
+      else {
+        const box = el("div");
+        for (const e of edges) box.appendChild(businessEdgeRow(data, e, o.id));
+        container.appendChild(box);
+      }
+      const actions = (data.actions || []).filter((a) => (a.appliesTo || []).includes(o.type));
+      if (actions.length) {
+        businessDetailSubhead(container, `动作（${actions.length}）`);
+        const box = el("div");
+        for (const a of actions) {
+          const line = el("div", "business-edge");
+          line.appendChild(businessLink(a.name || a.id, () => selectBusinessItem("actions", a.id)));
+          if (a.risk) line.appendChild(el("span", "badge", a.risk));
+          box.appendChild(line);
+        }
+        container.appendChild(box);
+      }
+      const terms = (data.terms || []).filter((t) => t.objectId === o.id);
+      if (terms.length) {
+        businessDetailSubhead(container, `术语（${terms.length}）`);
+        const box = el("div");
+        for (const t of terms) {
+          const line = el("div", "business-edge");
+          line.appendChild(el("span", "", t.term));
+          if (t.note) line.appendChild(el("span", "muted", t.note));
+          box.appendChild(line);
+        }
+        container.appendChild(box);
+      }
+      return;
+    }
+    if (sel.kind === "relations") {
+      const r = (data.relations || []).find((x) => x.id === sel.id);
+      if (!r) { container.appendChild(el("p", "business-hint", `关系 ${sel.id} 不存在。`)); return; }
+      businessDetailHead(container, `${typeName(r.fromType)} → ${typeName(r.toType)}`, r.risk || "", r.risk === "high" ? "warn" : r.risk === "medium" ? "info" : "");
+      businessDetailBody(container, r.semantics);
+      businessDetailRows(container, [
+        ["id", r.id, true],
+        ["name", r.name],
+        ["from", `${typeName(r.fromType)}（${r.fromType}）`],
+        ["to", `${typeName(r.toType)}（${r.toType}）`],
+        ["cardinality", r.cardinality],
+        ["direction", r.direction],
+        ["mapping", r.mapping?.kind ? `${r.mapping.kind}${r.mapping.file ? ` · ${r.mapping.file}` : ""}` : "", true],
+      ]);
+      const edges = (data.edges || []).filter((e) => e.relation === r.id);
+      businessDetailSubhead(container, `实际边（${edges.length}）`);
+      if (!edges.length) container.appendChild(el("p", "muted", "没有解析出边：可能是 file mapping 缺数据。"));
+      else {
+        const box = el("div");
+        for (const e of edges) {
+          const line = el("div", "business-edge");
+          line.appendChild(businessLink(objName(e.from), () => selectBusinessItem("objects", e.from)));
+          line.appendChild(el("span", "edge-arrow", "→"));
+          line.appendChild(businessLink(objName(e.to), () => selectBusinessItem("objects", e.to)));
+          box.appendChild(line);
+        }
+        container.appendChild(box);
+      }
+      return;
+    }
+    if (sel.kind === "actions") {
+      const a = (data.actions || []).find((x) => x.id === sel.id);
+      if (!a) { container.appendChild(el("p", "business-hint", `动作 ${sel.id} 不存在。`)); return; }
+      businessDetailHead(container, a.name || a.id, a.risk || "", a.risk === "high" ? "warn" : a.risk === "medium" ? "info" : "");
+      businessDetailBody(container, a.description);
+      businessDetailRows(container, [
+        ["id", a.id, true],
+        ["appliesTo", (a.appliesTo || []).map((t) => typeName(t)).join(" / ")],
+        ["requiresRelations", (a.requiresRelations || []).map((id) => `${relName(id)}（${id}）`).join(" / ")],
+      ]);
+      return;
+    }
+    if (sel.kind === "terms") {
+      const t = (data.terms || []).find((x) => x.term === sel.id);
+      if (!t) { container.appendChild(el("p", "business-hint", `术语 ${sel.id} 不存在。`)); return; }
+      businessDetailHead(container, t.term, objName(t.objectId));
+      businessDetailBody(container, t.note);
+      businessDetailRows(container, [["objectId", t.objectId, true]]);
+      container.appendChild(businessLink("查看对象详情", () => selectBusinessItem("objects", t.objectId)));
+      return;
+    }
+    const t = (data.types || []).find((x) => x.id === sel.id);
+    if (!t) { container.appendChild(el("p", "business-hint", `类型 ${sel.id} 不存在。`)); return; }
+    const objects = (data.objects || []).filter((o) => o.type === t.id);
+    const relations = (data.relations || []).filter((r) => r.fromType === t.id || r.toType === t.id);
+    businessDetailHead(container, t.name || t.id, `${objects.length} 个对象`);
+    businessDetailBody(container, t.description);
+    businessDetailRows(container, [["id", t.id, true], ["relations", String(relations.length)]]);
+    if (objects.length) {
+      businessDetailSubhead(container, `对象（${objects.length}）`);
+      const box = el("div");
+      for (const o of objects) box.appendChild(businessLink(o.name || o.id, () => selectBusinessItem("objects", o.id)));
+      container.appendChild(box);
+    }
+    if (relations.length) {
+      businessDetailSubhead(container, `关系（${relations.length}）`);
+      const box = el("div");
+      for (const r of relations) {
+        const line = el("div", "business-edge");
+        line.appendChild(businessLink(`${typeName(r.fromType)} → ${typeName(r.toType)}（${r.name || r.id}）`, () => selectBusinessItem("relations", r.id)));
+        box.appendChild(line);
+      }
+      container.appendChild(box);
+    }
+  }
+
+  function svgNode(tag, attrs = {}) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+    return node;
+  }
+
+  const BUSINESS_TYPE_COLORS = [
+    "#2563eb", "#16a34a", "#db2777", "#f59e0b", "#7c3aed",
+    "#0891b2", "#dc2626", "#4d7c0f", "#b45309", "#0f766e",
+  ];
+
+  function businessTypeColor(data, typeId) {
+    const idx = (data.types || []).findIndex((t) => t.id === typeId);
+    return BUSINESS_TYPE_COLORS[(idx >= 0 ? idx : 0) % BUSINESS_TYPE_COLORS.length];
+  }
+
+  function layoutBusinessGraph(nodes, edges, width, height) {
+    const n = nodes.length;
+    const cx = width / 2;
+    const cy = height / 2;
+    const radius = Math.min(width, height) * 0.34;
+    for (let i = 0; i < n; i++) {
+      const angle = (Math.PI * 2 * i) / Math.max(1, n);
+      nodes[i].x = cx + Math.cos(angle) * radius;
+      nodes[i].y = cy + Math.sin(angle) * radius;
+    }
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const links = edges.map((e) => ({ a: byId.get(e.from), b: byId.get(e.to) })).filter((l) => l.a && l.b && l.a !== l.b);
+    const ideal = Math.max(90, radius * 0.8);
+    for (let iter = 0; iter < 180; iter++) {
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const a = nodes[i];
+          const b = nodes[j];
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let dist = Math.hypot(dx, dy) || 1;
+          const force = 2600 / (dist * dist);
+          dx /= dist;
+          dy /= dist;
+          a.x -= dx * force;
+          a.y -= dy * force;
+          b.x += dx * force;
+          b.y += dy * force;
+        }
+      }
+      for (const link of links) {
+        const dx = link.b.x - link.a.x;
+        const dy = link.b.y - link.a.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const force = (dist - ideal) * 0.02;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        link.a.x += ux * force;
+        link.a.y += uy * force;
+        link.b.x -= ux * force;
+        link.b.y -= uy * force;
+      }
+      for (const node of nodes) {
+        node.x += (cx - node.x) * 0.002;
+        node.y += (cy - node.y) * 0.002;
+      }
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of nodes) {
+      minX = Math.min(minX, node.x);
+      maxX = Math.max(maxX, node.x);
+      minY = Math.min(minY, node.y);
+      maxY = Math.max(maxY, node.y);
+    }
+    const pad = 46;
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const scale = Math.min((width - pad * 2) / spanX, (height - pad * 2) / spanY, 1.3);
+    for (const node of nodes) {
+      node.x = pad + (node.x - minX) * scale + (width - pad * 2 - spanX * scale) / 2;
+      node.y = pad + (node.y - minY) * scale + (height - pad * 2 - spanY * scale) / 2;
+    }
+  }
+
+  function renderBusinessGraph(data) {
+    const box = $("#business-graph");
+    const note = $("#business-graph-note");
+    box.replaceChildren();
+    const objects = (data.objects || []).slice(0, 160);
+    const byId = new Map(objects.map((o) => [o.id, o]));
+    const edges = (data.edges || []).filter((e) => byId.has(e.from) && byId.has(e.to));
+    if (!objects.length) {
+      box.appendChild(el("p", "empty", "没有可画的对象。"));
+      note.textContent = "";
+      return;
+    }
+    const width = Math.max(620, box.clientWidth || 720);
+    const height = 480;
+    const nodes = objects.map((o) => ({
+      id: o.id,
+      name: o.name || o.id,
+      type: o.type,
+      search: [o.id, o.type, o.name, ...(o.aliases || []), ...(o.tags || [])].join(" ").toLowerCase(),
+    }));
+    layoutBusinessGraph(nodes, edges, width, height);
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    const q = businessQuery();
+    const selectedId = state.businessSelected?.kind === "objects" ? state.businessSelected.id : null;
+
+    const svg = svgNode("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "业务关系图" });
+    const defs = svgNode("defs");
+    const marker = svgNode("marker", { id: "business-arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
+    const arrow = svgNode("path", { d: "M 0 0 L 10 5 L 0 10 z" });
+    arrow.style.fill = "var(--muted)";
+    marker.appendChild(arrow);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    const edgeLayer = svgNode("g");
+    for (const e of edges) {
+      const a = nodeById.get(e.from);
+      const b = nodeById.get(e.to);
+      if (!a || !b) continue;
+      const group = svgNode("g", { class: "business-edge" });
+      if (selectedId && (e.from === selectedId || e.to === selectedId)) group.classList.add("hot");
+      if (q && !(a.search.includes(q) || b.search.includes(q))) group.classList.add("dim");
+      group.appendChild(svgNode("line", {
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: "business-edge-line", "marker-end": "url(#business-arrow)",
+      }));
+      if (edges.length <= 28) {
+        const label = svgNode("text", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 4, class: "business-edge-label", "text-anchor": "middle" });
+        label.textContent = e.relation_name || e.relation;
+        group.appendChild(label);
+      }
+      edgeLayer.appendChild(group);
+    }
+    svg.appendChild(edgeLayer);
+
+    const nodeLayer = svgNode("g");
+    for (const node of nodes) {
+      const group = svgNode("g", { class: "business-node", tabindex: 0, role: "button", "aria-label": node.name });
+      if (q && !node.search.includes(q)) group.classList.add("dim");
+      if (selectedId === node.id) group.classList.add("selected");
+      const title = svgNode("title");
+      title.textContent = `${node.name}（${businessTypeName(data, node.type)}）`;
+      group.appendChild(title);
+      group.appendChild(svgNode("circle", { cx: node.x, cy: node.y, r: 18, fill: businessTypeColor(data, node.type) }));
+      const label = svgNode("text", { x: node.x, y: node.y + 33, "text-anchor": "middle" });
+      label.textContent = node.name.length > 16 ? `${node.name.slice(0, 16)}…` : node.name;
+      group.appendChild(label);
+      group.addEventListener("click", () => selectBusinessItem("objects", node.id));
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectBusinessItem("objects", node.id);
+        }
+      });
+      nodeLayer.appendChild(group);
+    }
+    svg.appendChild(nodeLayer);
+    box.appendChild(svg);
+    const truncated = data.edges_truncated || objects.length < (data.objects || []).length;
+    note.textContent = `${objects.length} 个对象 · ${edges.length} 条边${truncated ? "（已截断）" : ""} · 点节点看详情；颜色按对象类型区分。`;
+  }
+
 
   // ---------- 用量 ----------
 
@@ -1206,6 +1894,10 @@
       view = LEGACY_TAB_VIEW[tab];
       tab = "manage";
     }
+    if (tab === "manage" && view === "business") {
+      tab = "business";
+      view = null;
+    }
     if (!tab || !TAB_NAMES.has(tab)) tab = "chat";
     if (tab === "manage") {
       if (!view || !MANAGE_VIEWS.has(view)) view = "workers";
@@ -1230,11 +1922,29 @@
 
   // ---------- 页签 ----------
 
+  function updateFooter() {
+    const foot = $("#app-foot");
+    if (!foot) return;
+    let hint = "";
+    if (state.tab === "business") {
+      hint = state.business?.dir
+        ? `业务地图：${state.business.dir}`
+        : (document.querySelector("#tab-business")?.dataset.hint || "");
+    } else if (state.tab === "manage") {
+      hint = document.querySelector(".manage-view.active")?.dataset.hint || "";
+    } else {
+      hint = document.querySelector(`#tab-${state.tab}`)?.dataset.hint || "";
+    }
+    foot.textContent = hint;
+    foot.hidden = !hint;
+  }
+
   function switchManageView(view, opts = {}) {
     if (!MANAGE_VIEWS.has(view)) view = "workers";
     state.manageView = view;
     $$(".manage-menu button").forEach((b) => b.classList.toggle("active", b.dataset.manage === view));
     $$(".manage-view").forEach((v) => v.classList.toggle("active", v.id === `manage-${view}`));
+    updateFooter();
     if (view === "workers") {
       void loadWorkers();
     } else if (view === "users") {
@@ -1260,8 +1970,9 @@
     }
     if (!TAB_NAMES.has(name)) name = "chat";
     state.tab = name;
-    $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    $$(".tabs button[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+    updateFooter();
     if (name === "manage") {
       switchManageView(state.manageView, { skipUrl: true });
     } else if (name === "chat") {
@@ -1274,6 +1985,8 @@
       void loadPlans();
     } else if (name === "memories") {
       void loadMemories();
+    } else if (name === "business") {
+      void loadBusiness();
     }
     if (!opts.skipUrl) writeLocationState(name, state.manageView, { replace: !!opts.replace });
   }
@@ -1286,6 +1999,40 @@
   }
 
   // ---------- 初始化 ----------
+
+  async function refreshCurrent() {
+    const btn = $("#reload-current");
+    if (btn?.disabled) return;
+    btn.disabled = true;
+    try {
+      if (state.tab === "chat") {
+        await loadPools(false);
+        if (state.current) await loadLatestMessages(false);
+      } else if (state.tab === "tasks") {
+        await loadTasks();
+      } else if (state.tab === "approvals") {
+        await loadApprovals();
+      } else if (state.tab === "plans") {
+        await loadPlans();
+      } else if (state.tab === "memories") {
+        await loadMemories();
+      } else if (state.tab === "business") {
+        await loadBusiness();
+      } else if (state.tab === "manage") {
+        if (state.manageView === "workers") await loadWorkers();
+        else if (state.manageView === "users") await loadUsers();
+        else if (state.manageView === "persona") await loadEditors(true);
+        else if (state.manageView === "settings") await loadScheduler();
+        else if (state.manageView === "usage") await loadUsage();
+        else if (state.manageView === "skills") await loadSkills();
+      }
+    } catch (e) {
+      const msg = friendlyError(e);
+      if (msg) setHealth(false, "刷新失败");
+    } finally {
+      btn.disabled = false;
+    }
+  }
 
   function bind() {
     $("#login-form").addEventListener("submit", (e) => {
@@ -1301,7 +2048,7 @@
       showLogin();
     });
 
-    $$(".tabs button").forEach((btn) => {
+    $$(".tabs button[data-tab]").forEach((btn) => {
       btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
 
@@ -1319,22 +2066,21 @@
       const box = $("#messages");
       box.scrollTop = box.scrollHeight;
     });
-    $("#reload-pools").addEventListener("click", () => {
-      void loadPools(false).then(() => loadLatestMessages(false)).catch((e) => {
-        const msg = friendlyError(e);
-        if (msg) setHealth(false, "刷新失败");
-      });
-    });
-    $("#reload-plans").addEventListener("click", () => void loadPlans());
-    $("#reload-memories").addEventListener("click", () => void loadMemories());
-    $("#reload-users").addEventListener("click", () => void loadUsers());
-    $("#reload-persona").addEventListener("click", () => void loadEditors(true));
+    $("#reload-current").addEventListener("click", () => void refreshCurrent());
     $("#save-persona").addEventListener("click", () => void savePersona());
     $("#save-prompt").addEventListener("click", () => void saveSystemPrompt());
-    $("#reload-scheduler").addEventListener("click", () => void loadScheduler());
     $("#save-scheduler").addEventListener("click", () => void saveScheduler());
-    $("#reload-skills").addEventListener("click", () => void loadSkills());
-    $("#reload-usage").addEventListener("click", () => void loadUsage());
+    $("#business-search").addEventListener("input", () => {
+      if (!state.business) return;
+      ensureBusinessSelection(state.business);
+      renderBusiness();
+    });
+    $$("#business-view-switch button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.businessView = btn.dataset.businessView === "graph" ? "graph" : "list";
+        renderBusiness();
+      });
+    });
     $("#usage-bucket").addEventListener("change", (e) => {
       state.usageBucket = e.target.value === "day" ? "day" : "hour";
       syncUsageRangeOptions();
@@ -1345,14 +2091,38 @@
       void loadUsage();
     });
     syncUsageRangeOptions();
-    $("#reload-tasks").addEventListener("click", () => void loadTasks());
-    $("#reload-approvals").addEventListener("click", () => void loadApprovals());
-    $("#reload-workers").addEventListener("click", () => void loadWorkers());
 
     $("#task-status-filter").addEventListener("change", (e) => {
       state.taskStatus = e.target.value;
-      state.expandedTaskId = null;
+      state.taskPage = 1;
       void loadTasks();
+    });
+    $("#task-executor-filter").addEventListener("change", (e) => {
+      state.taskExecutor = e.target.value;
+      state.taskPage = 1;
+      renderTasks();
+    });
+    $("#task-search").addEventListener("input", (e) => {
+      state.taskSearch = e.target.value;
+      state.taskPage = 1;
+      renderTasks();
+    });
+    $("#tasks-pager").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-task-page]");
+      if (!btn || btn.disabled) return;
+      state.taskPage = Number(btn.dataset.taskPage);
+      renderTasks();
+    });
+    $("#tasks-pager").addEventListener("change", (e) => {
+      if (e.target.id !== "task-page-size") return;
+      state.taskPageSize = Number(e.target.value) || 20;
+      state.taskPage = 1;
+      renderTasks();
+    });
+    $("#task-modal-close").addEventListener("click", closeTaskModal);
+    $("[data-close-task-modal]").addEventListener("click", closeTaskModal);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && state.taskModalId !== null) closeTaskModal();
     });
     $("#approval-status-filter").addEventListener("change", (e) => {
       state.approvalStatus = e.target.value;

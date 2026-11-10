@@ -471,6 +471,12 @@ function computeEdges(map: BusinessMap, rel: BusinessRelation): BusinessEdge[] {
   return out;
 }
 
+/** 关系解析后的实际边：manual 用声明里的 edges，file 按 mapping 读数据文件。 */
+export function relationEdges(map: BusinessMap, relationId: string): BusinessEdge[] {
+  const rel = map.relationsById.get(relationId);
+  return rel ? computeEdges(map, rel) : [];
+}
+
 function outEdges(map: BusinessMap, id: string): BusinessEdge[] {
   const out: BusinessEdge[] = [];
   for (const rel of map.relations) {
