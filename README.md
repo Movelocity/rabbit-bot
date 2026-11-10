@@ -135,6 +135,23 @@ npm run ctl -- models [provider]                 # pi 支持的模型、当前�
 
 数据在 `app/data/`：`rabbit-bot.db`、`sessions/`（pi 会话 JSONL，重启后继续最近会话）、`handoffs/*.md`（交接文档存档）、`pi-agent/`（pi 的 auth.json/models.json，可放自定义 OpenAI 兼容端点）。日志在 `app/logs/`。
 
+## 项目级技能组
+
+`skills/rabbit-bot/` 是项目级技能组，根 `SKILL.md` 做路由，子技能按需加载。目前有：
+
+- `ufa-business-map`：UFA 怎么查 `runtime/business` 里的对象、关系和影响面，只读，要改就建任务。
+- `wa-business-map`：WA 怎么新增/修改对象、关系、动作、术语，改完用 `map` 工具和测试验证。
+
+`app` 目录下 `npm install` 时，`postinstall` 会把整个组同步到 `~/.agents/skill-library/rabbit-bot`，并在 `~/.agents/skills/rabbit-bot/SKILL.md` 只放一个索引。扫描器会递归找 `SKILL.md`，所以子技能不能和索引放在同一棵目录下。
+
+```bash
+bash scripts/install-skills.sh          # symlink 技能组（默认，改仓库立即生效）
+bash scripts/install-skills.sh --copy   # 复制技能组到 skill-library
+RABBIT_BOT_SKIP_SKILLS=1 npm install    # 安装时跳过
+```
+
+`AGENTS_SKILLS_DIR` / `AGENTS_SKILL_LIBRARY` 可覆盖两个目标根目录。
+
 ## 桩 / 未实现
 
 - **更多 IM 适配器**：目前内置飞书 + Matrix，其他平台（QQ / 微信等）按 `IMAdapter` 接口接；Matrix 加密房间暂不解密。

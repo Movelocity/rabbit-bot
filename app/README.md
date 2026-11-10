@@ -55,6 +55,21 @@ cp app/config/persona.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改�
 `shared/`、`files/` 在容器和宿主看到的是同一份。`shared/` 是 worker 交汇报的固定落点
 （`/work/shared/task-<id>.md`）。挂载源变了进程启动时会重建容器。
 
+## 项目级技能组
+
+仓库根目录的 `skills/rabbit-bot/` 是项目级技能组：根 `SKILL.md` 做路由，子技能按需加载。
+子技能按读者分 `ufa-` / `wa-` 前缀：`ufa-business-map` 讲 UFA 怎么只读查询，`wa-business-map` 讲 WA 怎么维护 `runtime/business`。
+
+`npm install` 会通过 `postinstall` 把整个组同步到 `~/.agents/skill-library/rabbit-bot`，并在 `~/.agents/skills/rabbit-bot/SKILL.md` 只放一个索引。扫描器会递归找 `SKILL.md`，所以子技能不能和索引放在同一棵目录下。
+
+```bash
+bash ../scripts/install-skills.sh          # symlink 技能组（默认）
+bash ../scripts/install-skills.sh --copy   # 复制到 skill-library
+RABBIT_BOT_SKIP_SKILLS=1 npm install       # 安装时跳过
+```
+
+`AGENTS_SKILLS_DIR` / `AGENTS_SKILL_LIBRARY` 可覆盖两个目标根目录。
+
 ## 怎么和它说话
 
 | 方式 | 命令 |
