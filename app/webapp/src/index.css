@@ -101,3 +101,93 @@
     animation: none !important;
   }
 }
+
+.rb-flow {
+  --xy-background-color: var(--rb-surface);
+  --xy-background-pattern-color: var(--rb-border);
+  --xy-edge-stroke: var(--rb-border);
+  --xy-edge-stroke-selected: var(--rb-accent);
+  --xy-edge-label-background-color: var(--rb-surface);
+  --xy-edge-label-color: var(--rb-muted);
+  --xy-controls-button-background-color: var(--rb-surface);
+  --xy-controls-button-background-color-hover: var(--rb-surface-2);
+  --xy-controls-button-color: var(--rb-text);
+  --xy-controls-button-color-hover: var(--rb-text);
+  --xy-controls-button-border-color: var(--rb-border);
+  --xy-controls-box-shadow: var(--rb-shadow);
+  --xy-minimap-background-color: var(--rb-surface);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--rb-bg) 70%, transparent);
+  --xy-minimap-node-background-color: var(--rb-border);
+  --xy-minimap-node-stroke-color: var(--rb-border);
+  --xy-attribution-background-color: var(--rb-surface);
+  --xy-handle-background-color: transparent;
+  --xy-handle-border-color: transparent;
+}
+
+.rb-flow .react-flow__edge {
+  pointer-events: none;
+}
+
+.rb-flow .react-flow__handle {
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rb-flow .react-flow__controls-button {
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-flow .react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+
+.rb-flow .react-flow__minimap {
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.rb-flow .react-flow__minimap:active {
+  cursor: grabbing;
+}
+
+.rb-flow .react-flow__minimap-mask {
+  transition: stroke-opacity 120ms ease;
+}
+
+.rb-flow .react-flow__minimap:hover .react-flow__minimap-mask {
+  stroke-opacity: 1;
+}
+
+.rb-flow .react-flow__attribution {
+  color: var(--rb-muted);
+  font-size: 9px;
+}
+
+@keyframes rb-select-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes rb-select-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+}

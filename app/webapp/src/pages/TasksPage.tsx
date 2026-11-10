@@ -304,31 +304,29 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
         <Field label="status" compact>
           <Select
             value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
+            onValueChange={(value) => {
+              setStatusFilter(value);
               setPage(1);
             }}
-          >
-            <option value="">全部</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部" },
+              ...STATUS_OPTIONS.map((status) => ({ value: status, label: status })),
+            ]}
+          />
         </Field>
         <Field label="executor" compact>
           <Select
             value={executorFilter}
-            onChange={(e) => {
-              setExecutorFilter(e.target.value);
+            onValueChange={(value) => {
+              setExecutorFilter(value);
               setPage(1);
             }}
-          >
-            <option value="">全部</option>
-            <option value="opencode">opencode</option>
-            <option value="mimo">mimo</option>
-          </Select>
+            options={[
+              { value: "", label: "全部" },
+              { value: "opencode", label: "opencode" },
+              { value: "mimo", label: "mimo" },
+            ]}
+          />
         </Field>
         <Field label="搜索" grow>
           <Input
@@ -397,20 +395,18 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
           </Button>
           <span className="flex-1" />
           <Select
-            className="w-auto py-1.5"
-            aria-label="每页条数"
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value) || 20);
+            className="!w-auto py-1.5"
+            ariaLabel="每页条数"
+            value={String(pageSize)}
+            onValueChange={(value) => {
+              setPageSize(Number(value) || 20);
               setPage(1);
             }}
-          >
-            {[10, 20, 50, 100].map((n) => (
-              <option key={n} value={n}>
-                {n} 条/页
-              </option>
-            ))}
-          </Select>
+            options={[10, 20, 50, 100].map((n) => ({
+              value: String(n),
+              label: `${n} 条/页`,
+            }))}
+          />
         </div>
       )}
 

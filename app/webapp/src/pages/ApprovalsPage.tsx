@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
 import { badgeVariant, formatTs, friendlyError } from "../lib/format.ts";
@@ -18,7 +18,7 @@ import {
 
 export function ApprovalsPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
-  const [statusFilter, setStatusFilter] = useState("pending");
+  const [statusFilter, setStatusFilter] = useState("");
   const [rows, setRows] = useState<Approval[]>([]);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
 
@@ -46,29 +46,45 @@ export function ApprovalsPage({ reloadSignal }: { reloadSignal: number }) {
     void load(false);
   }, [reloadSignal, load]);
 
+  const sortedRows = useMemo(
+    () =>
+      [...rows].sort((a, b) => {
+        const aPriority = a.status === "pending" ? 0 : 1;
+        const bPriority = b.status === "pending" ? 0 : 1;
+        if (aPriority !== bPriority) return aPriority - bPriority;
+        if (a.created_at !== b.created_at) return b.created_at - a.created_at;
+        return b.id - a.id;
+      }),
+    [rows],
+  );
+
   usePolling(() => load(true), 3000);
 
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
       <div className="my-3 flex flex-wrap items-end gap-3">
         <Field label="status" compact>
-          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="pending">pending</option>
-            <option value="">全部</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-            <option value="timeout">timeout</option>
-          </Select>
+          <Select
+            value={statusFilter}
+            onValueChange={setStatusFilter}
+            options={[
+              { value: "", label: "全部（混合）" },
+              { value: "pending", label: "pending" },
+              { value: "approved", label: "approved" },
+              { value: "rejected", label: "rejected" },
+              { value: "timeout", label: "timeout" },
+            ]}
+          />
         </Field>
       </div>
 
       <StatusText text={status.text} error={status.error} />
 
       <div className="grid gap-2.5">
-        {!rows.length ? (
+        {!sortedRows.length ? (
           <Empty>没有权限申请。审批请在飞书里完成。</Empty>
         ) : (
-          rows.map((a) => (
+          sortedRows.map((a) => (
             <Card key={a.id}>
               <CardHead>
                 <CardTitle>

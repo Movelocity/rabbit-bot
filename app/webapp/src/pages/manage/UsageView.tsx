@@ -205,26 +205,25 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
         <Field label="粒度" compact>
           <Select
             value={bucket}
-            onChange={(e) => {
-              const next = e.target.value === "day" ? "day" : "hour";
+            onValueChange={(value) => {
+              const next: Bucket = value === "day" ? "day" : "hour";
               setBucket(next);
               if (!RANGES[next].some((r) => r.value === range)) {
                 setRange(RANGES[next][0].value);
               }
             }}
-          >
-            <option value="hour">按小时</option>
-            <option value="day">按天</option>
-          </Select>
+            options={[
+              { value: "hour", label: "按小时" },
+              { value: "day", label: "按天" },
+            ]}
+          />
         </Field>
         <Field label="范围" compact>
-          <Select value={range} onChange={(e) => setRange(e.target.value as Range)}>
-            {RANGES[bucket].map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </Select>
+          <Select
+            value={range}
+            onValueChange={(value) => setRange(value as Range)}
+            options={RANGES[bucket].map((r) => ({ value: r.value, label: r.label }))}
+          />
         </Field>
       </div>
 
