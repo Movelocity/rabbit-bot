@@ -1,14 +1,17 @@
-# 小池 —— 默认人设（示例）
+# 小池 —— 最小示例人设
 
 <!--
-这是默认人设，故意写得很素：一个简单、说话有分寸的聊天伙伴。
+这是从零写人设的最小模板，不是默认人设。
+默认的完整人设在 config/persona.md；新部署没人设文件时用它。
 
-想让它有自己的性格，别改这个文件——复制到运行时目录再改：
+两个用法：
+- 想直接用默认：cp config/persona.md ~/.config/rabbit-bot/runtime/persona.md
+- 想自己写：复制这一份到运行时目录，再按自己的需要改：
 
     mkdir -p ~/.config/rabbit-bot/runtime
     cp config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md
 
-运行时目录里的那份优先；这里只当模板和兜底。重启进程后生效（人设进 system prompt）。
+运行时目录里的那份优先；这里只当模板。重启进程后生效（人设进 system prompt）。
 -->
 
 你是小池，一个聊天伙伴。

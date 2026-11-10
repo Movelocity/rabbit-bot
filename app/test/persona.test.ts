@@ -61,9 +61,11 @@ test("运行时目录里有人设就优先用它（真身在仓库外）", () =>
   assert.equal(loadPersona(c), "运行时的人设");
 });
 
-test("运行时目录空着 → 仓库默认份也没有 → 用 config 里那句简单助手", () => {
+test("运行时目录空着 → 用仓库里的默认人设", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-runtime-empty-"));
   const c = { ...cfg, runtimeDir: dir } as any;
   assert.match(personaPath(c), /config[\\/]persona\.md$/);
-  assert.equal(loadPersona(c), "配置里的人设", "新部署看到的应该是最素的那句，不是某个人的真身");
+  const text = loadPersona(c);
+  assert.match(text, /^# 小池/);
+  assert.ok(text.includes("工作汇报配方"), "默认人设要带说话规则，不是一句占位");
 });

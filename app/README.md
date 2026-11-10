@@ -30,26 +30,26 @@ npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 
 
 ## 定制它（人设 / 提示词 / 话题库）
 
-默认只是个简单助手：`agent.name=小池`，人设一句「你是一个自然、简短、有分寸的聊天伙伴。」
-性格留给玩家自己定——仓库里不存任何人的真身设定。
+默认人设是 `app/config/persona.md`：小池，一个直接、说人话的 UFA，带完整的说话规则和工作汇报配方。
+想从最小模板自己写，再用 `app/config/persona.example.md`。
 
 三样东西都可以换，放运行时目录（默认 `~/.config/rabbit-bot/runtime/`，环境变量 `RABBIT_BOT_RUNTIME` 可改）：
 
 ```bash
 mkdir -p ~/.config/rabbit-bot/runtime
-cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改成你要的
+cp app/config/persona.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改成你要的
 ```
 
 | 路径 | 是什么 | 改完要不要重启 |
 |---|---|---|
 | `runtime/persona.md` | 人设正文，进 system prompt 的 `{{persona}}` | 要 |
-| `runtime/prompt/` | 主提示词 + 三种场景剧本（`scene-*.md`） | 剧本不用，`system.md` 要 |
+| `runtime/prompt/` | 主提示词 + 三种场景剧本（`scene-*.md`）+ 说话对照（`voice-examples.md`） | 剧本不用，`system.md` 要 |
 | `runtime/topics/` | 话题库，按块分（`rg` 搜、`read_file` 读） | 不用 |
 | `runtime/shared/` | worker 交上来的汇报（`task-<id>.md`），`read_file` 直接读 | 不用 |
 | `runtime/files/` | 收到的非图片附件 | 不用 |
 
 规则只有一条：**运行时目录有就用它，没有才用仓库里的默认份。** 没有配置开关。仓库里的
-`config/persona.example.md` 和 `prompts/` 是模板和默认提示词，clone 下来能直接跑。
+`config/persona.md`、`config/persona.example.md` 和 `prompts/` 是默认份和模板，clone 下来能直接跑。
 
 运行时目录同时就是沙盒根：容器里 `/work` 就是它，所以 `prompt/`、`topics/`、`skills/`、
 `shared/`、`files/` 在容器和宿主看到的是同一份。`shared/` 是 worker 交汇报的固定落点

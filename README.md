@@ -87,7 +87,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 **任务发布不用开 Web**：`taskApproval` 开启后，UFA 建的任务会以一条带目标 / 产出 / 约束 / 验收 / 目录的提示发到任务发起时的聊天（`target=origin`，默认推荐），也可以发到固定审批房（`target=room`）；主人给那条消息贴 OK 表情就启动执行器，贴 No 或超时按拒绝。提示走系统消息、不建池，表情裁决也不入 Agent 的会话上下文；原聊天里的文字聊天照常，所以不会干扰正常对话。固定审批房可以和宿主机命令审批共用（`approval.roomId`）。
 
-**人设默认是简单助手**（`agent.name=小池`），仓库里不含任何人的真身设定：运行时目录有 `persona.md` 就用它，没有就用 `agent.persona` 那一句。想给它性格，照着 `app/config/persona.example.md` 写一份放进运行时目录。
+**默认人设**是 `app/config/persona.md`（`agent.name=小池`）：一份完整的 UFA 说话规则，讲事实、讲卡点、不端汇报腔。运行时目录有 `persona.md` 就用运行时那份，没有就用仓库默认；想从最小模板自己写，再用 `app/config/persona.example.md`。
 
 ## 环境变量（只从环境变量读取密钥，代码里没有任何密钥）
 
