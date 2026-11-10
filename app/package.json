@@ -16,6 +16,9 @@
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "web": "tsx scripts/web-dev.ts",
+    "web:dev": "npm --prefix webapp run dev",
+    "web:build": "npm --prefix webapp run build",
+    "web:typecheck": "npm --prefix webapp run typecheck",
     "idle": "node scripts/idle.mjs"
   },
   "keywords": [],

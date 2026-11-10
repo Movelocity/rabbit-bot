@@ -46,6 +46,7 @@ npm run build && pm2 restart rabbit-bot
 每 3 分钟一条，100 分钟里她一句都没能发出来。而 `pm2 status` 一直显示 online。
 
 判据：`config/prompt/*.md` 改完 `pm2 restart` 就够；**`src/` 下任何改动都要先 `npm run build`**。
+前端（`webapp/src/`）改动要先 `npm run web:build` 把产物写回 `web/`；只改后端不用动前端。
 自查一行：`grep -c chat_gap dist/agent/prompt.js`（有改动就该 >0）。
 
 **开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.weikang.plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是

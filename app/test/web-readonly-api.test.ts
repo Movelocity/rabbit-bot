@@ -79,10 +79,15 @@ test("静态页 200：管理台可打开，审批仍提示去飞书", async () =
   assert.match(html, /Rabbit Bot 管理台/);
   assert.match(html, /审批请在飞书里完成/);
 
-  const js = fs.readFileSync(path.join(APP_ROOT, "web", "app.js"), "utf8");
+  const bundles = [...html.matchAll(/src="\/ui\/(assets\/[^"]+\.js)"/g)].map((m) => m[1]);
+  assert.ok(bundles.length > 0, "index.html 应引用打包后的 JS");
+  const js = bundles
+    .map((rel) => fs.readFileSync(path.join(APP_ROOT, "web", rel), "utf8"))
+    .join("\n");
   assert.match(js, /\/v1\/persona/);
   assert.match(js, /\/v1\/memories\//);
   assert.match(js, /DELETE/);
+  assert.match(js, /审批请在飞书里完成/);
 });
 
 test("任务 / 快照 / worker / 审批：带 token 200，无 token 401", async () => {

@@ -102,7 +102,22 @@ Bearer token，token 不对会明确提示。
 - 业务知识：只读预览 `runtime/business` 的业务地图：左侧分类/列表，右侧详情；支持搜索和只读关系图（点节点看详情）。
 - 顶栏显示 API 健康状态和当前连接地址；移动端可用。
 
-前端在 `app/web/`，原生 HTML/CSS/JS，没有构建链，也不引用任何 CDN、外部字体或图片。
+前端在 `app/webapp/`：React + TypeScript + TailwindCSS（Vite）。`app/web/` 是构建产物，
+后端按 `/ui/*` 直接托管，所以运行时不需要前端构建链；构建产物也不引用任何 CDN、外部字体或图片。
+
+```bash
+# 首次改前端：装依赖
+npm --prefix webapp install
+
+# 开发：终端 1 跑只读 API + 静态页，终端 2 跑 Vite（固定 6173，代理 /v1 和 /health 到 3738）
+npm run web
+npm run web:dev
+
+# 构建：把 webapp 产物写回 app/web（带 hash 的 assets）
+npm run web:build
+```
+
+改了 `webapp/src` 之后要跑一次 `npm run web:build`，否则正式服务还是旧页面。
 
 ### demo 模式（只看现有库）
 

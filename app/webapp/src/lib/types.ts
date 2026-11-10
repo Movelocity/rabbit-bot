@@ -1,0 +1,300 @@
+export interface Pool {
+  alias: string;
+  pool_id: string;
+  kind: string;
+  title: string;
+  last_msg_at: number | null;
+  last_msg_local: string | null;
+  total: number;
+}
+
+export interface PoolMessage {
+  seq: number;
+  ts: number;
+  local: string;
+  from_self: boolean;
+  sender: string;
+  sender_name: string;
+  sender_id: string;
+  user_id: string;
+  text: string;
+}
+
+export interface PoolMessages {
+  pool: string;
+  total: number;
+  oldest_seq: number | null;
+  messages: PoolMessage[];
+}
+
+export type TaskStatus =
+  | "pending_approval"
+  | "pending"
+  | "running"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface TaskContext {
+  objects?: string[];
+  relations?: string[];
+  forbidden?: string[];
+}
+
+export interface TaskView {
+  id: number;
+  name: string;
+  goal: string;
+  pool_id: string;
+  task_pool_id: string;
+  status: TaskStatus;
+  stage: string;
+  worker_id: string | null;
+  note: string;
+  deliverable: string;
+  constraints: string;
+  acceptance: string;
+  files: string;
+  context: TaskContext;
+  result: string;
+  artifact: string;
+  work_dir: string;
+  executor: string;
+  model: string;
+  session_id: string;
+  runner_pid: number | null;
+  runner_started_at: number | null;
+  doc_path: string;
+  start_at: number;
+  start_at_local: string;
+  end_at: number | null;
+  end_at_local: string | null;
+  updated_at: number;
+  updated_at_local: string;
+}
+
+export interface TaskEvent {
+  seq: number;
+  ts: number;
+  local: string;
+  sender: string;
+  text: string;
+}
+
+export interface WorkerSnapshot {
+  worker_id: string;
+  name: string;
+  status: string;
+  last_seen_at: number;
+}
+
+export interface TaskSnapshot {
+  task: Partial<TaskView> & { id: number };
+  recent_events: TaskEvent[];
+  worker: WorkerSnapshot | null;
+}
+
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "timeout";
+
+export interface Approval {
+  id: number;
+  task_id: number;
+  worker_id: string;
+  action: string;
+  detail: string;
+  why: string;
+  status: ApprovalStatus;
+  decided_by: string | null;
+  decided_at: number | null;
+  created_at: number;
+  expires_at: number;
+  created_at_local: string;
+  expires_at_local: string;
+  decided_at_local: string | null;
+}
+
+export interface Plan {
+  id: number;
+  title: string;
+  status: string;
+  kind: string;
+  schedule: string | null;
+  anchor: string | null;
+  pool: string | null;
+  next_fire_local: string | null;
+  why: string | null;
+}
+
+export type MemoryScope = "pool" | "private" | "group" | "all";
+
+export interface Memory {
+  id: number;
+  kind: string;
+  scope: MemoryScope;
+  content: string;
+  from: number;
+  to: number | null;
+  replaced_by: number | null;
+}
+
+export interface UserIdentity {
+  platform: string;
+  platform_user_id: string;
+  display_name: string;
+}
+
+export interface User {
+  user_id: string;
+  display_name: string;
+  alias: string;
+  created_at: number;
+  identities: UserIdentity[];
+}
+
+export interface Worker {
+  worker_id: string;
+  name: string;
+  kind: string;
+  status: "online" | "offline" | string;
+  registered_at: number;
+  last_seen_at: number;
+  updated_at: number;
+}
+
+export interface UsageSummary {
+  calls: number;
+  tokens: number;
+  cacheHit: number;
+  cacheMiss: number;
+  outTokens: number;
+  costUsd: number;
+  hitRate: number;
+}
+
+export interface UsagePoint {
+  key: string;
+  label: string;
+  calls: number;
+  tokens: number;
+  cacheHit: number;
+  cacheMiss: number;
+  outTokens: number;
+  costUsd: number;
+}
+
+export interface UsageCall {
+  ts: number;
+  ts_local: string;
+  source: string;
+  model: string;
+  calls: number;
+  cacheHit: number;
+  cacheMiss: number;
+  outTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface UsageStats {
+  bucket: "hour" | "day";
+  from: number;
+  to: number;
+  summary: UsageSummary;
+  series: UsagePoint[];
+}
+
+export interface Skill {
+  name: string;
+  description: string;
+  skill: string;
+  data: string | null;
+  has_data: boolean;
+  readonly: boolean;
+}
+
+export interface SchedulerSettings {
+  privateWakeMs: number;
+  groupWakeMs: number;
+  taskWakeMs: number;
+}
+
+export interface RuntimeFile {
+  path: string;
+  content: string;
+  source: "runtime" | "repo" | "config";
+}
+
+export interface BusinessObjectType {
+  id: string;
+  name?: string;
+  description?: string;
+}
+
+export interface BusinessObject {
+  id: string;
+  type: string;
+  name: string;
+  aliases?: string[];
+  description?: string;
+  key?: { kind?: string; value: string };
+  source?: { kind?: string; value: string };
+  tags?: string[];
+}
+
+export interface BusinessRelation {
+  id: string;
+  name: string;
+  fromType: string;
+  toType: string;
+  kind?: string;
+  cardinality?: string;
+  direction?: string;
+  risk?: "low" | "medium" | "high";
+  semantics?: string;
+  mapping: { kind?: string; file?: string; select?: string };
+  edge_count?: number;
+}
+
+export interface BusinessAction {
+  id: string;
+  name?: string;
+  appliesTo?: string[];
+  risk?: "low" | "medium" | "high";
+  requiresRelations?: string[];
+  description?: string;
+}
+
+export interface BusinessTerm {
+  term: string;
+  objectId: string;
+  note?: string;
+}
+
+export interface BusinessEdge {
+  relation: string;
+  relation_name: string;
+  from: string;
+  to: string;
+}
+
+export interface BusinessData {
+  exists: boolean;
+  dir: string;
+  version: number | null;
+  types: BusinessObjectType[];
+  objects: BusinessObject[];
+  relations: BusinessRelation[];
+  actions: BusinessAction[];
+  terms: BusinessTerm[];
+  edges: BusinessEdge[];
+  edge_total: number;
+  edges_truncated: boolean;
+}
+
+export type BusinessCategory = "objects" | "relations" | "actions" | "terms" | "types";
+
+export interface BusinessSelection {
+  kind: BusinessCategory;
+  id: string;
+}

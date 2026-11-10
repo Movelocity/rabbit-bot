@@ -73,15 +73,31 @@ test("静态只读看板不需要 token：/ 和 /ui/* 都返回正确类型", as
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") ?? "", /text\/html/);
-  assert.match(await page.text(), /Rabbit Bot 管理台/);
+  const html = await page.text();
+  assert.match(html, /Rabbit Bot 管理台/);
 
-  const css = await fetch(`${base}/ui/style.css`);
-  assert.equal(css.status, 200);
-  assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+  const assets = [...html.matchAll(/(?:src|href)="(\/ui\/assets\/[^"]+)"/g)].map((m) => m[1]);
+  assert.ok(assets.some((p) => p.endsWith(".js")), "index.html 应引用打包后的 JS");
+  assert.ok(assets.some((p) => p.endsWith(".css")), "index.html 应引用打包后的 CSS");
+  for (const asset of assets) {
+    const res = await fetch(`${base}${asset}`);
+    assert.equal(res.status, 200, asset);
+    const type = res.headers.get("content-type") ?? "";
+    if (asset.endsWith(".js")) assert.match(type, /javascript/);
+    if (asset.endsWith(".css")) assert.match(type, /text\/css/);
+  }
 
-  const js = await fetch(`${base}/ui/app.js`);
-  assert.equal(js.status, 200);
-  assert.match(js.headers.get("content-type") ?? "", /javascript/);
+  for (const iconPath of ["/favicon.ico", "/ui/favicon.ico"]) {
+    const icon = await fetch(`${base}${iconPath}`);
+    assert.equal(icon.status, 200, iconPath);
+    assert.match(icon.headers.get("content-type") ?? "", /image\/(x-icon|vnd\.microsoft\.icon)/);
+  }
+
+  for (const imagePath of ["/ui/logo.png", "/ui/apple-touch-icon.png"]) {
+    const image = await fetch(`${base}${imagePath}`);
+    assert.equal(image.status, 200, imagePath);
+    assert.match(image.headers.get("content-type") ?? "", /image\/png/);
+  }
 
   // 路径穿越不能读到 web/ 之外的文件（编码后的斜杠不会被 URL 规范化掉）
   assert.equal((await call("/ui/..%2fpackage.json")).status, 404);

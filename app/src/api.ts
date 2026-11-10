@@ -78,13 +78,22 @@ const MIME: Record<string, string> = {
 
 /**
  * 本地 Web 控制台的静态文件。未登录也能打开页面；接口仍然要 token。
- * 只认 `/`（index.html）和 `/ui/*`，碰到路径穿越就当没这个文件，继续走 404。
+ * 只认 `/`（index.html）、`/favicon.ico` 和 `/ui/*`，碰到路径穿越就当没这个文件，继续走 404。
  */
 function serveStatic(pathname: string, res: http.ServerResponse, method: string): boolean {
-  if (pathname !== "/" && pathname !== "/ui" && !pathname.startsWith("/ui/")) return false;
+  if (
+    pathname !== "/" &&
+    pathname !== "/ui" &&
+    pathname !== "/favicon.ico" &&
+    !pathname.startsWith("/ui/")
+  ) return false;
   let rel: string;
   try {
-    rel = pathname === "/" || pathname === "/ui" ? "index.html" : decodeURIComponent(pathname.slice("/ui/".length));
+    rel = pathname === "/" || pathname === "/ui"
+      ? "index.html"
+      : pathname === "/favicon.ico"
+        ? "favicon.ico"
+        : decodeURIComponent(pathname.slice("/ui/".length));
   } catch {
     return false;
   }
