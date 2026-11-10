@@ -35,6 +35,7 @@ import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
+import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
 } from "./ops/scheduler-settings.ts";
@@ -579,6 +580,34 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }, d.enqueue));
           }
           throw new HttpError(404, "用法：GET|POST /v1/approvals、GET /v1/approvals/:id、POST /v1/approvals/:id/decide");
+        }
+        case "usage": {
+          const now = Date.now();
+          if (parts.length === 3 && parts[2] === "calls" && method === "GET") {
+            const from = qInt(url.searchParams.get("from")) ?? now - 24 * 3600e3;
+            const to = qInt(url.searchParams.get("to")) ?? now;
+            if (!(to > from)) throw new HttpError(400, "to 必须大于 from");
+            const rawLimit = qInt(url.searchParams.get("limit")) ?? 200;
+            const limit = Math.min(500, Math.max(1, Math.round(rawLimit)));
+            return reply(200, { from, to, calls: usageCalls(d.store, from, to, limit, d.cfg.timezone) });
+          }
+          if (parts.length === 2 && method === "GET") {
+            const rawBucket = url.searchParams.get("bucket");
+            if (rawBucket !== null && rawBucket !== "hour" && rawBucket !== "day") {
+              throw new HttpError(400, "bucket 只能是 hour 或 day");
+            }
+            const bucket = (rawBucket ?? "hour") as "hour" | "day";
+            const from = qInt(url.searchParams.get("from")) ?? now - 24 * 3600e3;
+            const to = qInt(url.searchParams.get("to")) ?? now;
+            if (!(to > from)) throw new HttpError(400, "to 必须大于 from");
+            if (to - from > 90 * 86400e3) throw new HttpError(400, "时间范围最大 90 天");
+            return reply(200, {
+              bucket, from, to,
+              summary: usageSummary(d.store, from, to, d.cfg.timezone),
+              series: usageSeries(d.store, from, to, bucket, d.cfg.timezone),
+            });
+          }
+          throw new HttpError(404, "用法：GET /v1/usage?bucket=hour|day&from=&to=、GET /v1/usage/calls?from=&to=&limit=");
         }
         case "scheduler": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveSchedulerSettings(d.cfg));

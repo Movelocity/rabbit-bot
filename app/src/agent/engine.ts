@@ -14,7 +14,7 @@ import type { Store } from "../core/db.ts";
 import type { Logger } from "../core/logger.ts";
 import { applyCommunityLoopGuardEnv, builtinLoopGuardExtension, callKey, communityLoopGuardPath } from "../core/loopguard.ts";
 import { handoffPrompt } from "./prompt.ts";
-import { splitUsage } from "../core/pricing.ts";
+import { costUsd, splitUsage } from "../core/pricing.ts";
 
 export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
 export interface RunResult {
@@ -74,6 +74,11 @@ export interface PiEngineDeps {
   modelRuntime: ModelRuntime;
   /** 测试时用内存会话 */
   inMemorySessions?: boolean;
+  /** 每次 assistant message_end 记一条逐次用量；不要在这里做聚合，聚合由上层读表完成 */
+  onUsage?: (u: {
+    ts: number; model: string; cacheHit: number; cacheMiss: number;
+    outTokens: number; totalTokens: number; costUsd: number;
+  }) => void;
 }
 
 const preview = (r: any): string => {
@@ -252,6 +257,14 @@ export class PiEngine implements AgentEngine {
           out.cacheHit = (out.cacheHit ?? 0) + sp.hit;
           out.cacheMiss = (out.cacheMiss ?? 0) + sp.miss;
           out.outTokens = (out.outTokens ?? 0) + sp.out;
+          // 逐次用量（2026-11-10）：一条 assistant message_end 只记一次；成本和日额度分开算。
+          const totalTokens = Number(u.totalTokens ?? ((u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0)));
+          const usd = costUsd(this.d.cfg.llm.model, sp, Date.now(), this.d.cfg.limits.offPeakHolidays ?? []);
+          this.d.onUsage?.({
+            ts: Date.now(), model: this.d.cfg.llm.model,
+            cacheHit: sp.hit, cacheMiss: sp.miss, outTokens: sp.out,
+            totalTokens, costUsd: usd,
+          });
         }
         if (out.tokens >= limits.tokensLeft) abort("daily-token-cap");
         else if (out.llmCalls >= limits.callsLeft) abort("daily-call-cap");

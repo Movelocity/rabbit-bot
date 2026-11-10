@@ -38,6 +38,7 @@ async function main() {
   const dbArg = arg("--db");
   const dbFile = dbArg ? path.resolve(dbArg) : path.join(cfg.dataDir, "rabbit-bot.db");
   const store = new Store(dbFile);
+  store.backfillUsageEventsFromWakeLog();
   const token = resolveApiToken(cfg);
 
   let server;

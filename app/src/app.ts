@@ -89,6 +89,7 @@ export class App {
     this.clock = o.clock ?? realClock;
     this.log = o.logger ?? new Logger(cfg.logDir);
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "rabbit-bot.db"));
+    this.store.backfillUsageEventsFromWakeLog();
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
@@ -123,7 +124,11 @@ export class App {
       approval: this.approval,
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
     });
-    this.engine = new PiEngine({ cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds()), model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions });
+    this.engine = new PiEngine({
+      cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds()),
+      model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions,
+      onUsage: (u) => this.store.addUsageEvent({ ...u, source: "llm" }),
+    });
   }
 
   async start() {

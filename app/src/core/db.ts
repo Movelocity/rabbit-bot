@@ -71,6 +71,19 @@ CREATE INDEX IF NOT EXISTS idx_topics_pick ON topics(retired, cooldown_until, us
 CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT);
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, cache_miss INTEGER NOT NULL DEFAULT 0, out_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS usage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'llm',
+  model TEXT NOT NULL DEFAULT '',
+  cache_hit INTEGER NOT NULL DEFAULT 0,
+  cache_miss INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 1,
+  out_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,6 +189,8 @@ export class Store {
     }
     // 用户别名（2026-11-09）：与飞书/通讯录自动名分开存，避免每条消息把人工别名冲掉
     try { this.db.exec("ALTER TABLE users ADD COLUMN alias TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+    // 逐次用量事件（2026-11-10）：老库补 calls 列；历史回填行保持默认 1，不做重算
+    try { this.db.exec("ALTER TABLE usage_events ADD COLUMN calls INTEGER NOT NULL DEFAULT 1"); } catch { /* 已存在 */ }
     // 记忆时间维度（2026-11-03）：以前记忆是扁平快照，「想辞职」和「想升职」会一起活着
     for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
       try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
@@ -828,4 +843,123 @@ export class Store {
       cache_hit=cache_hit+excluded.cache_hit, cache_miss=cache_miss+excluded.cache_miss,
       out_tokens=out_tokens+excluded.out_tokens, cost_usd=cost_usd+excluded.cost_usd`).run(day, calls, tokens, wakes, hit, miss, outTok, usd);
   }
+
+  // ---------- 逐次用量事件（2026-11-10）：按次记账，按小时/天在 Web 里聚合 ----------
+  addUsageEvent(e: {
+    ts: number; source?: string; model?: string; cacheHit: number; cacheMiss: number;
+    outTokens: number; totalTokens: number; costUsd: number; calls?: number;
+  }): number {
+    const r = this.db.prepare(
+      `INSERT INTO usage_events(ts,source,model,cache_hit,cache_miss,calls,out_tokens,total_tokens,cost_usd)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      Math.round(e.ts), e.source ?? "llm", e.model ?? "",
+      Math.round(e.cacheHit), Math.round(e.cacheMiss), Math.round(e.calls ?? 1),
+      Math.round(e.outTokens), Math.round(e.totalTokens), Number(e.costUsd) || 0,
+    );
+    return Number(r.lastInsertRowid);
+  }
+
+  listUsageEvents(from: number, to: number, limit?: number): UsageEventRow[] {
+    const base = "SELECT id,ts,source,model,cache_hit,cache_miss,calls,out_tokens,total_tokens,cost_usd FROM usage_events WHERE ts>=? AND ts<? ORDER BY ts DESC";
+    const rows = limit === undefined
+      ? this.db.prepare(base).all(from, to)
+      : this.db.prepare(`${base} LIMIT ?`).all(from, to, Math.max(0, Math.round(limit)));
+    return (rows as any[]).map((r) => ({
+      id: Number(r.id), ts: Number(r.ts), source: String(r.source), model: String(r.model),
+      cacheHit: Number(r.cache_hit), cacheMiss: Number(r.cache_miss), calls: Number(r.calls),
+      outTokens: Number(r.out_tokens), totalTokens: Number(r.total_tokens), costUsd: Number(r.cost_usd),
+    }));
+  }
+
+  countUsageEvents(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM usage_events").get() as any)?.n ?? 0);
+  }
+
+  /**
+   * 历史唤醒日志回填：只在 usage_events 为空时跑一次。
+   * wake_log 的 JSON 是「一轮唤醒的聚合」，所以这些行 source='wake'、model=''，
+   * 也只填 total_tokens / cost_usd（当时没记三段和输出）。
+   */
+  backfillUsageEventsFromWakeLog(): number {
+    if (this.countUsageEvents() > 0) {
+      // 老回填行 calls 默认是 1：按 wake_log 的 llmCalls 修一次，避免历史摘要偏小
+      this.repairBackfilledUsageCalls();
+      return 0;
+    }
+    const rows = this.db.prepare("SELECT ts, json FROM wake_log ORDER BY id").all() as { ts: number; json: string }[];
+    const insert = this.db.prepare(
+      `INSERT INTO usage_events(ts,source,model,cache_hit,cache_miss,calls,out_tokens,total_tokens,cost_usd)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+    );
+    let inserted = 0;
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        let json: any;
+        try { json = JSON.parse(row.json); } catch { continue; }
+        const totalTokens = Number(json?.rawTokens ?? json?.tokens ?? 0) || 0;
+        if (totalTokens <= 0) continue;
+        const parsedTs = Number(json?.ts);
+        const ts = Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : Number(row.ts);
+        const cost = Number(json?.cost ?? 0) || 0;
+        const calls = Number(json?.llmCalls ?? 1) || 1;
+        insert.run(Math.round(ts), "wake", "", 0, 0, Math.round(calls), 0, Math.round(totalTokens), cost);
+        inserted++;
+      }
+    });
+    tx();
+    return inserted;
+  }
+
+  /**
+   * 修正老回填行：usage_events 里 source='wake' 且 calls=1 的行，
+   * 按 wake_log 的 llmCalls 重算。JSON.ts 是 ISO 字符串，必须用 Date.parse；
+   * 没有 JSON.ts 时才用列 ts。更新数量返回给调用方便于观测。
+   */
+  repairBackfilledUsageCalls(): number {
+    const logs = this.db.prepare("SELECT ts, json FROM wake_log ORDER BY id").all() as { ts: number; json: string }[];
+    const byColumnTs = new Map<number, number>();
+    const byJsonTs = new Map<number, number>();
+    for (const log of logs) {
+      let json: any;
+      try { json = JSON.parse(log.json); } catch { continue; }
+      const calls = Number(json?.llmCalls ?? 1) || 1;
+      if (calls <= 1) continue;
+      const colTs = Math.round(Number(log.ts));
+      if (Number.isFinite(colTs)) byColumnTs.set(colTs, calls);
+      const rawJsonTs = json?.ts;
+      const parsedJsonTs = typeof rawJsonTs === "string"
+        ? Date.parse(rawJsonTs)
+        : typeof rawJsonTs === "number" ? rawJsonTs : Number.NaN;
+      if (Number.isFinite(parsedJsonTs)) byJsonTs.set(Math.round(parsedJsonTs), calls);
+    }
+
+    const rows = this.db.prepare("SELECT id, ts FROM usage_events WHERE source='wake' AND calls=1").all() as { id: number; ts: number }[];
+    const update = this.db.prepare("UPDATE usage_events SET calls=? WHERE id=?");
+    let repaired = 0;
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        const ts = Math.round(Number(row.ts));
+        const calls = byJsonTs.get(ts) ?? byColumnTs.get(ts);
+        if (calls === undefined || calls <= 1) continue;
+        update.run(calls, row.id);
+        repaired++;
+      }
+    });
+    tx();
+    return repaired;
+  }
+}
+
+export interface UsageEventRow {
+  id: number;
+  ts: number;
+  source: string;
+  model: string;
+  cacheHit: number;
+  cacheMiss: number;
+  calls: number;
+  outTokens: number;
+  totalTokens: number;
+  costUsd: number;
 }

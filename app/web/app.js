@@ -5,9 +5,9 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const TAB_NAMES = new Set(["chat", "tasks", "approvals", "plans", "memories", "manage", "skills"]);
-  const MANAGE_VIEWS = new Set(["workers", "users", "persona", "settings"]);
-  const LEGACY_TAB_VIEW = { workers: "workers", users: "users", persona: "persona", settings: "settings" };
+  const TAB_NAMES = new Set(["chat", "tasks", "approvals", "plans", "memories", "manage"]);
+  const MANAGE_VIEWS = new Set(["workers", "users", "persona", "settings", "usage", "skills"]);
+  const LEGACY_TAB_VIEW = { workers: "workers", users: "users", persona: "persona", settings: "settings", usage: "usage", skills: "skills" };
 
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
@@ -30,6 +30,8 @@
     taskSnapshots: {},
     approvals: [],
     approvalStatus: "pending",
+    usageBucket: "hour",
+    usageRange: "24h",
     workers: [],
     logoutRequested: false,
   };
@@ -995,6 +997,158 @@
     }
   }
 
+  // ---------- 用量 ----------
+
+  const USAGE_RANGES = {
+    hour: [["24h", "最近 24 小时"], ["7d", "7 天"], ["30d", "30 天"]],
+    day: [["7d", "7 天"], ["30d", "30 天"], ["90d", "90 天"]],
+  };
+
+  function usageRangeMs(range) {
+    if (range === "7d") return 7 * 86400e3;
+    if (range === "30d") return 30 * 86400e3;
+    if (range === "90d") return 90 * 86400e3;
+    return 24 * 3600e3;
+  }
+
+  function syncUsageRangeOptions() {
+    const select = $("#usage-range");
+    const options = USAGE_RANGES[state.usageBucket] || USAGE_RANGES.hour;
+    const values = options.map((o) => o[0]);
+    if (!values.includes(state.usageRange)) state.usageRange = values[0];
+    select.replaceChildren(...options.map(([value, label]) => {
+      const option = el("option", "", label);
+      option.value = value;
+      return option;
+    }));
+    select.value = state.usageRange;
+  }
+
+  async function loadUsage() {
+    setPanelStatus("#usage-status", "加载中…");
+    const bucket = state.usageBucket;
+    const to = Date.now();
+    const from = to - usageRangeMs(state.usageRange);
+    try {
+      const [stats, detail] = await Promise.all([
+        api(`/v1/usage?bucket=${bucket}&from=${from}&to=${to}`),
+        api(`/v1/usage/calls?from=${from}&to=${to}&limit=200`),
+      ]);
+      renderUsageSummary(stats.summary);
+      renderUsageChart(Array.isArray(stats.series) ? stats.series : []);
+      const calls = Array.isArray(detail.calls) ? detail.calls : [];
+      renderUsageCalls(calls);
+      setPanelStatus("#usage-status", `共 ${calls.length} 条明细 · 最近更新 ${new Date().toLocaleTimeString("zh-CN")}`);
+    } catch (e) {
+      setPanelStatus("#usage-status", `加载失败：${friendlyError(e) || "未登录"}`, true);
+    }
+  }
+
+  function renderUsageSummary(summary) {
+    const box = $("#usage-summary");
+    box.replaceChildren();
+    const s = summary || {};
+    const cards = [
+      ["总 token", Number(s.tokens || 0).toLocaleString()],
+      ["调用次数", Number(s.calls || 0).toLocaleString()],
+      ["成本", `$${Number(s.costUsd || 0).toFixed(4)}`],
+      ["缓存命中率", `${(Number(s.hitRate || 0) * 100).toFixed(1)}%`],
+    ];
+    for (const [label, value] of cards) {
+      const card = el("div", "usage-card");
+      card.appendChild(el("span", "usage-label", label));
+      card.appendChild(el("strong", "usage-value", value));
+      box.appendChild(card);
+    }
+  }
+
+  function renderUsageChart(series) {
+    const box = $("#usage-chart");
+    box.replaceChildren();
+    if (!series.length) {
+      box.appendChild(el("p", "empty", "这个时间段还没有用量记录。"));
+      return;
+    }
+    const NS = "http://www.w3.org/2000/svg";
+    const W = 800, H = 240, baseY = 206, chartH = 170;
+    const n = series.length;
+    const maxTokens = series.reduce((m, p) => Math.max(m, Number(p.tokens) || 0), 0);
+    const step = W / n;
+    const barW = Math.max(1, Math.min(48, step * 0.66));
+    const labelEvery = Math.max(1, Math.ceil(n / 8));
+
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "token 用量柱状图");
+    const axis = document.createElementNS(NS, "line");
+    axis.setAttribute("x1", "0");
+    axis.setAttribute("x2", String(W));
+    axis.setAttribute("y1", String(baseY));
+    axis.setAttribute("y2", String(baseY));
+    axis.setAttribute("class", "usage-axis");
+    svg.appendChild(axis);
+
+    series.forEach((p, i) => {
+      const tokens = Number(p.tokens) || 0;
+      const height = maxTokens > 0 ? (tokens / maxTokens) * chartH : 0;
+      const x = step * i + (step - barW) / 2;
+      const y = baseY - height;
+      const rect = document.createElementNS(NS, "rect");
+      rect.setAttribute("x", x.toFixed(1));
+      rect.setAttribute("y", y.toFixed(1));
+      rect.setAttribute("width", barW.toFixed(1));
+      rect.setAttribute("height", Math.max(0, height).toFixed(1));
+      rect.setAttribute("class", "usage-bar");
+      const title = document.createElementNS(NS, "title");
+      title.textContent = `${p.key} · ${tokens.toLocaleString()} tokens · ${Number(p.calls) || 0} 次 · $${Number(p.costUsd || 0).toFixed(4)}`;
+      rect.appendChild(title);
+      svg.appendChild(rect);
+
+      if (i % labelEvery === 0) {
+        const label = document.createElementNS(NS, "text");
+        label.setAttribute("x", (step * i + step / 2).toFixed(1));
+        label.setAttribute("y", "228");
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("class", "usage-axis-label");
+        label.textContent = p.label;
+        svg.appendChild(label);
+      }
+    });
+    box.appendChild(svg);
+  }
+
+  function renderUsageCalls(calls) {
+    const box = $("#usage-calls");
+    box.replaceChildren();
+    if (!calls.length) return;
+    const table = el("table", "usage-table");
+    const thead = el("thead");
+    const headRow = el("tr");
+    for (const label of ["时间", "来源", "模型", "调用", "缓存命中", "未命中", "输出", "合计", "成本"]) {
+      headRow.appendChild(el("th", "", label));
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = el("tbody");
+    for (const c of calls) {
+      const row = el("tr");
+      row.appendChild(el("td", "", c.ts_local || formatTs(c.ts)));
+      row.appendChild(el("td", "", c.source === "llm" ? "模型调用" : c.source === "wake" ? "历史唤醒" : (c.source || "—")));
+      row.appendChild(el("td", "", c.model || "—"));
+      row.appendChild(el("td", "num", Number(c.calls || 0).toLocaleString()));
+      row.appendChild(el("td", "num", Number(c.cacheHit || 0).toLocaleString()));
+      row.appendChild(el("td", "num", Number(c.cacheMiss || 0).toLocaleString()));
+      row.appendChild(el("td", "num", Number(c.outTokens || 0).toLocaleString()));
+      row.appendChild(el("td", "num", Number(c.totalTokens || 0).toLocaleString()));
+      row.appendChild(el("td", "num", `$${Number(c.costUsd || 0).toFixed(4)}`));
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+  }
+
   // ---------- 调度设置 ----------
 
   async function loadScheduler() {
@@ -1089,6 +1243,10 @@
       void loadEditors();
     } else if (view === "settings") {
       void loadScheduler();
+    } else if (view === "usage") {
+      void loadUsage();
+    } else if (view === "skills") {
+      void loadSkills();
     }
     if (!opts.skipUrl && state.tab === "manage") {
       writeLocationState("manage", view, { replace: !!opts.replace });
@@ -1116,8 +1274,6 @@
       void loadPlans();
     } else if (name === "memories") {
       void loadMemories();
-    } else if (name === "skills") {
-      void loadSkills();
     }
     if (!opts.skipUrl) writeLocationState(name, state.manageView, { replace: !!opts.replace });
   }
@@ -1178,6 +1334,17 @@
     $("#reload-scheduler").addEventListener("click", () => void loadScheduler());
     $("#save-scheduler").addEventListener("click", () => void saveScheduler());
     $("#reload-skills").addEventListener("click", () => void loadSkills());
+    $("#reload-usage").addEventListener("click", () => void loadUsage());
+    $("#usage-bucket").addEventListener("change", (e) => {
+      state.usageBucket = e.target.value === "day" ? "day" : "hour";
+      syncUsageRangeOptions();
+      void loadUsage();
+    });
+    $("#usage-range").addEventListener("change", (e) => {
+      state.usageRange = e.target.value;
+      void loadUsage();
+    });
+    syncUsageRangeOptions();
     $("#reload-tasks").addEventListener("click", () => void loadTasks());
     $("#reload-approvals").addEventListener("click", () => void loadApprovals());
     $("#reload-workers").addEventListener("click", () => void loadWorkers());
