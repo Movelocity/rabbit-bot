@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
-import { createTask, ensureTaskPool, getTask } from "../src/core/tasks.ts";
-import { claimNextTask, completeTask, failTask, progressTask, registerWorker } from "../src/core/workers.ts";
+import { createTask, ensureTaskPool, getTask, updateTask } from "../src/core/tasks.ts";
+import { completeTask, failTask, progressTask } from "../src/core/workers.ts";
 import { createApproval, decideApproval } from "../src/core/approvals.ts";
 import { appendTaskEvent, listTaskEvents } from "../src/core/task-events.ts";
 import { formatTask } from "../src/ops/tasks.ts";
@@ -41,46 +41,43 @@ test("老任务没有 name：展示和池标题回退成 #任务<id>，不报错
   s.close();
 });
 
-test("claim/progress/complete 都写事件，时间戳递增且带本地时间", () => {
+test("progress/complete 都写事件，时间戳递增且带本地时间", () => {
   const s = new Store(":memory:");
-  registerWorker(s, { workerId: "wa-1", name: "本地", now: 10 });
   const t = createTask(s, { userId: "u1", poolId: "p1", name: "#验收", goal: "跑验收", start_at: 0 });
+  updateTask(s, t.id, { status: "running", worker_id: "opencode-1" });
 
-  claimNextTask(s, "wa-1", { now: 1000, leaseMs: 100_000 });
-  progressTask(s, t.id, { workerId: "wa-1", stage: "fetch", note: "正在拉数据", now: 2000 });
-  completeTask(s, t.id, { workerId: "wa-1", result: "全部通过", artifact: "report.md", now: 3000 });
+  progressTask(s, t.id, { workerId: "opencode-1", stage: "fetch", note: "正在拉数据", now: 2000 });
+  completeTask(s, t.id, { workerId: "opencode-1", result: "全部通过", artifact: "report.md", now: 3000 });
 
   const events = listTaskEvents(s, t.id);
-  assert.deepEqual(events.map((e) => e.ts), [1000, 2000, 3000]);
-  assert.match(events[0].text, /worker wa-1 领取任务，开始执行/);
-  assert.match(events[1].text, /阶段 fetch/);
-  assert.match(events[1].text, /正在拉数据/);
-  assert.match(events[2].text, /任务完成：全部通过/);
-  assert.match(events[2].text, /report\.md/);
+  assert.deepEqual(events.map((e) => e.ts), [2000, 3000]);
+  assert.match(events[0].text, /阶段 fetch/);
+  assert.match(events[0].text, /正在拉数据/);
+  assert.match(events[1].text, /任务完成：全部通过/);
+  assert.match(events[1].text, /report\.md/);
   for (const e of events) assert.match(e.local, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-  assert.equal(events[0].sender, "本地", "sender 用 worker 名字");
+  assert.equal(events[0].sender, "opencode-1", "sender 用 worker_id");
 
   s.close();
 });
 
 test("fail：retryable 写「失败，可重试」，非 retryable 写「任务失败」", () => {
   const s = new Store(":memory:");
-  registerWorker(s, { workerId: "wa-1", name: "本地", now: 10 });
   const t = createTask(s, { userId: "u1", poolId: "p1", name: "#会失败", goal: "会失败", start_at: 0 });
 
-  claimNextTask(s, "wa-1", { now: 1000, leaseMs: 100_000 });
-  failTask(s, t.id, { workerId: "wa-1", error: "网络抖了", retryable: true, now: 2000 });
+  updateTask(s, t.id, { status: "running", worker_id: "opencode-1" });
+  failTask(s, t.id, { workerId: "opencode-1", error: "网络抖了", retryable: true, now: 2000 });
   let events = listTaskEvents(s, t.id, { limit: 1 });
   assert.match(events[0].text, /失败，可重试/);
   assert.match(events[0].text, /网络抖了/);
 
-  claimNextTask(s, "wa-1", { now: 3000, leaseMs: 100_000 });
-  failTask(s, t.id, { workerId: "wa-1", error: "脚本炸了", retryable: false, now: 4000 });
+  updateTask(s, t.id, { status: "running", worker_id: "opencode-1" });
+  failTask(s, t.id, { workerId: "opencode-1", error: "脚本炸了", retryable: false, now: 4000 });
   events = listTaskEvents(s, t.id, { limit: 1 });
   assert.match(events[0].text, /任务失败：脚本炸了/);
 
   const all = listTaskEvents(s, t.id);
-  assert.deepEqual(all.map((e) => e.ts), [1000, 2000, 3000, 4000], "重试后继续按时间正序追加");
+  assert.deepEqual(all.map((e) => e.ts), [2000, 4000], "重试后继续按时间正序追加");
 
   s.close();
 });

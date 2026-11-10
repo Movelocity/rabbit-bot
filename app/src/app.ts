@@ -11,7 +11,7 @@ import { evaluateGate } from "./core/gate.ts";
 import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
 import {
-  appendNote, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
+  appendNote, archiveSettledTaskPools, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
   taskDisplayName, updateTask, type Task,
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
@@ -94,6 +94,20 @@ function readTaskReport(dir: string, id: number): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * 日额度的两条保险丝：dailyTokens / dailyLlmCalls 配成负数 = 不设这条闸，
+ * 只留钱那条（dailyCny）。0 仍然是「一分都不给」。
+ */
+function tokensLeftOf(cfg: Config, used: number): number {
+  const cap = cfg.limits.dailyTokens;
+  return cap < 0 ? Number.POSITIVE_INFINITY : cap - used;
+}
+
+function callsLeftOf(cfg: Config, used: number): number {
+  const cap = cfg.limits.dailyLlmCalls;
+  return cap < 0 ? Number.POSITIVE_INFINITY : cap - used;
 }
 
 export class App {
@@ -509,9 +523,9 @@ export class App {
     const cfg = this.o.cfg;
     const day = dayKey(now, cfg.timezone);
     const usage = this.store.getUsage(day);
-    const tokensLeft = cfg.limits.dailyTokens - usage.tokens;
+    const tokensLeft = tokensLeftOf(cfg, usage.tokens);
     // 自省是「想一想」，不是干活。额度见底就别想了，把额度留给真正的对话
-    if (tokensLeft < 2000 || usage.llm_calls >= cfg.limits.dailyLlmCalls) return;
+    if (tokensLeft < 2000 || cfg.limits.dailyLlmCalls >= 0 && usage.llm_calls >= cfg.limits.dailyLlmCalls) return;
 
     // 按时间跨度取，不是死数 10 条：话密的时候 10 条只够二十分钟，
     // 他早先说过的事实落在窗口外，她自己刚说错的话却在窗口里，越滚越像真的
@@ -545,7 +559,7 @@ export class App {
 
     const res = await this.engine.reflect(
       prompt,
-      { tokensLeft, callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls },
+      { tokensLeft, callsLeft: callsLeftOf(cfg, usage.llm_calls) },
       `你正在独处。只做一件事：想清楚此刻心里在想什么、有多想开口。只输出 JSON，不要任何别的内容。`,
     );
     this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
@@ -718,8 +732,8 @@ export class App {
     let res: RunResult;
     try {
       res = await this.engine.run(lines.join("\n"), {
-        tokensLeft: cfg.limits.dailyTokens - usage.tokens,
-        callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls,
+        tokensLeft: tokensLeftOf(cfg, usage.tokens),
+        callsLeft: callsLeftOf(cfg, usage.llm_calls),
       });
     } catch (e) {
       markPendingTick(this.store, t0);
@@ -777,6 +791,8 @@ export class App {
       await this.notifySys("crash", this.errorText((e as Error).message)).catch(() => {});
     } finally {
       this.activeWake = null;
+      // 终态任务池读完就收起来：不参与唤醒和默认列表，历史仍可按需查
+      try { archiveSettledTaskPools(this.store); } catch (e) { this.log.warn(`任务池归档失败：${(e as Error).message}`); }
     }
   }
 
@@ -795,15 +811,16 @@ export class App {
     if (this.store.isPaused()) return finish("skipped:paused");
     const day = dayKey(t0, cfg.timezone);
     const usage = this.store.getUsage(day);
-    // 三条闸：调用次数、折算 token、**钱**（2026-11-07 起以钱为准，另外两条留作保险丝）。
+    // 三条闸：调用次数、折算 token、**钱**。现在以钱为准（dailyCny），
+    // dailyTokens / dailyLlmCalls 配成负数即关掉对应保险丝，只留 10 元/天这条硬线。
     // 钱的口径 = 官方单价表 × 峰谷 × 汇率，命中缓存的那部分只按 hit 价算，
     // 所以「上下文很长但几乎是重读」不再吃掉整个日额度。
     const cnyCap = Number(cfg.limits.dailyCny ?? 0);
     const usdCny = Number(cfg.limits.usdCny ?? 7.1) || 7.1;
     const spentCny = (usage.cost_usd ?? 0) * usdCny;
     if (
-      usage.llm_calls >= cfg.limits.dailyLlmCalls ||
-      usage.tokens >= cfg.limits.dailyTokens ||
+      (cfg.limits.dailyLlmCalls >= 0 && usage.llm_calls >= cfg.limits.dailyLlmCalls) ||
+      (cfg.limits.dailyTokens >= 0 && usage.tokens >= cfg.limits.dailyTokens) ||
       (cnyCap > 0 && spentCny >= cnyCap)
     ) {
       const notice = await this.notifyCap(day);
@@ -895,8 +912,8 @@ export class App {
     const forceHandoff = sessionLimit > 0 && sessionTokens >= sessionLimit;
     if (forceHandoff) entry.sessionTokens = sessionTokens;
     const res = await this.engine.run(fullPrompt, {
-      tokensLeft: cfg.limits.dailyTokens - usage.tokens,
-      callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls,
+      tokensLeft: tokensLeftOf(cfg, usage.tokens),
+      callsLeft: callsLeftOf(cfg, usage.llm_calls),
       forceHandoff,
     }, images);
     this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
@@ -905,8 +922,8 @@ export class App {
     // 只劝它「要么排、要么明确不排」，不替它做决定，也不用 send 再发一条。
     if (needsPlanNudge({ wakeType: w.type, error: res.error, aborted: res.aborted, toolCalls: res.toolCalls })) {
       const left = {
-        tokensLeft: cfg.limits.dailyTokens - usage.tokens - res.tokens,
-        callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls - res.llmCalls,
+        tokensLeft: tokensLeftOf(cfg, usage.tokens) - res.tokens,
+        callsLeft: callsLeftOf(cfg, usage.llm_calls) - res.llmCalls,
       };
       if (left.callsLeft > 0 && left.tokensLeft > 0) {
         try {

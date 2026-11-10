@@ -1,6 +1,5 @@
 import { cx } from "../lib/cx.ts";
 import { MANAGE_VIEWS, type ManageView } from "../lib/use-url-state.ts";
-import { WorkersView } from "./manage/WorkersView.tsx";
 import { UsersView } from "./manage/UsersView.tsx";
 import { PersonaView } from "./manage/PersonaView.tsx";
 import { SettingsView } from "./manage/SettingsView.tsx";
@@ -8,7 +7,6 @@ import { UsageView } from "./manage/UsageView.tsx";
 import { SkillsView } from "./manage/SkillsView.tsx";
 
 const LABELS: Record<ManageView, string> = {
-  workers: "Worker",
   users: "用户",
   persona: "人格",
   settings: "调度",
@@ -44,7 +42,6 @@ export function ManagePage({
         ))}
       </aside>
       <div className="min-h-0 overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-        {view === "workers" && <WorkersView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
         {view === "settings" && <SettingsView reloadSignal={reloadSignal} />}

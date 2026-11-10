@@ -39,8 +39,8 @@
     "abortAfterBlocks": 1
   },
   "limits": {
-    "dailyLlmCalls": 1000,
-    "dailyTokens": 2000000,
+    "dailyLlmCalls": -1,
+    "dailyTokens": -1,
     "turnTimeoutMs": 300000,
     "capNotice": {
       "enabled": true,

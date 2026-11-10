@@ -45,6 +45,8 @@ export interface Pool {
   external_id: string; // 飞书 chat_id 等
   kind: PoolKind;
   title: string;
+  /** 归档 = 不再出现在默认列表、不参与唤醒/主动开口；来新消息会自动解档 */
+  archived: boolean;
 }
 
 /** 适配器把平台消息转成这个结构交给池 */

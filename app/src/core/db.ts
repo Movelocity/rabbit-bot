@@ -9,6 +9,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pools (
   pool_id TEXT PRIMARY KEY, platform TEXT NOT NULL, external_id TEXT NOT NULL, kind TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, last_msg_at INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
   UNIQUE(platform, external_id)
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -121,15 +122,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_start ON tasks(start_at);
-CREATE TABLE IF NOT EXISTS workers (
-  worker_id      TEXT PRIMARY KEY,
-  name           TEXT NOT NULL,
-  kind           TEXT NOT NULL DEFAULT 'wa',
-  status         TEXT NOT NULL DEFAULT 'online',
-  registered_at  INTEGER NOT NULL,
-  last_seen_at   INTEGER NOT NULL,
-  updated_at     INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS approvals (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL,
@@ -145,6 +137,13 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 `;
+
+function rowToPool(r: any): Pool & { last_msg_at?: number } {
+  return {
+    pool_id: r.pool_id, platform: r.platform, external_id: r.external_id, kind: r.kind,
+    title: r.title, archived: !!r.archived, ...(r.last_msg_at === undefined ? {} : { last_msg_at: r.last_msg_at }),
+  };
+}
 
 function rowToMsg(r: any): StoredMessage {
   return {
@@ -169,6 +168,8 @@ export class Store {
     this.db.exec(SCHEMA);
     // 老库补列（新库已含在 SCHEMA 里）
     try { this.db.exec("ALTER TABLE messages ADD COLUMN attachment TEXT"); } catch { /* 已存在 */ }
+    // 池归档（2026-11-10）：归档后默认不出现在列表、不参与唤醒；来新消息自动解档
+    try { this.db.exec("ALTER TABLE pools ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
     // 潮汐锚点（2026-10-24）：计划到点不一定该说，锚点决定能不能发
     // anchor_ref 保留仅为兼容旧库，代码不再读写
     for (const col of ["anchor_kind TEXT", "anchor_ref TEXT", "why TEXT"]) {
@@ -243,7 +244,8 @@ export class Store {
     return this.getPool(pool_id)!;
   }
   getPool(poolId: string): Pool | undefined {
-    return this.db.prepare("SELECT pool_id,platform,external_id,kind,title FROM pools WHERE pool_id=?").get(poolId) as Pool | undefined;
+    const r = this.db.prepare("SELECT pool_id,platform,external_id,kind,title,archived FROM pools WHERE pool_id=?").get(poolId);
+    return r ? rowToPool(r) : undefined;
   }
   /** 短别名 p<rowid>，给 LLM 用以节省 token */
   poolAlias(poolId: string): string {
@@ -253,11 +255,24 @@ export class Store {
   /** 接受别名（p3）或完整 pool_id */
   resolvePool(ref: string): Pool | undefined {
     const m = /^p(\d+)$/.exec(ref.trim());
-    if (m) return this.db.prepare("SELECT pool_id,platform,external_id,kind,title FROM pools WHERE rowid=?").get(Number(m[1])) as Pool | undefined;
+    if (m) {
+      const r = this.db.prepare("SELECT pool_id,platform,external_id,kind,title,archived FROM pools WHERE rowid=?").get(Number(m[1]));
+      return r ? rowToPool(r) : undefined;
+    }
     return this.getPool(ref.trim());
   }
-  listPools(): (Pool & { last_msg_at: number })[] {
-    return this.db.prepare("SELECT pool_id,platform,external_id,kind,title,last_msg_at FROM pools ORDER BY last_msg_at DESC").all() as any;
+  /** 默认只列没归档的；includeArchived=true 时连归档池一起给（查历史、恢复用）。 */
+  listPools(opts: { includeArchived?: boolean } = {}): (Pool & { last_msg_at: number })[] {
+    const where = opts.includeArchived ? "" : " WHERE archived=0";
+    return (this.db.prepare(`SELECT pool_id,platform,external_id,kind,title,archived,last_msg_at FROM pools${where} ORDER BY last_msg_at DESC`).all() as any[])
+      .map((r) => rowToPool(r) as Pool & { last_msg_at: number });
+  }
+  /** 归档/解档。接受 pool_id 或别名（p3）。返回是否找到。 */
+  archivePool(ref: string, archived = true): boolean {
+    const pool = this.resolvePool(ref);
+    if (!pool) return false;
+    this.db.prepare("UPDATE pools SET archived=? WHERE pool_id=?").run(archived ? 1 : 0, pool.pool_id);
+    return true;
   }
 
   // ---------- 身份映射 ----------
@@ -344,7 +359,8 @@ export class Store {
       m.reply_to, JSON.stringify(m.mentions), m.is_mention_me ? 1 : 0, m.media_type, m.from_self ? 1 : 0,
       m.attachment ? JSON.stringify(m.attachment) : null, m.internal ? 1 : 0);
     if (r.changes === 0) return null;
-    this.db.prepare("UPDATE pools SET last_msg_at=MAX(last_msg_at,?) WHERE pool_id=?").run(m.ts, pool.pool_id);
+    // 归档池来新消息就自动解档：归档只是「暂时不看」，不能变成静音
+    this.db.prepare("UPDATE pools SET last_msg_at=MAX(last_msg_at,?), archived=0 WHERE pool_id=?").run(m.ts, pool.pool_id);
     return this.getMessageBySeq(Number(r.lastInsertRowid))!;
   }
   getMessageBySeq(seq: number): StoredMessage | undefined {
@@ -405,7 +421,7 @@ export class Store {
     return this.messagesAfter(poolId, this.getCursor(poolId), limit).filter((m) => !m.from_self);
   }
   poolsWithUnread(): string[] {
-    return (this.db.prepare(`SELECT p.pool_id FROM pools p WHERE EXISTS (SELECT 1 FROM messages m WHERE m.pool_id=p.pool_id AND m.from_self=0
+    return (this.db.prepare(`SELECT p.pool_id FROM pools p WHERE p.archived=0 AND EXISTS (SELECT 1 FROM messages m WHERE m.pool_id=p.pool_id AND m.from_self=0
       AND m.seq > COALESCE((SELECT last_seq FROM cursors c WHERE c.pool_id=p.pool_id),0))`).all() as any[]).map((r) => r.pool_id);
   }
 
@@ -498,7 +514,7 @@ export class Store {
       ? this.db.prepare("SELECT MAX(ts) AS t FROM messages WHERE pool_id=? AND from_self=0").get(poolId)
       // 跨池时排除任务池：任务进度不是「他说话了」，否则任务跑着全局静默永远不增长
       : this.db.prepare(`SELECT MAX(m.ts) AS t FROM messages m JOIN pools p ON p.pool_id=m.pool_id
-          WHERE m.from_self=0 AND p.kind!='task'`).get();
+          WHERE m.from_self=0 AND p.kind!='task' AND p.archived=0`).get();
     return Number((row as any)?.t ?? 0) || 0;
   }
 

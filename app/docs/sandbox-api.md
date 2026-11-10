@@ -37,9 +37,10 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 |---|---|---|
 | GET | `/health` | — |
 | GET | `/`、`/ui/*` | 本地 Web 管理台静态文件（不需要 token；页面里的数据接口仍要 token） |
-| GET | `/v1/pools` | `pool-list` |
+| GET | `/v1/pools?archived=1` | `pool-list [--archived]` |
 | GET | `/v1/pools/:ref/messages?limit=15&before_seq=300` | `pool-read` |
 | GET | `/v1/pools/:ref/search?q=火锅&limit=15` | `pool-search` |
+| POST | `/v1/pools/:ref/archive` `{archived}` | `pool-archive` / `pool-unarchive` |
 | GET | `/v1/plans?status=pending` | `plan-list` |
 | POST | `/v1/plans` `{title,kind,when,pool,anchor,why,expires}` | `plan-add` |
 | PATCH | `/v1/plans/:id` `{status}` | `plan-update` |

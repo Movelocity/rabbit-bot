@@ -159,6 +159,64 @@ function credHit(argv: string[], ctx: RuleContext): string | null {
 /** git 只有这几个子命令算只读 */
 const GIT_READ = new Set(["status", "log", "diff", "show", "branch", "remote", "rev-parse", "blame", "shortlog"]);
 
+/**
+ * 取出 sed 的脚本参数（-e / --expression / 第一个位置参数）。
+ * 用 -f / --file 从文件读脚本时看不见内容，标为 unknown。
+ */
+function sedScripts(argv: string[]): { scripts: string[]; unknown: boolean } {
+  const scripts: string[] = [];
+  let unknown = false;
+  let scriptFromOpt = false;
+  let posSeen = false;
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      if (a === "--expression") { scripts.push(argv[++i] ?? ""); scriptFromOpt = true; }
+      else if (a.startsWith("--expression=")) { scripts.push(a.slice("--expression=".length)); scriptFromOpt = true; }
+      else if (a === "--file") { unknown = true; i++; }
+      else if (a.startsWith("--file=")) unknown = true;
+      continue;
+    }
+    if (a.startsWith("-") && a !== "-") {
+      if (a === "-e") { scripts.push(argv[++i] ?? ""); scriptFromOpt = true; continue; }
+      if (a.startsWith("-e")) { scripts.push(a.slice(2)); scriptFromOpt = true; continue; }
+      if (a === "-f") { unknown = true; i++; continue; }
+      if (a.startsWith("-f")) { unknown = true; continue; }
+      continue;
+    }
+    if (!scriptFromOpt && !posSeen) { scripts.push(a); posSeen = true; }
+  }
+  return { scripts, unknown };
+}
+
+/**
+ * sed 默认只把结果打到 stdout，算只读。但它有三种暗门：
+ *   -i 任意组合（-i / -i.bak / -Ei / -ni / --in-place）原地改文件；
+ *   脚本里的 w / W 命令写文件、e 命令执行 shell；
+ *   -f / --file 从脚本文件读，内容看不见。
+ * 任一命中都退回 ask，其余才算只读。
+ */
+function classifySed(argv: string[], part: string): VerdictResult {
+  const inPlace = argv.some(
+    (a) =>
+      (a.startsWith("-") && !a.startsWith("--") && /^-[A-Za-z]*i/.test(a)) ||
+      a === "--in-place" ||
+      a.startsWith("--in-place="),
+  );
+  if (inPlace) return { verdict: "ask", why: "sed 原地改文件", part };
+
+  const { scripts, unknown } = sedScripts(argv);
+  if (unknown) return { verdict: "ask", why: "sed 脚本来自文件，看不见内容", part };
+  for (const s of scripts) {
+    // 命令行形式的 w/W/e：行首或分隔符后，前面可带地址；
+    // s///w、s///e 这种标志位：命令尾部的 /w、/e。
+    if (/(^|[;{}\n])[\s0-9,$*~+]*[wWe](?=\s|;|\n|$)/.test(s) || /\/([wWe])(?=\s|;|\n|$)/.test(s)) {
+      return { verdict: "ask", why: "sed 脚本会写盘/执行命令", part };
+    }
+  }
+  return { verdict: "safe", why: "sed 只读", part };
+}
+
 function classifyArgv(argv: string[], raw: string, ctx: RuleContext): VerdictResult {
   const prog = argv[0].split("/").pop() ?? argv[0];
   const part = raw.trim();
@@ -211,6 +269,8 @@ function classifyArgv(argv: string[], raw: string, ctx: RuleContext): VerdictRes
     }
     return { verdict: "safe", why: "只列", part };
   }
+
+  if (prog === "sed") return classifySed(argv, part);
 
   if (prog === "git") {
     const sub = argv[1] ?? "";

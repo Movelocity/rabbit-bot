@@ -9,7 +9,6 @@ import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
 import { createTask, updateTask } from "../src/core/tasks.ts";
-import { registerWorker } from "../src/core/workers.ts";
 import { createApproval } from "../src/core/approvals.ts";
 
 const dir = path.join(APP_ROOT, ".scratch", "web-readonly-api");
@@ -41,11 +40,10 @@ test.before(async () => {
     stage: "review",
   });
   taskId = task.id;
-  registerWorker(store, { workerId: "wa-1", name: "本地 WA", kind: "wa" });
-  updateTask(store, taskId, { status: "running", worker_id: "wa-1" });
+  updateTask(store, taskId, { status: "running", worker_id: "opencode-1" });
   createApproval(store, {
     taskId,
-    workerId: "wa-1",
+    workerId: "opencode-1",
     action: "shell: ls",
     detail: "/work",
     why: "检查文件",
@@ -90,11 +88,10 @@ test("静态页 200：管理台可打开，审批仍提示去飞书", async () =
   assert.match(js, /审批请在飞书里完成/);
 });
 
-test("任务 / 快照 / worker / 审批：带 token 200，无 token 401", async () => {
+test("任务 / 快照 / 审批：带 token 200，无 token 401", async () => {
   const routes = [
     "/v1/tasks",
     `/v1/tasks/${taskId}/snapshot`,
-    "/v1/workers",
     "/v1/approvals?status=pending",
   ];
   for (const route of routes) {
@@ -116,14 +113,7 @@ test("只读视图需要的字段齐全", async () => {
 
   const snap = await call(`/v1/tasks/${taskId}/snapshot`, true);
   assert.equal(snap.body.data.task.id, taskId);
-  assert.equal(snap.body.data.worker.worker_id, "wa-1");
-
-  const workers = await call("/v1/workers", true);
-  const worker = workers.body.data.find((w: any) => w.worker_id === "wa-1");
-  assert.ok(worker);
-  for (const key of ["worker_id", "name", "kind", "status", "last_seen_at"]) {
-    assert.ok(key in worker, `worker 缺字段 ${key}`);
-  }
+  assert.equal(snap.body.data.task.worker_id, "opencode-1");
 
   const approvals = await call("/v1/approvals?status=pending", true);
   const approval = approvals.body.data.find((a: any) => a.task_id === taskId);

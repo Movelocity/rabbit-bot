@@ -110,9 +110,11 @@ function runLocal(cmd) {
 const HELP = `用法：rb <命令> [参数…]
 
 业务（走宿主 API）：
-  pool-list
+  pool-list [--archived]                # --archived 连已归档的池一起列
   pool-read <池> [--limit 15] [--before-seq N]
   pool-search <关键词> --pool <池> [--limit 20] [--only-other|--only-self]
+  pool-archive <池>                     # 归档：默认列表/唤醒里消失，历史仍可读
+  pool-unarchive <池>
   plan-list [--status pending|done|cancelled]
   plan-add --title T [--kind once|cron|none] [--when V] [--pool P] [--anchor L0|L1|L2] [--why W] [--expires ISO]
   plan-update <id> --status pending|done|cancelled
@@ -138,7 +140,7 @@ async function main() {
 
   switch (cmd) {
     case "pool-list":
-      return api("GET", "/v1/pools");
+      return api("GET", "/v1/pools", { query: { archived: bool(flags, "archived") ? 1 : undefined } });
     case "pool-read":
       return api("GET", `/v1/pools/${encodeURIComponent(pos[1] ?? str(flags, "pool") ?? "")}/messages`, {
         query: { limit: num(flags, "limit"), before_seq: num(flags, "before-seq") },
@@ -150,6 +152,12 @@ async function main() {
           only: flags["only-other"] ? "other" : flags["only-self"] ? "self" : undefined,
         },
       });
+    case "pool-archive":
+    case "pool-unarchive": {
+      const ref = pos[1] ?? str(flags, "pool");
+      if (!ref) throw new Error("用法：rb pool-archive <池> / pool-unarchive <池>");
+      return api("POST", `/v1/pools/${encodeURIComponent(ref)}/archive`, { body: { archived: cmd === "pool-archive" } });
+    }
     case "plan-list":
       return api("GET", "/v1/plans", { query: { status: str(flags, "status") ?? "pending" } });
     case "plan-add":

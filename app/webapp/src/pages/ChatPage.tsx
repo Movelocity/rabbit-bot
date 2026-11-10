@@ -38,6 +38,8 @@ export function ChatPage({
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [reading, setReading] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   const messagesBox = useRef<HTMLDivElement>(null);
   const messagesData = useRef<PoolMessage[]>([]);
@@ -60,7 +62,7 @@ export function ChatPage({
   const loadPools = useCallback(
     async (silent = false) => {
       try {
-        const rows = await request<Pool[]>("/v1/pools");
+        const rows = await request<Pool[]>(`/v1/pools${showArchived ? "?archived=1" : ""}`);
         setPools(rows);
         if (currentRef.current && !rows.some((p) => p.alias === currentRef.current)) {
           onCurrentPoolChange(null);
@@ -71,7 +73,7 @@ export function ChatPage({
         if (!silent) setStatus({ text: `读取会话池失败：${friendlyError(e)}`, error: true });
       }
     },
-    [request, onCurrentPoolChange],
+    [request, onCurrentPoolChange, showArchived],
   );
 
   const loadLatest = useCallback(
@@ -185,6 +187,23 @@ export function ChatPage({
   }, 3000);
 
   const pool = pools.find((p) => p.alias === currentPool);
+
+  const toggleArchive = useCallback(async () => {
+    if (!pool || archiving) return;
+    setArchiving(true);
+    try {
+      await request(`/v1/pools/${encodeURIComponent(pool.alias)}/archive`, {
+        method: "POST",
+        body: { archived: !pool.archived },
+      });
+      await loadPools(false);
+    } catch (e) {
+      setStatus({ text: `归档失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setArchiving(false);
+    }
+  }, [pool, archiving, request, loadPools]);
+
   const canLoadOlder =
     oldestSeq !== null && messages.length > 0 && messages[0].seq > oldestSeq;
 
@@ -201,6 +220,14 @@ export function ChatPage({
       >
         <div className="flex items-center justify-between px-5 pb-3 pt-[18px] text-[13px] text-muted">
           <span>会话池</span>
+          <button
+            type="button"
+            className={cx("rounded px-1.5 py-0.5 text-[11px] transition hover:text-text", showArchived && "text-text")}
+            title={showArchived ? "隐藏已归档" : "显示已归档"}
+            onClick={() => setShowArchived((v) => !v)}
+          >
+            {showArchived ? "隐藏归档" : "显示归档"}
+          </button>
         </div>
         <div className="overflow-y-auto px-2.5 pb-4">
           {!pools.length ? (
@@ -215,6 +242,7 @@ export function ChatPage({
                 className={cx(
                   "mb-1 block w-full rounded-md border-0 px-3 py-3.5 text-left transition hover:bg-surface2",
                   p.alias === currentPool ? "bg-surface2" : "bg-transparent",
+                  p.archived && "opacity-55",
                 )}
                 onClick={() => {
                   setReading(true);
@@ -228,7 +256,9 @@ export function ChatPage({
                   <span className="truncate text-sm font-semibold">
                     {p.title || "（无标题）"}
                   </span>
-                  <span className="flex-none text-[11px] text-muted">{kindLabel(p.kind)}</span>
+                  <span className="flex-none text-[11px] text-muted">
+                    {p.archived ? "已归档 · " : ""}{kindLabel(p.kind)}
+                  </span>
                 </div>
                 <div className="mt-1.5 flex items-baseline gap-2 text-xs text-muted [font-variant-numeric:tabular-nums]">
                   <span className="font-mono text-[11px]">{p.alias}</span>
@@ -269,6 +299,11 @@ export function ChatPage({
               {pool ? `${total} 条消息` : ""}
             </div>
           </div>
+          {pool && (
+            <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
+              {pool.archived ? "取消归档" : "归档"}
+            </Button>
+          )}
         </div>
 
         {status.text && (

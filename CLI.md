@@ -11,7 +11,7 @@
 | `npm run sbx -- status\|start\|shell\|rebuild\|image\|clean` | 沙盒容器管理（`start` 见下） |
 | `npm run inject -- "..."` | 往本地注入口塞一条消息 |
 | `npm run web` | 本地 Web 只读看板 demo：只看现有库，不收发消息、不生成回复 |
-| `npm run ctl -- <pause\|resume\|status\|usage\|wakes\|plans…>` | 运行时控制 |
+| `npm run ctl -- <pause\|resume\|status\|usage\|wakes\|pools\|archive\|unarchive…>` | 运行时控制 |
 | `npm run idle` | 空闲检测 |
 | `npm test` / `npm run typecheck` | 测试与类型检查 |
 

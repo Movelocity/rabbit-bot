@@ -45,7 +45,6 @@ const TAB_HINTS: Record<string, string> = {
 };
 
 const MANAGE_HINTS: Record<string, string> = {
-  workers: "只读 · 在线状态与心跳",
   users: "别名优先于通讯录名字",
   persona: "保存到运行时 · 下一轮换新会话生效",
   settings: "单位：秒 · 保存后立即生效",

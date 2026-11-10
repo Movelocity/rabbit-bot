@@ -62,7 +62,7 @@ function taskMatches(t: TaskView, executor: string, search: string): boolean {
   return hay.includes(q);
 }
 
-function buildDetailRows(t: TaskView, snap: TaskSnapshot | null): DetailRow[] {
+function buildDetailRows(t: TaskView): DetailRow[] {
   const rows: DetailRow[] = [];
   const add = (label: string, value: ReactNode, mono = false) => {
     if (value === null || value === undefined || String(value).trim() === "") return;
@@ -78,6 +78,8 @@ function buildDetailRows(t: TaskView, snap: TaskSnapshot | null): DetailRow[] {
   add("model", t.model, true);
   add("stage", t.stage);
   add("worker", t.worker_id, true);
+  add("executor", t.executor || "opencode");
+  add("worker_id", t.worker_id, true);
   add("start_at", t.start_at_local || formatTs(t.start_at));
   add("end_at", t.end_at_local || (t.end_at ? formatTs(t.end_at) : ""));
   add("updated", t.updated_at_local || formatTs(t.updated_at));
@@ -98,16 +100,6 @@ function buildDetailRows(t: TaskView, snap: TaskSnapshot | null): DetailRow[] {
     } catch {}
     add("files", files, true);
   }
-  const worker = snap?.worker;
-  add(
-    "worker 快照",
-    worker
-      ? `${worker.worker_id} · ${worker.status} · 最后心跳 ${formatTs(worker.last_seen_at)}`
-      : t.worker_id
-        ? `${t.worker_id} · 没有 worker 快照`
-        : "未领取",
-    true,
-  );
   return rows;
 }
 
@@ -293,7 +285,10 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
     void loadSnapshot(id, false);
   };
 
-  const filtered = tasks.filter((t) => taskMatches(t, executorFilter, search));
+  // 倒排：最近有动静的排最上面；同一时刻按 id 倒序兜底
+  const filtered = tasks
+    .filter((t) => taskMatches(t, executorFilter, search))
+    .sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
   const start = (currentPage - 1) * pageSize;
@@ -428,7 +423,7 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
           </div>
           <DetailRows
             className="mt-0 border-t-0 pt-0"
-            rows={buildDetailRows(task, snap)}
+            rows={buildDetailRows(task)}
           />
           {modalLoading ? (
             <p className="text-[13px] text-muted">正在加载任务快照…</p>

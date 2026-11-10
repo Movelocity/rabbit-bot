@@ -3,6 +3,7 @@ export interface Pool {
   pool_id: string;
   kind: string;
   title: string;
+  archived: boolean;
   last_msg_at: number | null;
   last_msg_local: string | null;
   total: number;
@@ -82,17 +83,9 @@ export interface TaskEvent {
   text: string;
 }
 
-export interface WorkerSnapshot {
-  worker_id: string;
-  name: string;
-  status: string;
-  last_seen_at: number;
-}
-
 export interface TaskSnapshot {
   task: Partial<TaskView> & { id: number };
   recent_events: TaskEvent[];
-  worker: WorkerSnapshot | null;
 }
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "timeout";
@@ -150,16 +143,6 @@ export interface User {
   alias: string;
   created_at: number;
   identities: UserIdentity[];
-}
-
-export interface Worker {
-  worker_id: string;
-  name: string;
-  kind: string;
-  status: "online" | "offline" | string;
-  registered_at: number;
-  last_seen_at: number;
-  updated_at: number;
 }
 
 export interface UsageSummary {

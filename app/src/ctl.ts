@@ -51,7 +51,19 @@ async function main() {
       break;
     }
     case "wakes": out(store.recentWakeLogs(Number(args[0] ?? 10))); break;
-    case "pools": out(store.listPools().map((p) => ({ alias: store.poolAlias(p.pool_id), ...p, last: p.last_msg_at ? fmtLocal(p.last_msg_at) : null }))); break;
+    case "pools": {
+      const all = args[0] === "all" || args[0] === "archived";
+      out(store.listPools({ includeArchived: all }).map((p) => ({ alias: store.poolAlias(p.pool_id), ...p, last: p.last_msg_at ? fmtLocal(p.last_msg_at) : null })));
+      break;
+    }
+    case "archive":
+    case "unarchive": {
+      const ref = args[0];
+      if (!ref) { out(`用法：ctl ${cmd} <pool_id|p别>  （pools 先看别名）`); process.exit(1); }
+      if (!store.archivePool(ref, cmd === "archive")) { out(`没有这个池：${ref}`); process.exit(1); }
+      out(`已${cmd === "archive" ? "归档" : "解档"} ${ref}${cmd === "archive" ? "（历史仍可用 pools archived 查看）" : ""}`);
+      break;
+    }
     case "plans": out(store.listPlans()); break;
     case "handoffs": out(store.listHandoffs()); break;
     case "identities": out(store.listIdentities()); break;

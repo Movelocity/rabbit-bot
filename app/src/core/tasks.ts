@@ -262,6 +262,27 @@ export function listTasksUpdatedSince(store: Store, since: number, statuses?: re
   return store.db.prepare(sql).all(...args) as Task[];
 }
 
+/**
+ * 已结束（done/failed/cancelled）且没留未读的任务池自动归档。
+ *
+ * 归档只影响默认列表和唤醒，不删历史：`chat search` / `task updates` 仍能按需查。
+ * 新事件写进池时 insertMessage 会自动解档，所以恢复执行不会漏。
+ */
+export function archiveSettledTaskPools(store: Store): string[] {
+  const rows = store.db.prepare(`
+    SELECT p.pool_id FROM tasks t
+    JOIN pools p ON p.pool_id = t.task_pool_id
+    WHERE p.kind='task' AND p.archived=0
+      AND t.status IN ('done','failed','cancelled')
+      AND NOT EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.pool_id=p.pool_id AND m.from_self=0
+          AND m.seq > COALESCE((SELECT last_seq FROM cursors c WHERE c.pool_id=p.pool_id),0)
+      )`).all() as { pool_id: string }[];
+  for (const r of rows) store.archivePool(r.pool_id, true);
+  return rows.map((r) => r.pool_id);
+}
+
 /** pending tick 的 kv 键：只在「无标记 → 有标记」时唤醒 UFA（docs/research §2.4）。 */
 export const PENDING_TASK_TICK_KEY = "ufa.pending_task_tick";
 

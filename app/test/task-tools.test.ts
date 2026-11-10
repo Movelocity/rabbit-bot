@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
-import { registerWorker } from "../src/core/workers.ts";
 import { getTask } from "../src/core/tasks.ts";
 import { appendTaskEvent } from "../src/core/task-events.ts";
 
@@ -138,25 +137,9 @@ test("task：缺参、非法 status、不存在 id 都明确报错，不抛崩",
   assert.match(gone.text, /没有任务/);
 });
 
-test("worker：list 返回 worker_id / name / kind / status / last_seen_at", async () => {
-  const { run, store } = setup();
-  registerWorker(store, { workerId: "wa-1", name: "本地", kind: "wa" });
-
-  const r = await run("worker", { action: "list" });
-  assert.equal(r.details?.ok, true, r.text);
-  assert.equal(r.details.count, 1);
-  assert.deepEqual(r.details.workers[0], {
-    worker_id: "wa-1",
-    name: "本地",
-    kind: "wa",
-    status: "online",
-    last_seen_at: r.details.workers[0].last_seen_at,
-  });
-});
-
 test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批；WA 始终有", () => {
   const ufa = setup().tools.map((t: any) => t.name);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "worker", "read_file", "rb"]) {
+  for (const name of ["chat", "memory", "plan", "approval", "task", "read_file", "rb"]) {
     assert.ok(ufa.includes(name), `UFA 少了 ${name}：${ufa.join(",")}`);
   }
   assert.ok(!ufa.includes("write_file"), `UFA 不该有 write_file：${ufa.join(",")}`);
@@ -167,7 +150,7 @@ test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批�
 
   const wa = setup("wa").tools.map((t: any) => t.name);
   assert.deepEqual([...wa].sort(), ["rb", "read_file", "terminal", "write_file"]);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "worker"]) {
+  for (const name of ["chat", "memory", "plan", "approval", "task"]) {
     assert.ok(!wa.includes(name), `WA 不该有 ${name}`);
   }
 });
@@ -199,19 +182,14 @@ test("task updates / get：返回任务池里的带时间戳事件", async () =>
   assert.match(missing.text, /没有任务/);
 });
 
-test("rb task-list / worker-list：只读，直接查库，不进沙盒", async () => {
-  const { run, calls, store } = setup();
+test("rb task-list：只读，直接查库，不进沙盒", async () => {
+  const { run, calls } = setup();
   await run("task", { action: "create", name: "#查一下", goal: "查一下这个", work_dir: process.cwd() });
-  registerWorker(store, { workerId: "wa-1", name: "本地" });
 
   const tasks = await run("rb", { args: "task-list --status pending_approval" });
   assert.equal(tasks.details?.ok, true, tasks.text);
   assert.equal(tasks.details.count, 1);
   assert.match(tasks.text, /查一下这个/);
-
-  const workers = await run("rb", { args: "worker-list" });
-  assert.equal(workers.details?.ok, true, workers.text);
-  assert.match(workers.text, /wa-1/);
 
   const bad = await run("rb", { args: "task-list --status wat" });
   assert.equal(bad.details?.ok, false);

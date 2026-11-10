@@ -130,57 +130,13 @@ npm run web -- --host 0.0.0.0
 demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任务面板和人格、提示词、记忆管理。
 它没有入池能力，也不会生成回复；聊天收发走已启用的 IM（飞书 / Matrix），任务审批默认在任务发起时的 IM 聊天/审批房完成，Web「任务」页是可选的备用入口。
 
-## 真实 worker 与 e2e
+## 任务执行模型
 
-当前推荐的任务执行模型是**每个任务一个一次性进程**（不常驻 worker）：建任务时给
-`work_dir`，系统写 `.ufa/tasks/task-<id>.md` 并启动 `opencode` / `mimo`，恢复时用
-同一个 session id。契约见 `../docs/WA-WORKER-API.md`。
-
-下面这段 `scripts/wa-worker.ts` 是旧的常驻轮询实现，**仅保留兼容**，新任务不要再用它。
-
-```bash
-# demo：不调 LLM，睡 3 秒后把当前时间写成 result
-npx tsx scripts/wa-worker.ts \
-  --api http://127.0.0.1:3738 --token "$(<data/run/api.token)" \
-  --worker-id wa-local --poll-ms 2000 --mode demo --dir "$PWD"
-
-# opencode：把 goal/deliverable/constraints/acceptance 拼成提示词，
-# 调 `opencode run "<prompt>" --dir <dir> --format json`，拼接所有 text 事件作为 result
-npx tsx scripts/wa-worker.ts \
-  --api http://127.0.0.1:3738 --token "$(<data/run/api.token)" \
-  --worker-id wa-opencode --poll-ms 2000 --mode opencode --dir /abs/project
-
-# mimo：本机安装的 mimo（非 TTY 下别跨出 --dir 根目录，否则会被 external_directory 拒绝）
-npx tsx scripts/wa-worker.ts \
-  --api http://127.0.0.1:3738 --token "$(<data/run/api.token)" \
-  --worker-id mimo --poll-ms 2000 --mode mimo \
-  --mimo-bin /Users/viking/.mimocode/bin/mimo --dir /abs/project
-```
-
-- `--mode demo`：不发网络请求给模型，适合验证注册/领任务/快照/回传链路。
-- `--mode opencode`：真跑 `opencode`，跑多久就多久；worker 每 30s touch 续租。
-- `--mode mimo`：真跑本机 `mimo`，命令是
-  `mimo run "<prompt>" --dir <dir> --title "WA-task-<id>" --format json`。默认
-  执行器 `/Users/viking/.mimocode/bin/mimo`，可用 `--mimo-bin` 换。
-- 两种真跑模式都支持 `--model`：opencode 传 `-m <model>`，mimo 传 `--model <model>`。
-- `--timeout-ms`（默认 600000）超时会杀掉子进程并按失败回传。
-- `--mimo-extra <arg>` 可重复追加 mimo 参数（原样透传，不会默认加 `--yolo`）。
-  mimo 在非 TTY 下如果访问 `--dir` 根目录之外会被 `external_directory` 拒绝；
-  工作目录保持在 `--dir` 内就不需要额外参数。
-- 权限模拟：启动时加 `WA_DEMO_APPROVAL=1`。worker 会在干活前 `POST /v1/approvals`
-  申请一条（action 写明任务号），每 2s 查一次；`approved` 继续，`rejected` /
-  `timeout` / 到 `expires_at` 都按失败回传。
-- `SIGINT` / `SIGTERM` 只停止领新任务，不删任何数据；当前任务会做完再退出。
-
-端到端测试（真 API + 真 worker 进程 + 临时库 `app/.scratch/e2e-wa.db`）：
-
-```bash
-npx tsx scripts/e2e-wa.ts
-```
-
-三个场景：A 正常完成、B 权限申请后批准、C 连续完成 3 个任务只置一条
-`ufa.pending_task_tick`。每个场景打印 `PASS`/`FAIL`，失败退出码非 0。
-测试结束会关服务器和 worker 进程，不会碰 `data/rabbit-bot.db`。
+每个任务一个一次性进程，不常驻 worker：建任务时给 `work_dir`，系统写
+`.ufa/tasks/task-<id>.md` 并启动 `opencode` / `mimo`，恢复时复用同一个 session id。
+执行器用 `worker_id = <executor>-<task_id>` 回传进度与结果：
+`POST /v1/tasks/:id/touch|progress|complete|fail`。
+审批、任务事件和 Web 看板都基于这套回传，不再有 worker 注册 / 领任务。
 
 ## 目录
 

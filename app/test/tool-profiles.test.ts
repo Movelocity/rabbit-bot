@@ -20,7 +20,7 @@ function namesFor(profile: "ufa" | "wa", mode: "host" | "docker", approval: bool
 test("UFA：host + approval=true 时包含 terminal", () => {
   const names = namesFor("ufa", "host", true);
   assert.ok(names.includes("terminal"), `该有 terminal：${names.join(",")}`);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "worker", "read_file", "rb"]) {
+  for (const name of ["chat", "memory", "plan", "approval", "task", "read_file", "rb"]) {
     assert.ok(names.includes(name), `UFA 少了 ${name}：${names.join(",")}`);
   }
   assert.ok(!names.includes("write_file"), `UFA 不该有 write_file：${names.join(",")}`);

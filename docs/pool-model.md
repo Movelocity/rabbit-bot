@@ -9,11 +9,14 @@ room 每发一句就要往它下面每条 stack 叠一份，各 stack 的 seq �
 ## 现状
 
 ```sql
-pools(pool_id TEXT PK, platform, external_id, kind, title, created_at, last_msg_at)
+pools(pool_id TEXT PK, platform, external_id, kind, title, created_at, last_msg_at, archived)
 UNIQUE(platform, external_id)
 ```
 
 - `external_id` —— 这条流绑在哪个 IM 会话上。为空 = 纯本地流，只落库，不出池。
+- `archived` —— 归档只影响默认列表和唤醒，不删历史：池从 `pool-list` 里消失、不参与主动开口，
+  `pool-read` / `pool-search` / `task updates` 仍能按池查。终态任务池（done/failed/cancelled）
+  读完未读后自动归档；任何新消息写进池都会自动解档，所以恢复执行不会漏。
 - `kind` —— dm / group。**只决定节奏，不决定内容**：私聊消息即时唤醒；群聊默认潜水，攒到 tick 周期一起读，
   **只有被 @ 才立刻看这一屏**（点名＝别人在跟你说话，等 tick 就错过时机）。主动开口的门槛也按池类型分档
   （`config.proactive.group` 覆盖同名字段）。主人没有特权——谁的消息都等 tick，`[主人]` 只是给她一个"这是谁"的线索。

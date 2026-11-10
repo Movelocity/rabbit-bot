@@ -14,12 +14,11 @@ import crypto from "node:crypto";
 import { APP_ROOT, type Config } from "./config.ts";
 import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
-import { listPools, readPool, searchPool } from "./ops/pools.ts";
+import { archivePool, listPools, readPool, searchPool } from "./ops/pools.ts";
 import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
 import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, updateTask, type Task } from "./core/tasks.ts";
 import {
-  WorkerMismatchError, claimNextTask, completeTask, failTask, getWorker, listWorkers, progressTask,
-  registerWorker, touchTask,
+  WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
 } from "./core/workers.ts";
 import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
 import { isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
@@ -232,7 +231,14 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
 
       switch (parts[1]) {
         case "pools": {
-          if (parts.length === 2 && method === "GET") return reply(200, listPools(d.store));
+          if (parts.length === 2 && method === "GET") {
+            const inc = url.searchParams.get("archived");
+            return reply(200, listPools(d.store, { includeArchived: inc === "1" || inc === "true" }));
+          }
+          if (parts.length === 4 && parts[3] === "archive" && (method === "POST" || method === "PUT")) {
+            const archived = body.archived === undefined ? true : !!body.archived;
+            return reply(200, archivePool(d.store, parts[2], archived));
+          }
           if (parts.length === 4 && parts[3] === "messages" && method === "GET") {
             return reply(200, readPool(d.store, parts[2], {
               limit: qInt(url.searchParams.get("limit")),
@@ -245,7 +251,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               (url.searchParams.get("only") as "self" | "other" | null) ?? undefined,
             ));
           }
-          throw new HttpError(404, "用法：GET /v1/pools、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=");
+          throw new HttpError(404, "用法：GET /v1/pools?archived=1、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=、POST /v1/pools/:ref/archive");
         }
         case "users": {
           if (parts.length === 2 && method === "GET") return reply(200, d.store.listUsers());
@@ -272,23 +278,6 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, updatePlan(d.store, Number(parts[2]), String(body.status ?? "")));
           }
           throw new HttpError(404, "用法：GET /v1/plans、POST /v1/plans、PATCH /v1/plans/:id");
-        }
-        case "workers": {
-          if (parts.length === 2 && method === "GET") return reply(200, listWorkers(d.store));
-          if (parts.length === 3 && parts[2] === "register" && method === "POST") {
-            if (typeof body.worker_id !== "string" || !body.worker_id.trim()) throw new HttpError(400, "缺少 worker_id");
-            return reply(200, registerWorker(d.store, {
-              workerId: body.worker_id,
-              name: body.name,
-              kind: typeof body.kind === "string" ? body.kind : undefined,
-            }));
-          }
-          if (parts.length === 4 && parts[3] === "claim" && method === "POST") {
-            const workerId = String(parts[2] ?? "").trim();
-            if (!workerId) throw new HttpError(400, "缺少 worker id");
-            return reply(200, { task: claimNextTask(d.store, workerId) });
-          }
-          throw new HttpError(404, "用法：GET /v1/workers、POST /v1/workers/register、POST /v1/workers/:id/claim");
         }
         case "tasks": {
           if (parts.length === 2 && method === "GET") {
@@ -528,7 +517,6 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 4 && parts[3] === "snapshot" && method === "GET") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
-            const worker = task.worker_id ? getWorker(d.store, task.worker_id) : null;
             const recent = listTaskEvents(d.store, id, { limit: 5 });
             const fresh = getTask(d.store, id)!;
             return reply(200, {
@@ -557,7 +545,6 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 updated_at: task.updated_at,
               },
               recent_events: recent,
-              worker: worker ? { worker_id: worker.worker_id, name: worker.name, status: worker.status, last_seen_at: worker.last_seen_at } : null,
             });
           }
           throw new HttpError(404, "用法：GET|POST /v1/tasks、GET /v1/tasks/:id、GET /v1/tasks/:id/events、POST /v1/tasks/:id/approve|reject|start|resume|stop|note|cancel|status|touch|progress|complete|fail、GET /v1/tasks/:id/snapshot");

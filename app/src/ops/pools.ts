@@ -3,16 +3,24 @@ import type { Store } from "../core/db.ts";
 import { fmtLocal } from "../core/time.ts";
 import { clampInt, resolvePool } from "./common.ts";
 
-export function listPools(store: Store) {
-  return store.listPools().map((p) => ({
+export function listPools(store: Store, opts: { includeArchived?: boolean } = {}) {
+  return store.listPools(opts).map((p) => ({
     alias: store.poolAlias(p.pool_id),
     pool_id: p.pool_id,
     kind: p.kind,
     title: p.title ?? "",
+    archived: p.archived,
     last_msg_at: p.last_msg_at || null,
     last_msg_local: p.last_msg_at ? fmtLocal(p.last_msg_at) : null,
     total: store.poolSpan(p.pool_id).total,
   }));
+}
+
+/** 归档/解档；池不存在抛错（API 和工具都用它，省得各自判空）。 */
+export function archivePool(store: Store, ref: string, archived = true) {
+  const pool = resolvePool(store, ref);
+  store.archivePool(pool.pool_id, archived);
+  return { pool: store.poolAlias(pool.pool_id), pool_id: pool.pool_id, archived };
 }
 
 /** 池消息对外展示的发送者：优先身份映射里的名字，映射不到才用入池时的原名。 */

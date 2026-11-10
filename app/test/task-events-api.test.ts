@@ -8,6 +8,7 @@ import { APP_ROOT, loadConfig } from "../src/config.ts";
 import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
+import { updateTask } from "../src/core/tasks.ts";
 
 const dir = path.join(APP_ROOT, ".scratch", "task-events-api");
 fs.mkdirSync(dir, { recursive: true });
@@ -58,20 +59,18 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   const queued = await post(`/v1/tasks/${id}/status`, { status: "pending" });
   assert.equal(queued.status, 200, JSON.stringify(queued.body));
 
-  await post("/v1/workers/register", { worker_id: "wa-1", name: "本地" });
-  await post("/v1/workers/wa-1/claim");
-  await post(`/v1/tasks/${id}/progress`, { worker_id: "wa-1", stage: "review", note: "检查中" });
-  await post(`/v1/tasks/${id}/complete`, { worker_id: "wa-1", result: "好了", artifact: "out.md" });
+  updateTask(store, id, { status: "running", worker_id: "opencode-1" });
+  await post(`/v1/tasks/${id}/progress`, { worker_id: "opencode-1", stage: "review", note: "检查中" });
+  await post(`/v1/tasks/${id}/complete`, { worker_id: "opencode-1", result: "好了", artifact: "out.md" });
 
   const events = await call(`/v1/tasks/${id}/events?limit=10`);
   assert.equal(events.status, 200, JSON.stringify(events.body));
   assert.equal(events.body.data.task_id, id);
   assert.equal(events.body.data.pool_id, created.body.data.task_pool_id);
   const messages = events.body.data.messages;
-  assert.equal(messages.length, 3);
-  assert.match(messages[0].text, /领取任务/);
-  assert.match(messages[1].text, /阶段 review/);
-  assert.match(messages[2].text, /任务完成：好了/);
+  assert.equal(messages.length, 2);
+  assert.match(messages[0].text, /阶段 review/);
+  assert.match(messages[1].text, /任务完成：好了/);
   for (const m of messages) {
     assert.equal(typeof m.seq, "number");
     assert.equal(typeof m.ts, "number");
@@ -82,10 +81,10 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   const detail = await call(`/v1/tasks/${id}`);
   assert.equal(detail.status, 200);
   assert.equal(detail.body.data.task_pool_id, created.body.data.task_pool_id);
-  assert.equal(detail.body.data.recent_events.length, 3);
+  assert.equal(detail.body.data.recent_events.length, 2);
 
   const snap = await call(`/v1/tasks/${id}/snapshot`);
   assert.equal(snap.status, 200);
   assert.equal(snap.body.data.task.task_pool_id, created.body.data.task_pool_id);
-  assert.equal(snap.body.data.recent_events.length, 3);
+  assert.equal(snap.body.data.recent_events.length, 2);
 });

@@ -22,12 +22,11 @@ import {
   APPROVAL_STATUSES, decideApproval, getApproval, isApprovalStatus, listApprovals,
 } from "../core/approvals.ts";
 import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
-import { listPools, readPool, searchPool } from "../ops/pools.ts";
+import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
 import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
 } from "../core/tasks.ts";
-import { listWorkers } from "../core/workers.ts";
 import { listTaskEvents } from "../core/task-events.ts";
 import {
   DEFAULT_CAPTURE_MS, isRunnerAlive, resumeTask, stopTask,
@@ -114,8 +113,10 @@ export function createTools(d: ToolDeps) {
     "  send    pool content            发一条消息（唯一会被他看到的输出）",
     "  skip    reason                   这一轮不回，什么都不发",
     "  view    path                     把一张图读进上下文（media/… 或 inbox/…）",
-    "  list                             看有哪些池",
+    "  list    archived?                看有哪些池（archived=true 连归档池一起列）",
     "  search  q? pool? only? limit?    q 给了就按关键词翻原话；不给 q 就读这个池最近的消息",
+    "  archive pool                     归档一个池：默认列表和唤醒里不再出现，历史仍可 search",
+    "  unarchive pool                   解档",
     "  help                             看这份说明",
   ].join("\n");
 
@@ -126,12 +127,13 @@ export function createTools(d: ToolDeps) {
     description:
       "跟他说话，以及翻聊天记录。action 决定做什么："
       + "send（发一条，pool + content，唯一会被他看到的输出）/ skip（这一轮不回，reason 写为什么）/ "
-      + "view（把一张图读进上下文，path 用 img 清单里的名字）/ list（有哪些池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ help。"
+      + "view（把一张图读进上下文，path 用 img 清单里的名字）/ list（有哪些池，archived=true 连归档池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ "
+      + "archive（归档池：默认列表和唤醒里不再出现，历史仍可 search）/ unarchive（解档）/ help。"
       + "该说话的时候一定要 send——只调用别的工具等于这轮什么都没说。"
       + "明确不用回的时候用 skip，别用「什么都不调用」来表达沉默。",
     parameters: Type.Object({
-      action: Type.String({ description: "send / skip / view / list / search / help" }),
-      pool: Type.Optional(Type.String({ description: "send、search 用：池别名，如 p1" })),
+      action: Type.String({ description: "send / skip / view / list / search / archive / unarchive / help" }),
+      pool: Type.Optional(Type.String({ description: "send、search、archive、unarchive 用：池别名，如 p1" })),
       content: Type.Optional(Type.String({ description: "send 用：一条短消息；表情包写 [emoji:中文id]" })),
       reason: Type.Optional(Type.String({ description: "skip 用：一句话，为什么这一轮不用回（会记进日志）" })),
       path: Type.Optional(Type.String({ description: "view 用：media/… 或 inbox/… 开头的文件名" })),
@@ -139,6 +141,7 @@ export function createTools(d: ToolDeps) {
       only: Type.Optional(Type.String({ description: "search 用：self 只看自己说的 / other 只看看他说的" })),
       limit: Type.Optional(Type.Number({ description: "search 用：条数，默认 20" })),
       before_seq: Type.Optional(Type.Number({ description: "search 不给 q 时翻页：读这个 seq 之前的" })),
+      archived: Type.Optional(Type.Boolean({ description: "list 用：true 时连已归档的池一起列" })),
     }),
     async execute(_id, p) {
       const action = String(p.action ?? "").trim().toLowerCase();
@@ -205,10 +208,22 @@ export function createTools(d: ToolDeps) {
           }
 
           case "list": {
-            const pools = listPools(d.store);
+            const pools = listPools(d.store, { includeArchived: !!p.archived });
             if (!pools.length) return txt("（还没有任何池）", { ok: true, count: 0 });
-            const lines = pools.map((x: any) => `[${x.alias}] ${x.kind === "group" ? "群" : "私聊"} ${x.title}　最后 ${x.last_msg_local ?? "—"}　共 ${x.total} 条`);
+            const kindLabel = (k: string) => k === "group" ? "群" : k === "task" ? "任务" : k === "private" ? "私聊" : k;
+            const lines = pools.map((x: any) => `[${x.alias}]${x.archived ? "[已归档]" : ""} ${kindLabel(x.kind)} ${x.title}　最后 ${x.last_msg_local ?? "—"}　共 ${x.total} 条`);
             return txt(lines.join("\n"), { ok: true, count: pools.length });
+          }
+
+          case "archive":
+          case "unarchive": {
+            if (!p.pool) return txt(`${action} 要 pool。`, { ok: false });
+            const r = archivePool(d.store, p.pool, action === "archive");
+            return txt(
+              `已${action === "archive" ? "归档" : "解档"}池 ${r.pool}（${r.pool_id}）。`
+              + (action === "archive" ? "默认列表和唤醒里不再出现，翻历史仍能 search。" : ""),
+              { ok: true, pool: r.pool, archived: r.archived },
+            );
           }
 
           case "search": {
@@ -408,13 +423,13 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
-   * 审批：worker 的权限申请会落 approvals 表，UFA 在对话里查看并裁决。
+   * 审批：执行器的权限申请会落 approvals 表，UFA 在对话里查看并裁决。
    * Web 只读，不提供裁决入口；WA 不给这个工具（自己不能批自己）。
    */
   const APPROVAL_HELP = [
     "approval 的用法（action 必填）：",
     "  list    status? task_id? limit?    看权限申请，默认全部；看板/对话都用它",
-    "  get     id                         看一条的完整内容（worker 2s 轮询同一个 id）",
+    "  get     id                         看一条的完整内容（执行器 2s 轮询同一个 id）",
     "  decide  id decision by             裁决：decision=approved|rejected，by 写裁决人",
     "  help                               看这份说明",
     "",
@@ -426,9 +441,9 @@ export function createTools(d: ToolDeps) {
     label: "approval",
     executionMode: "sequential",
     description:
-      "查看和裁决 worker 的权限申请。action 决定做什么：list（看申请，可按 status/task_id/limit 筛）/ "
+      "查看和裁决执行器的权限申请。action 决定做什么：list（看申请，可按 status/task_id/limit 筛）/ "
       + "get（看一条）/ decide（批准 approved 或拒绝 rejected，要写 by）/ help。"
-      + "worker 要动宿主机或越权的操作会落在这里等你表态；超时算拒绝。",
+      + "执行器要动宿主机或越权的操作会落在这里等你表态；超时算拒绝。",
     parameters: Type.Object({
       action: Type.String({ description: "list / get / decide / help" }),
       id: Type.Optional(Type.Number({ description: "get、decide 用：审批 id" })),
@@ -701,41 +716,6 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  const WORKER_HELP = [
-    "worker 的用法（action 必填）：",
-    "  list   看已注册的 worker（worker_id / name / kind / status / last_seen_at）",
-    "  help   看这份说明",
-  ].join("\n");
-
-  const worker = defineTool({
-    name: "worker",
-    label: "worker",
-    executionMode: "sequential",
-    description:
-      "看有哪些 worker 在跑。action=list 返回 worker_id / name / kind / status / last_seen_at；"
-      + "先看有没有在线的，再决定任务怎么写。派活由 worker 自己 claim，你只负责把任务写清楚。",
-    parameters: Type.Object({
-      action: Type.String({ description: "list / help" }),
-    }),
-    async execute(_id, p) {
-      const action = String(p.action ?? "").trim().toLowerCase();
-      try {
-        if (action === "help") return txt(WORKER_HELP, { ok: true });
-        if (action !== "list") return txt(`没有 action=「${p.action}」这个动作。\n${WORKER_HELP}`, { ok: false });
-        const list = listWorkers(d.store).map((w) => ({
-          worker_id: w.worker_id,
-          name: w.name,
-          kind: w.kind,
-          status: w.status,
-          last_seen_at: w.last_seen_at,
-        }));
-        return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length, workers: list });
-      } catch (e) {
-        return txt(`没成：${(e as Error).message}`, { ok: false });
-      }
-    },
-  });
-
   /**
    * 文件与 shell 也做成原生工具（对齐 hermes 的 read_file / write_file / terminal）。
    *
@@ -747,7 +727,7 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；worker 交上来的汇报在 shared/。"
+      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。"
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，例如 topics/INDEX.md" }),
@@ -954,9 +934,9 @@ export function createTools(d: ToolDeps) {
     label: "rb",
     executionMode: "sequential",
     description:
-      "运维与查询用：翻历史、看池、列计划、看任务和 worker、读图片、搜网页。"
+      "运维与查询用：翻历史、看池、列计划、看任务、读图片、搜网页。"
       + "命令：pool-list / pool-read / pool-search / plan-list / mem-search / img-list / img-get / "
-      + "task-list / worker-list / web-search / web-fetch。"
+      + "task-list / web-search / web-fetch。"
       + "记事、改记忆、加计划、标完成、读写文件都有专门的工具（memory / plan / "
       + "read_file / write_file），任务写操作走 task 工具，别用 rb 做这些。"
       + "args 传完整参数串，例如 args=\"pool-list\"、args=\"mem-add --user u1 --content 他周一要交报告 --pool p1\"、"
@@ -992,16 +972,6 @@ export function createTools(d: ToolDeps) {
           const list = listTaskViews(d.store, { status: status as any, limit });
           return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length });
         }
-        if (parts[0] === "worker-list") {
-          const list = listWorkers(d.store).map((w) => ({
-            worker_id: w.worker_id,
-            name: w.name,
-            kind: w.kind,
-            status: w.status,
-            last_seen_at: w.last_seen_at,
-          }));
-          return txt(JSON.stringify(list, null, 2), { ok: true, count: list.length });
-        }
         // RB_NOW 让模拟器里的「现在」和这一轮一致（plan-add 的过期判断会用到）
         const opts = shellRunnerOptions(d.cfg, 60_000);
         const exec = d.rbExec ?? ((argv: string[]) => runSandboxArgv(["rb", ...argv], { ...opts, execEnv: { RB_NOW: String(d.now()) } }));
@@ -1018,7 +988,7 @@ export function createTools(d: ToolDeps) {
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   // UFA 只读 + 任务面板：不写文件（交接走 tasks 表），terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, plan, approval, task, worker, readFile, mapTool,
+    chat, memory, plan, approval, task, readFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

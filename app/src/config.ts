@@ -33,10 +33,14 @@ export interface Config {
   handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {
-    dailyLlmCalls: number; dailyTokens: number; turnTimeoutMs: number;
+    /** 一天最多调用几次；负数 = 不设这条闸，只按钱（dailyCny）限额 */
+    dailyLlmCalls: number;
+    /** 折算 token 日额度；负数 = 不设这条闸，只按钱（dailyCny）限额 */
+    dailyTokens: number;
+    turnTimeoutMs: number;
     /** 缓存命中的 token 按多少折算进日额度（DeepSeek 前缀缓存 = 0.1 价） */
     cacheReadRate: number;
-    /** 一天最多花多少钱（人民币）。0 = 不算钱，只看 token 那条闸 */
+    /** 一天最多花多少钱（人民币）。0 = 不算钱，只看 token / 调用次数 */
     dailyCny?: number;
     /** 美元 → 人民币汇率，只用于记账 */
     usdCny?: number;
