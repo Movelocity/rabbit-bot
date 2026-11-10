@@ -23,6 +23,7 @@ function setup(opts: { wake?: string } = {}) {
     hub: hub as any,
     cfg,
     now: () => Date.now(),
+    profile: "ufa",
     currentWake: () => (opts.wake ? { type: opts.wake } : null),
   });
   const send = (tools as any[]).find((t) => t.name === "chat");

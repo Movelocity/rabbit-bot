@@ -12,6 +12,7 @@ import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
+import { sharedDir } from "../core/runtime.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -54,8 +55,10 @@ export interface ToolDeps {
   approval?: ApprovalGate;
   /** 审批裁决后置位 pending tick 时喊一声（UFA 工具用） */
   enqueue?: () => void;
-  /** 工具集归属：WA 不给 approval 工具（审批只看不批的是 UFA） */
-  profile?: "ufa" | "wa";
+  /** 工具集归属：必填，避免漏传时回退到全量工具 */
+  profile: "ufa" | "wa";
+  /** read_file 的根目录覆盖；UFA 固定为 runtime，传了就不跟着 exec.dir 漂 */
+  readRoot?: string;
   /** 任务派发依赖（测试注入假执行器）；默认从 cfg.api + data/run/api.token 组出来 */
   dispatch?: DispatchDeps;
 }
@@ -66,6 +69,7 @@ function defaultDispatchDeps(cfg: Config): DispatchDeps {
     apiBase: `http://127.0.0.1:${cfg.api?.port ?? 3738}`,
     token: resolveApiToken(cfg),
     dataDir: cfg.dataDir,
+    sharedDir: sharedDir(cfg),
     captureMs: DEFAULT_CAPTURE_MS,
   };
 }
@@ -708,14 +712,14 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）。"
+      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；worker 交上来的汇报在 shared/。"
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
       path: Type.String({ description: "相对路径，例如 topics/INDEX.md" }),
     }),
     async execute(_id, p) {
       try {
-        const r = readSandboxFile(d.cfg, String(p.path ?? ""));
+        const r = readSandboxFile(d.cfg, String(p.path ?? ""), d.readRoot);
         return txt(String(r.content ?? "").trim() || "（文件是空的）", { ok: true, path: r.path });
       } catch (e) {
         return txt(`读不了：${(e as Error).message}`, { ok: false });
@@ -874,11 +878,13 @@ export function createTools(d: ToolDeps) {
   // 沙盒本身就是边界，不用审批；宿主机裸跑才必须审批。
   const ufaHasTerminal = d.cfg.exec.shell.mode === "docker"
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
+  // UFA 只读 + 任务面板：不写文件（交接走 tasks 表），terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, plan, approval, task, worker, readFile, writeFile,
+    chat, memory, plan, approval, task, worker, readFile,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];
+  // WA 才需要写文件和跑命令。
   const waTools = [readFile, writeFile, runShellTool, rb];
   return d.profile === "wa" ? waTools : ufaTools;
 }

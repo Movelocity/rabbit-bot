@@ -35,6 +35,7 @@ import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
+import { sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
@@ -309,9 +310,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             });
             // dispatch=true 只作为测试/内部逃生口，Web 和 UFA 都不走这条路。
             if (body.dispatch !== true) return reply(201, formatTask(task));
-            writeTaskDoc(d.store, task, { apiBase });
+            writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, task.id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
+              sharedDir: sharedDir(d.cfg),
             });
             return reply(201, formatTask(started.task));
           }
@@ -375,7 +377,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             put("model", optString("model"));
 
             const updated = Object.keys(patch).length ? updateTask(d.store, id, patch) : task;
-            writeTaskDoc(d.store, updated, { apiBase });
+            writeTaskDoc(d.store, updated, { apiBase, sharedDir: sharedDir(d.cfg) });
             const by = typeof body.by === "string" && body.by.trim() ? body.by.trim() : "web";
             appendNote(d.store, id, changed.length
               ? `Web 审批通过（by=${by}；修改字段：${changed.join(", ")}）`
@@ -384,6 +386,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             try {
               const started = await startTask(d.store, getTask(d.store, id)!, {
                 apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
+                sharedDir: sharedDir(d.cfg),
               });
               return reply(200, formatTask(started.task));
             } catch (e) {
@@ -415,9 +418,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }
             if (!task.work_dir) throw new HttpError(400, `任务 #${id} 没有 work_dir，不能启动`);
             if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
-            writeTaskDoc(d.store, task, { apiBase });
+            writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
+              sharedDir: sharedDir(d.cfg),
             });
             return reply(200, formatTask(started.task));
           }
@@ -430,6 +434,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
             const resumed = await resumeTask(d.store, task, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir,
+              sharedDir: sharedDir(d.cfg),
             });
             return reply(200, formatTask(resumed.task));
           }

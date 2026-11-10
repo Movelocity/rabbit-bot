@@ -67,10 +67,15 @@ skills/<name>/
   data/      # 运行时产物：.gitignore 忽略，容器里可写
 ```
 
-- 宿主：`app/data/sandbox/skills/<name>/`；容器：`/work/skills/<name>/`。
+- 宿主：`~/.config/rabbit-bot/runtime/skills/<name>/`（沙盒根就是运行时目录）；容器：`/work/skills/<name>/`。
 - `data/` 空目录进不了 git，宿主启动和每次 `sb run` 前会 `mkdir -p`（`src/ops/skills.ts`）。
 - 以 `_` 或 `.` 开头的目录不算技能（`_template` 是模板），`GET /v1/skills` 不会列出来。
-- 新建：`cp -R data/sandbox/skills/_template data/sandbox/skills/my-skill`，再改 `SKILL.md`。
+- 新建：在运行时目录里 `mkdir -p skills/my-skill && $EDITOR skills/my-skill/SKILL.md`。
+
+## worker 汇报文件
+
+任务执行器完成/恢复时把汇报写成 markdown，落到 `runtime/shared/task-<id>.md`（容器里 `/work/shared/task-<id>.md`）。
+宿主通过环境变量 `RB_SHARED_DIR` 把绝对路径交给执行器；`read_file` 读 `shared/task-<id>.md` 即可。
 
 ## 安全
 

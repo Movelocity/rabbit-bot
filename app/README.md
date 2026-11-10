@@ -45,12 +45,15 @@ cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然
 | `runtime/persona.md` | 人设正文，进 system prompt 的 `{{persona}}` | 要 |
 | `runtime/prompt/` | 主提示词 + 三种场景剧本（`scene-*.md`） | 剧本不用，`system.md` 要 |
 | `runtime/topics/` | 话题库，按块分（`rg` 搜、`read_file` 读） | 不用 |
+| `runtime/shared/` | worker 交上来的汇报（`task-<id>.md`），`read_file` 直接读 | 不用 |
+| `runtime/files/` | 收到的非图片附件 | 不用 |
 
 规则只有一条：**运行时目录有就用它，没有才用仓库里的默认份。** 没有配置开关。仓库里的
-`config/persona.example.md` 和 `data/sandbox/topics/` 是模板和空架子，clone 下来能直接跑。
+`config/persona.example.md` 和 `prompts/` 是模板和默认提示词，clone 下来能直接跑。
 
-容器里路径不变（`/work/prompt`、`/work/topics`），只是挂载源换成了运行时目录；
-挂载变了进程启动时会重建容器。
+运行时目录同时就是沙盒根：容器里 `/work` 就是它，所以 `prompt/`、`topics/`、`skills/`、
+`shared/`、`files/` 在容器和宿主看到的是同一份。`shared/` 是 worker 交汇报的固定落点
+（`/work/shared/task-<id>.md`）。挂载源变了进程启动时会重建容器。
 
 ## 怎么和它说话
 
@@ -157,8 +160,9 @@ src/adapters/    飞书 / Matrix / mock（sim 与测试用）
 src/ctl.ts       运维命令（pause / resume / status / usage / wakes / plans …）
 scripts/         run.sh（pm2 的前台入口：读 env → 预检 → exec node）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
 docker/          沙盒镜像 Dockerfile
-test/            257 条，node --test
-data/            运行时数据（db / media / sandbox / 会话），.gitignore
+test/            480+ 条，node --test
+data/            运行时数据（db / media / 会话），.gitignore
+prompts/         默认提示词模板（真身在运行时目录）
 ```
 
 ## 工具清单（模型能调的 10 个）

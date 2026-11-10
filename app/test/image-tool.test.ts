@@ -20,7 +20,7 @@ function setup() {
   const cfg = { ...loadConfig(), dataDir };
   const store = new Store(":memory:");
   const hub = {} as any;
-  const tools = createTools({ store, hub, cfg, now: () => Date.now() }) as any[];
+  const tools = createTools({ store, hub, cfg, now: () => Date.now(), profile: "ufa" }) as any[];
   const view = tools.find((t) => t.name === "chat");
   return { cfg, tools, view, store, dataDir };
 }

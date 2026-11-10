@@ -1,5 +1,6 @@
 /** 组装：Store + Hub + Scheduler + RunQueue + PlanEngine + Agent 引擎；处理唤醒。 */
 import path from "node:path";
+import fs from "node:fs";
 import type { Config } from "./config.ts";
 import { isChatCall, didPlanAdd } from "./core/tool-call.ts";
 import { Store } from "./core/db.ts";
@@ -9,7 +10,7 @@ import { PlanEngine } from "./core/plans.ts";
 import { evaluateGate } from "./core/gate.ts";
 import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
-import { listTasksUpdatedSince, takePendingTick } from "./core/tasks.ts";
+import { listTasksUpdatedSince, takePendingTick, markPendingTick, taskDisplayName, type Task } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
@@ -20,7 +21,7 @@ import { needsPlanNudge } from "./core/nudge.ts";
 import { toImageContent } from "./core/media.ts";
 import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
-import { PiEngine, type AgentEngine } from "./agent/engine.ts";
+import { PiEngine, type AgentEngine, type RunResult } from "./agent/engine.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
@@ -29,6 +30,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Plan, StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
+import { runtimeDir, sharedDir } from "./core/runtime.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -61,6 +63,29 @@ export function pickImages(msgs: { attachment?: Attachment | null }[], max: numb
   return msgs.filter((m) => m.attachment).slice(-n)
     .map((m) => toImageContent(m.attachment!))
     .filter((x): x is ImagePart => !!x);
+}
+
+/** 任务汇报的游标：只转述这条线之后的终态任务，重启后也不会重发。 */
+const TASK_RELAY_CURSOR_KEY = "ufa.task_relay_cursor";
+/** 上次真正转述的时刻：两次转述之间至少隔 5 分钟，任务再多也只攒成一批。 */
+const TASK_RELAY_LAST_KEY = "ufa.task_relay_last_at";
+const TASK_RELAY_COOLDOWN_MS = 5 * 60_000;
+/** 一次 digest 每个池最多逐条列这么多，其余只报数量。 */
+const TASK_RELAY_MAX_LISTED = 10;
+const TASK_RELAY_REPORT_CHARS = 1200;
+
+function clipText(s: string, n: number): string {
+  const t = String(s ?? "").trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+/** 读 worker 落在 runtime/shared 的汇报文件；没有就回空串，不打断转述。 */
+function readTaskReport(dir: string, id: number): string {
+  try {
+    return fs.readFileSync(path.join(dir, `task-${id}.md`), "utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 export class App {
@@ -116,6 +141,8 @@ export class App {
     this.hub.scheduler = this.scheduler;
     const tools = createTools({
       store: this.store, hub: this.hub, cfg, now: () => this.clock.now(),
+      profile: "ufa",
+      readRoot: runtimeDir(cfg),
       currentWake: () => this.activeWake,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
@@ -466,6 +493,122 @@ export class App {
     return text.replace("{reason}", (reason || "未知原因").split("\n")[0].slice(0, 120));
   }
 
+  /** 任务汇报游标；从来没转过就是 null。 */
+  private relayCursor(): number | null {
+    const raw = this.store.getKv(TASK_RELAY_CURSOR_KEY);
+    if (raw === undefined) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * 把 since 之后的终态任务合成一轮转述。
+   *
+   * 防洪水靠这里：任务事件本身按任务 tick 批量到达；这里再按池合并、
+   * 每池最多列 10 条、两次转述至少隔 5 分钟。返回 true 表示这一轮已经处理完
+   * （包括冷却跳过），false 表示没有终态任务，调用方继续走原来的未读池逻辑。
+   */
+  private async relayTaskUpdates(
+    since: number,
+    finish: (outcome: string, extra?: Record<string, unknown>) => void,
+    t0: number,
+  ): Promise<boolean> {
+    const cfg = this.o.cfg;
+    const tasks = listTasksUpdatedSince(this.store, since, ["done", "failed", "blocked"]);
+    if (!tasks.length) return false;
+
+    const last = Number(this.store.getKv(TASK_RELAY_LAST_KEY) ?? 0);
+    if (last > 0 && t0 - last < TASK_RELAY_COOLDOWN_MS) {
+      // 先重新置位，下一次任务 tick 再试；游标不动，这批任务不会丢
+      markPendingTick(this.store, t0);
+      finish("skipped:task-relay-cooldown", {
+        tasks: tasks.length,
+        nextInMs: TASK_RELAY_COOLDOWN_MS - (t0 - last),
+      });
+      return true;
+    }
+
+    const shared = sharedDir(cfg);
+    const byPool = new Map<string, Task[]>();
+    for (const t of tasks) {
+      const list = byPool.get(t.pool_id) ?? [];
+      list.push(t);
+      byPool.set(t.pool_id, list);
+    }
+
+    const lines: string[] = [
+      "【任务汇报】下面这些任务刚刚结束，挑值得说的转述给对应的人。",
+      "规则：只转述 done/failed/blocked；每个池只 send 一条，多个任务合并；最多列 10 个，其余写「还有 N 个」。",
+      "不要复述汇报全文，不要提 token；这一批都不值得说就 skip。pool 原样用下面给出的别名。",
+      "",
+    ];
+    for (const [pid, list] of byPool) {
+      const pool = this.store.getPool(pid);
+      const alias = this.store.poolAlias(pid);
+      lines.push(`- 池 ${alias}${pool ? `「${pool.title}」` : ""}（${list.length} 个任务）`);
+      for (const t of list.slice(0, TASK_RELAY_MAX_LISTED)) {
+        lines.push(`  - ${taskDisplayName(t)}：${t.status}`);
+        if (t.result?.trim()) lines.push(`    结果：${clipText(t.result, 200)}`);
+        if (t.artifact?.trim()) lines.push(`    产出：${clipText(t.artifact, 200)}`);
+        const report = readTaskReport(shared, t.id);
+        if (report) lines.push(`    汇报：${clipText(report, TASK_RELAY_REPORT_CHARS)}`);
+      }
+      if (list.length > TASK_RELAY_MAX_LISTED) {
+        lines.push(`  - 还有 ${list.length - TASK_RELAY_MAX_LISTED} 个任务未逐条列出`);
+      }
+    }
+
+    const day = dayKey(t0, cfg.timezone);
+    const usage = this.store.getUsage(day);
+    let res: RunResult;
+    try {
+      res = await this.engine.run(lines.join("\n"), {
+        tokensLeft: cfg.limits.dailyTokens - usage.tokens,
+        callsLeft: cfg.limits.dailyLlmCalls - usage.llm_calls,
+      });
+    } catch (e) {
+      markPendingTick(this.store, t0);
+      finish("error:task-relay", { error: (e as Error).message, tasks: tasks.length });
+      return true;
+    }
+    this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
+
+    const sendCalls = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError);
+    // 工具返回 details.ok=false 的（被新消息压住 / 适配器失败）不算真发出去
+    const delivered = sendCalls.filter((c) => /^已发送/.test(String(c.result ?? "")));
+    const undelivered = sendCalls.length - delivered.length;
+
+    if (!delivered.length && (res.error || undelivered > 0)) {
+      // 一条都没真发出去：保留任务池未读，下一次任务 tick 会再触发这条链路
+      markPendingTick(this.store, t0);
+      finish("error:task-relay", {
+        error: res.error ?? "send-not-delivered",
+        held: undelivered,
+        tasks: tasks.map((t) => ({ id: t.id, status: t.status })),
+        llmCalls: res.llmCalls,
+        tokens: res.tokens,
+      });
+      return true;
+    }
+
+    // 这次读过的任务池游标推过去，免得下一轮把它当普通未读再跑一遍
+    for (const t of tasks) this.hub.takeUnread([t.task_pool_id]);
+
+    const maxUpdated = Math.max(...tasks.map((t) => t.updated_at), since);
+    this.store.setKv(TASK_RELAY_CURSOR_KEY, String(maxUpdated + 1));
+    this.store.setKv(TASK_RELAY_LAST_KEY, String(t0));
+    this.sendsThisTurn = delivered.length;
+    finish("task-updated:relayed", {
+      taskTickAt: since,
+      tasks: tasks.map((t) => ({ id: t.id, status: t.status, pool: t.pool_id })),
+      relayed: delivered.length > 0,
+      sent: delivered.map((c) => c.args),
+      llmCalls: res.llmCalls,
+      tokens: res.tokens,
+    });
+    return true;
+  }
+
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
@@ -494,23 +637,6 @@ export class App {
       this.onWakeDone?.(entry);
     };
 
-    // pending tick：一次消费掉游标之后的所有完成/失败/阻塞任务。
-    // 先取后处理——期间新完成的任务会重新置位并排下一轮，不会丢。
-    if (w.type === "task-updated") {
-      const setAt = takePendingTick(this.store);
-      if (setAt === null) return finish("skipped:no-task-tick");
-      const tasks = listTasksUpdatedSince(this.store, setAt, ["done", "failed", "blocked"]);
-      // TODO(UFA runner)：拿到 tasks 后交给人格/回复链路，一轮把多条完成情况转述给用户。
-      // 现在还没有 runner，只落唤醒日志，不假装已经转述。
-      this.log.info(`task-updated：游标 ${setAt}，命中 ${tasks.length} 条任务`);
-      return finish("task-updated:recorded", {
-        taskTickAt: setAt,
-        tasks: tasks.map((t) => ({ id: t.id, status: t.status, goal: t.goal, result: t.result, artifact: t.artifact })),
-        relayed: false,
-        paused: this.store.isPaused(),
-      });
-    }
-
     if (this.store.isPaused()) return finish("skipped:paused");
     const day = dayKey(t0, cfg.timezone);
     const usage = this.store.getUsage(day);
@@ -527,6 +653,20 @@ export class App {
     ) {
       const notice = await this.notifyCap(day);
       return finish("skipped:daily-cap", notice ? { usage, spentCny, notice } : { usage, spentCny });
+    }
+
+    // 任务汇报：task-updated（审批/手动触发）和任务事件 tick 共用同一条链路。
+    // 只在有终态任务时转述；没有就照旧走原来的 task 池处理（比如 progress）。
+    const isTaskPoolTick = w.type === "tick" && w.pools.size > 0
+      && [...w.pools].every((id) => this.store.getPool(id)?.kind === "task");
+    if (w.type === "task-updated" || isTaskPoolTick) {
+      const setAt = takePendingTick(this.store);
+      const cursor = this.relayCursor();
+      if (cursor !== null || setAt !== null) {
+        const since = cursor === null ? setAt! : (setAt === null ? cursor : Math.min(cursor, setAt));
+        if (await this.relayTaskUpdates(since, finish, t0)) return;
+      }
+      if (w.type === "task-updated") return finish("skipped:no-task-tick");
     }
 
     // 读池：所有有未读的池（不只是触发的池），一次唤醒合并处理

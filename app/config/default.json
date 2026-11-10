@@ -102,7 +102,7 @@
     "persona": "你是一个自然、简短、有分寸的聊天伙伴。"
   },
   "exec": {
-    "dir": "data/sandbox",
+    "dir": "",
     "maxFileBytes": 262144,
     "maxFiles": 200,
     "maxReadChars": 8000,
@@ -122,7 +122,7 @@
       "network": "bridge",
       "volumes": [
         {
-          "host": "data/sandbox",
+          "host": "",
           "container": "/work",
           "mode": "rw"
         }

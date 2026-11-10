@@ -24,6 +24,7 @@ function setup() {
     hub: hub as any,
     cfg,
     now: () => Date.now(),
+    profile: "ufa",
     currentWake: () => ({ type: "message" }),
     silenceReason: () => silent,
     markSilent: (r: string) => { silent = r; },

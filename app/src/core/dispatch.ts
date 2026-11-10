@@ -29,6 +29,8 @@ export interface DispatchDeps {
   token: string;
   /** runner 日志根目录：<dataDir>/tasks/<id>/runner.jsonl。默认 app/data */
   dataDir?: string;
+  /** worker 汇报文件落点（宿主绝对路径），作为 RB_SHARED_DIR 交给执行器 */
+  sharedDir?: string;
   /** 测试注入：替换 opencode/mimo 可执行文件 */
   executorBin?: string;
   /** 启动后多少毫秒内没抓到 sessionID 就放弃（默认 3000） */
@@ -60,11 +62,12 @@ export function taskDocPath(task: Pick<Task, "id" | "work_dir">): string {
 }
 
 /** 任务文档：人/执行器都能直接照着做，更新方式用 curl 写死，token 只引用环境变量。 */
-export function renderTaskDoc(task: Task, opts: { apiBase?: string } = {}): string {
+export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string } = {}): string {
   const id = task.id;
   const executor = task.executor || "opencode";
   const workerId = `${executor}-${id}`;
   const apiBase = opts.apiBase || "http://127.0.0.1:3738";
+  const shared = String(opts.sharedDir ?? "").trim();
   const files = parseFiles(task.files);
   const field = (label: string, value: string) => `- ${label}：${value || "（未填写）"}`;
 
@@ -89,6 +92,14 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string } = {}): stri
     "## 工作目录",
     `\`${task.work_dir}\``,
     "",
+    ...(shared ? [
+      "## 汇报文件",
+      "",
+      `执行完把这次任务的汇报写成 markdown，固定落到 \`$RB_SHARED_DIR/task-${id}.md\`（宿主路径 \`${shared}/task-${id}.md\`，沙盒里就是 \`/work/shared/task-${id}.md\`）。`,
+      "汇报里写清楚：做了什么、结果如何、验证过什么、还有哪些没做。不要把 token 写进去。",
+      "如果执行器被限制只能写工作目录，就先在工作目录写一份，再在 `complete` 的 artifact 里给出可读路径。",
+      "",
+    ] : []),
     "## 任务 id",
     String(id),
     "",
@@ -146,7 +157,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string } = {}): stri
 }
 
 /** 写任务文档并回填 doc_path；目录不存在就建。返回绝对路径。 */
-export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string } = {}): string {
+export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string; sharedDir?: string } = {}): string {
   const workDir = String(task.work_dir ?? "").trim();
   if (!workDir) throw new Error("任务没有 work_dir，不能写任务文档");
   if (!path.isAbsolute(workDir)) throw new Error(`work_dir 必须是绝对路径：${workDir}`);
@@ -242,7 +253,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   // 文档缺失就补一份（dispatch 正常路径会先写，这里兜底显式 start/resume）
   let docPath = fresh.doc_path && fs.existsSync(fresh.doc_path) ? fresh.doc_path : "";
-  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase });
+  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase, sharedDir: opts.sharedDir });
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
   const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);
@@ -261,7 +272,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
       cwd: workDir,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, RB_API_BASE: opts.apiBase, RB_API_TOKEN: opts.token },
+      env: { ...process.env, RB_API_BASE: opts.apiBase, RB_API_TOKEN: opts.token, ...(opts.sharedDir ? { RB_SHARED_DIR: opts.sharedDir } : {}) },
     });
   } catch (e) {
     out.end();

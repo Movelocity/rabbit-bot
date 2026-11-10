@@ -78,9 +78,15 @@ console.log(`  ${rows.length} 次  ${detail}`);
 
 say "体积"
 du -sh data logs 2>/dev/null | sed 's/^/  /'
-printf '  data/media: %s 个文件, data/sandbox: %s 个文件\n' \
-  "$(find data/media -type f 2>/dev/null | wc -l | tr -d ' ')" \
-  "$(find data/sandbox -type f 2>/dev/null | wc -l | tr -d ' ')"
+RUNTIME_DIR=$(npx tsx -e 'import { loadConfig } from "./src/config.ts"; console.log(loadConfig({}).runtimeDir)' 2>/dev/null || true)
+if [ -n "$RUNTIME_DIR" ]; then
+  printf '  runtime: %s（shared %s 个文件, files %s 个文件）\n' \
+    "$RUNTIME_DIR" \
+    "$(find "$RUNTIME_DIR/shared" -type f 2>/dev/null | wc -l | tr -d ' ')" \
+    "$(find "$RUNTIME_DIR/files" -type f 2>/dev/null | wc -l | tr -d ' ')"
+fi
+printf '  data/media: %s 个文件\n' \
+  "$(find data/media -type f 2>/dev/null | wc -l | tr -d ' ')"
 
 say "日志末尾"
 tail -3 logs/app.log 2>/dev/null | sed 's/^/  /' || echo "  （没有 logs/app.log）"

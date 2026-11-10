@@ -145,6 +145,12 @@ function expandHome(p: string): string {
   return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
+/** `~` 展开成家目录，绝对路径原样，相对路径按仓库根解析。 */
+function resolvePath(p: string): string {
+  if (p.startsWith("~") || path.isAbsolute(p)) return path.resolve(expandHome(p));
+  return path.resolve(APP_ROOT, p);
+}
+
 /**
  * 老配置里这一段叫 `sandbox`，现在叫 `exec`（同一段，管「命令怎么跑」：容器 / 宿主机）。
  *
@@ -189,14 +195,16 @@ export function loadConfig(overrides?: unknown): Config {
   cfg.runtimeDir = path.resolve(expandHome(process.env.RABBIT_BOT_RUNTIME || cfg.runtimeDir));
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
-  cfg.exec.dir = path.resolve(APP_ROOT, cfg.exec.dir);
-  // volumes 里的 host 是相对 APP_ROOT 的路径（和 exec.dir 一样）
+  // 沙盒根默认就是运行时目录：和 ~/.config/rabbit-bot/runtime 是同一个地方，
+  // 宿主侧看到她写的东西，容器里就是 /work。exec.dir 留空 = 跟随 runtimeDir。
+  cfg.exec.dir = String(cfg.exec.dir ?? "").trim() ? resolvePath(String(cfg.exec.dir)) : cfg.runtimeDir;
+  // volumes 里的 host 留空 = 用 exec.dir；相对路径按 APP_ROOT 解析（和 exec.dir 一样）
   cfg.exec.shell.volumes = (cfg.exec.shell.volumes ?? []).map((v) => ({
     ...v,
-    host: path.resolve(APP_ROOT, v.host),
+    host: String(v.host ?? "").trim() ? resolvePath(v.host) : cfg.exec.dir,
   }));
   // host 模式的 cwd 不填就落到沙盒目录（和 docker 模式的 /work 指向同一个地方）
-  if (cfg.exec.shell.host?.cwd) cfg.exec.shell.host.cwd = path.resolve(APP_ROOT, cfg.exec.shell.host.cwd);
+  if (cfg.exec.shell.host?.cwd) cfg.exec.shell.host.cwd = resolvePath(cfg.exec.shell.host.cwd);
   else cfg.exec.shell.host = { ...cfg.exec.shell.host, cwd: cfg.exec.dir };
   if (cfg.emoji.table) cfg.emoji.table = path.resolve(APP_ROOT, cfg.emoji.table);
   validateConfig(cfg);

@@ -1,9 +1,8 @@
 /**
- * 提示词模板：读 data/sandbox/prompt/*.md，替换 {{变量}}。
+ * 提示词模板：读运行时目录的 prompt/*.md，仓库里 prompts/ 是默认份。
  *
- * 放在沙盒目录里是有意的：那个目录同时挂进容器当 /work，
- * 所以她在容器里用 shell 就能读、也能改自己这一份——
- * 宿主和容器看的是同一批文件，改完下一轮就生效（下面是按 mtime 缓存）。
+ * 运行时目录同时就是沙盒根（挂成 /work），所以她在容器里用 shell 就能读、也能改
+ * 自己这一份——宿主和容器看的是同一批文件，改完下一轮就生效（下面是按 mtime 缓存）。
  *
  * 刻意不做模板语言（没有 if、没有 for、没有函数）：
  * 需要分支就在代码里选哪个模板，需要列表就由代码拼成整段再注入。
@@ -16,7 +15,7 @@ import path from "node:path";
 import type { Config } from "../config.ts";
 import { runtimeHas, runtimePath } from "../core/runtime.ts";
 
-export const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "data", "sandbox", "prompt");
+export const DEFAULT_DIR = path.resolve(import.meta.dirname, "..", "..", "prompts");
 
 let dir = DEFAULT_DIR;
 /** 测试用：把模板目录指到夹具上 */

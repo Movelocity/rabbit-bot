@@ -13,11 +13,13 @@ import { FakeClock } from "../src/core/clock.ts";
 import { Logger } from "../src/core/logger.ts";
 import { addPlan } from "../src/ops/plans.ts";
 import { addMemory } from "../src/ops/memories.ts";
+import { createTask, markPendingTick, updateTask } from "../src/core/tasks.ts";
+import { appendTaskEvent } from "../src/core/task-events.ts";
 
 async function setup(over: any = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-test-"));
   const cfg = loadConfig({
-    dataDir, logDir: path.join(dataDir, "logs"),
+    dataDir, logDir: path.join(dataDir, "logs"), runtimeDir: path.join(dataDir, "runtime"),
     exec: { dir: path.join(dataDir, "sandbox") },
     send: { confirmWaitMs: 30 }, llm: { provider: "faux", model: "faux-brain" },
     emoji: { map: { 微笑: { text: "🙂" } } }, ...over,
@@ -459,7 +461,7 @@ test("谈资：话题库路径进主提示词，条目一条都不进", async ()
   const msgPrompt = seen[seen.length - 1] ?? "";
   // 路径和翻法住在 system.md（常驻，构造 engine 时传的），不在每轮的唤醒消息里
   const fs = await import("node:fs");
-  const sys = fs.readFileSync(new URL("../data/sandbox/prompt/system.md", import.meta.url), "utf8");
+  const sys = fs.readFileSync(new URL("../prompts/system.md", import.meta.url), "utf8");
   assert.match(sys, /\/work\/topics/, "system.md 要告诉她话题库在哪");
   assert.match(sys, /part-topics\.md/, "翻法在 part-topics.md，主提示词要给指针");
   assert.match(sys, /scene-X\.md|scene-\{\{/, "主提示词要写清「读 scene-X.md」这条路由");
@@ -556,5 +558,74 @@ test("没提别名就不加这一行（别每轮都灌一遍）", async () => {
   t.dm("今天吃了米饭");
   await t.settle(6_000);
   assert.doesNotMatch(seen[seen.length - 1] ?? "", /说法对照/);
+  await t.done();
+});
+
+// ---------- 任务汇报：批量、合并、幂等 ----------
+
+test("任务完成 → 任务 tick 只转述一次，多任务合并成一条", async () => {
+  const t = await setup();
+  const at = t.clock.now();
+  const saved = t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-relay", pool_kind: "private", msg_id: "m_relay",
+    sender_id: "ou_1", sender_name: "他", ts: at, text: "帮我干活",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  const poolId = saved.pool_id;
+  t.app.hub.takeUnread([poolId]);
+
+  fs.mkdirSync(path.join(t.cfg.runtimeDir, "shared"), { recursive: true });
+  for (let i = 0; i < 3; i++) {
+    const task = createTask(t.app.store, { userId: "u1", poolId, name: `#活${i}`, goal: `目标${i}`, work_dir: process.cwd() });
+    fs.writeFileSync(path.join(t.cfg.runtimeDir, "shared", `task-${task.id}.md`), `汇报正文 ${i}`, "utf8");
+    updateTask(t.app.store, task.id, { status: "done", result: `结果${i}` });
+    appendTaskEvent(t.app.store, task.id, { text: "任务完成", sender: "wa-1", senderName: "WA", ts: at });
+  }
+  markPendingTick(t.app.store, at);
+
+  await t.settle(t.cfg.scheduler.taskTickMs + 100);
+    const relayed = t.wakes.filter((w) => w.outcome === "task-updated:relayed");
+  assert.equal(relayed.length, 1, "一次任务 tick 只转述一轮");
+  assert.equal(relayed[0].relayed, true);
+  assert.equal(relayed[0].tasks.length, 3, "三条任务合进同一轮");
+  const digest = t.mock.sent.filter((s) => s.content.includes("任务结束：3 个"));
+  assert.equal(digest.length, 1, `三个任务该合并成一条：${JSON.stringify(t.mock.sent)}`);
+
+  const before = t.mock.sent.length;
+  await t.settle(t.cfg.scheduler.taskTickMs + 100);
+  assert.equal(t.mock.sent.length, before, "同一批任务不该重复转述");
+  await t.done();
+});
+
+test("任务汇报冷却：5 分钟内不重复打扰，游标保留到下一轮", async () => {
+  const t = await setup();
+  const at = t.clock.now();
+  const saved = t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-relay2", pool_kind: "private", msg_id: "m_relay2",
+    sender_id: "ou_1", sender_name: "他", ts: at, text: "继续干活",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  const poolId = saved.pool_id;
+  t.app.hub.takeUnread([poolId]);
+
+  const mk = (i: number) => {
+    const task = createTask(t.app.store, { userId: "u1", poolId, name: `#批${i}`, goal: `目标${i}`, work_dir: process.cwd() });
+    updateTask(t.app.store, task.id, { status: "done", result: `结果${i}` });
+    appendTaskEvent(t.app.store, task.id, { text: "任务完成", sender: "wa-1", senderName: "WA", ts: t.clock.now() });
+    return task;
+  };
+
+  mk(0);
+  markPendingTick(t.app.store, t.clock.now());
+  await t.settle(t.cfg.scheduler.taskTickMs + 100);
+  const first = t.mock.sent.length;
+  assert.ok(first > 0, "第一批应该已经转述");
+
+  mk(1);
+  markPendingTick(t.app.store, t.clock.now());
+  await t.settle(t.cfg.scheduler.taskTickMs + 100);
+  assert.equal(t.mock.sent.length, first, "冷却期内不重复转述");
+  assert.ok(t.wakes.some((w) => w.outcome === "skipped:task-relay-cooldown"), "应记录冷却跳过");
+
   await t.done();
 });

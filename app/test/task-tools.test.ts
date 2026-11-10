@@ -7,7 +7,7 @@ import { registerWorker } from "../src/core/workers.ts";
 import { getTask } from "../src/core/tasks.ts";
 import { appendTaskEvent } from "../src/core/task-events.ts";
 
-function setup(profile?: "ufa" | "wa", opts: { shellMode?: "host" | "docker"; approval?: boolean } = {}) {
+function setup(profile: "ufa" | "wa" = "ufa", opts: { shellMode?: "host" | "docker"; approval?: boolean } = {}) {
   // 工具集要按模式/审批分岔，测试里显式给定，别依赖本机 config/local.json。
   const cfg = loadConfig({
     exec: { shell: { mode: opts.shellMode ?? "docker" } },
@@ -155,9 +155,10 @@ test("worker：list 返回 worker_id / name / kind / status / last_seen_at", asy
 
 test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批；WA 始终有", () => {
   const ufa = setup().tools.map((t: any) => t.name);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "worker", "read_file", "write_file", "rb"]) {
+  for (const name of ["chat", "memory", "plan", "approval", "task", "worker", "read_file", "rb"]) {
     assert.ok(ufa.includes(name), `UFA 少了 ${name}：${ufa.join(",")}`);
   }
+  assert.ok(!ufa.includes("write_file"), `UFA 不该有 write_file：${ufa.join(",")}`);
   assert.ok(ufa.includes("terminal"), `docker 沙盒里 UFA 该有 terminal：${ufa.join(",")}`);
 
   const ufaHost = setup(undefined, { shellMode: "host", approval: true }).tools.map((t: any) => t.name);

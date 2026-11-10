@@ -32,23 +32,39 @@ export function ensureRuntime(cfg: Config, subs: string[] = []): string {
 }
 
 /**
- * 可以从运行时目录覆盖的沙盒子目录：容器里是 /work/<name>，
- * 宿主侧 read_file 的根也在 data/sandbox，两处都要先看运行时目录。
- * 只列「内容」目录，不列 files/ data/ 这类运行产物。
+ * 运行时内容子目录：容器里是 /work/<name>，沙盒根默认就是运行时目录。
+ * 只列「内容」目录，不列 shared/ files/ 这类运行产物。
  */
 export const RUNTIME_SUBDIRS = ["prompt", "topics"] as const;
+
+/** 沙盒根就是运行时目录时，prompt/ topics/ 已经天然在 /work 下，不用再叠加挂载。 */
+export function runtimeIsSandbox(cfg: Config): boolean {
+  return path.resolve(cfg.exec.dir) === runtimeDir(cfg);
+}
+
+/** worker 交汇报文件的固定落点：宿主侧 <runtimeDir>/shared，容器里 /work/shared。 */
+export function sharedDir(cfg: Config): string {
+  return runtimePath(cfg, "shared");
+}
+
+/** 收到的非图片附件落盘处：宿主侧 <runtimeDir>/files，容器里 /work/files。 */
+export function filesDir(cfg: Config): string {
+  return runtimePath(cfg, "files");
+}
 
 /**
  * host 模式下把 sandbox 里这几个子目录换成指向运行时目录的软链。
  *
- * 为什么：容器模式靠 volume 挂载让 /work/topics 等于运行时话题库；
- * 切到 host 以后没有挂载，`>> topics/life/x.md` 会写进 data/sandbox 里那份陈旧副本，
- * 读的是运行时、写的是副本——一份内容两个地方，最难受的就是这种分叉。
+ * 为什么：沙盒根现在默认就是运行时目录（同一处）；只有 exec.dir 被改到别处、
+ * 切到 host 以后没有挂载时，才需要把 sandbox 里的 prompt/ topics/ 接到运行时，
+ * 否则 `>> topics/life/x.md` 会写进 exec.dir 里那份陈旧副本，读的是运行时、写的是副本。
  * 只有当目标不存在、或是个空目录时才动手替换，有内容就原样留着不动。
  */
 export function ensureHostSandboxLinks(cfg: Config): string[] {
   const made: string[] = [];
   if (cfg.exec.shell.mode !== "host") return made;
+  // 沙盒根本来就是运行时目录：prompt/ topics/ 已经在这儿，不用再指一遍（否则会自指）
+  if (runtimeIsSandbox(cfg)) return made;
   for (const name of RUNTIME_SUBDIRS) {
     if (!runtimeHas(cfg, name)) continue;
     const target = runtimePath(cfg, name);
@@ -108,11 +124,15 @@ export function sharedSkillRoots(cfg: Config): string[] {
   return out;
 }
 
-/** 有真身的那些子目录：{ 名字 → 绝对路径 } */
+/** 需要额外挂进 /work 的目录：{ 名字 → 绝对路径 } */
 export function runtimeOverlays(cfg: Config): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of RUNTIME_SUBDIRS) {
-    if (runtimeHas(cfg, name)) out[name] = runtimePath(cfg, name);
+  // 沙盒根不是运行时目录时，prompt/ topics/ 才需要按同名子目录挂过去；
+  // 根就是运行时目录时它们已经在 /work 下，再挂一次是多余的。
+  if (!runtimeIsSandbox(cfg)) {
+    for (const name of RUNTIME_SUBDIRS) {
+      if (runtimeHas(cfg, name)) out[name] = runtimePath(cfg, name);
+    }
   }
   const ext = externalSkillsDir(cfg);
   if (ext) out["shared-skills"] = ext;

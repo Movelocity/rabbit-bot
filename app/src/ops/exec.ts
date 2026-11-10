@@ -7,10 +7,10 @@ import { apiEnv, resolveApiToken } from "../api-token.ts";
 import { ensureSkillDataDirs } from "./skills.ts";
 import { runtimeOverlays, sharedSkillRoots } from "../core/runtime.ts";
 
-function sbox(cfg: Config) {
+function sbox(cfg: Config, root?: string) {
   const sc = cfg.exec;
   return createSandboxFs({
-    root: sc.dir,
+    root: root ? path.resolve(root) : sc.dir,
     maxFileBytes: sc.maxFileBytes,
     maxFiles: sc.maxFiles,
     maxReadChars: sc.maxReadChars,
@@ -20,9 +20,8 @@ function sbox(cfg: Config) {
 }
 
 /**
- * 运行时内容挂到 /work 下的同名子目录（prompt、topics）。
- * Docker 允许在同一个父挂载下再挂子路径，后者覆盖前者——所以 /work 还是 data/sandbox，
- * 但 /work/topics 指向仓库外的真身。
+ * 额外挂进 /work 的目录（沙盒根不是运行时目录时的 prompt/topics、以及外部技能库）。
+ * Docker 允许在同一个父挂载下再挂子路径，后者覆盖前者。
  */
 function withRuntimeVolumes(cfg: Config): SandboxArgvOptions["volumes"] {
   const vols = [...cfg.exec.shell.volumes];
@@ -56,15 +55,15 @@ export function listSandboxFiles(cfg: Config, subdir = "") {
   return sbox(cfg).list(subdir);
 }
 
-export function readSandboxFile(cfg: Config, p: string) {
+export function readSandboxFile(cfg: Config, p: string, root?: string) {
   if (!p) throw new Error("缺少路径");
-  return { path: p, content: sbox(cfg).read(p) };
+  return { path: p, content: sbox(cfg, root).read(p) };
 }
 
-export function writeSandboxFile(cfg: Config, p: string, content: string) {
+export function writeSandboxFile(cfg: Config, p: string, content: string, root?: string) {
   if (!p) throw new Error("缺少路径");
   if (typeof content !== "string") throw new Error("缺少 content");
-  return { path: p, bytes: sbox(cfg).write(p, content) };
+  return { path: p, bytes: sbox(cfg, root).write(p, content) };
 }
 
 export async function execShell(

@@ -197,7 +197,7 @@ extensionFactories: [
 只会在 `mode=docker` 时被调用。
 
 所以说法要准确：**不是「关掉沙盒」，是「沙盒保留未启用」，shell 直落宿主机**。
-`terminal` 的每条命令都是宿主 `bash -c`（cwd `data/sandbox`，只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`），
+`terminal` 的每条命令都是宿主 `bash -c`（cwd `~/.config/rabbit-bot/runtime`，只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`），
 审批闸门只是**事前拦一道**，命令本身没有隔离——她的能力和宿主用户一样大。要真隔离，把 mode 改回 docker 就行。
 
 ## 沙盒 shell（2026-10-24 加）
@@ -211,24 +211,24 @@ extensionFactories: [
 | 模式 | `config.exec.shell.mode`：`docker`（默认，隔离）/ `host`（无隔离，仅本地开发） |
 | 网络 | `--network bridge`（**有网**；`config.exec.shell.network` 可切回 `none`） |
 | 根文件系统 | `--read-only`，只有 `/tmp`（tmpfs 256m）和 `/work` 可写 |
-| 挂载 | 只把 `data/sandbox` 挂成 `/work`，宿主其余路径在容器里**不存在** |
+| 挂载 | 只把运行时目录（默认 `~/.config/rabbit-bot/runtime`）挂成 `/work`，宿主其余路径在容器里**不存在** |
 | 权限 | `--cap-drop ALL`、`no-new-privileges`、非 root（宿主 uid:gid） |
 | 资源 | 512MB 内存、1 CPU、64 进程 |
 | 镜像 | `rabbit-bot-sandbox:latest`（`docker/sandbox.Dockerfile`，实测 343MB）：node 22、Python 3.14 + pip、git、curl、GNU bash、jq、ripgrep；根文件系统只读，`HOME=/tmp/home` |
 
-容器名 `rabbit-bot-sbx`，`--restart unless-stopped`。`src/core/sandbox-shell.ts` 的 `ensureSandboxContainer()` 会在容器缺失时按上表参数重建，所以删了也能自愈——**改这张表就是改安全边界**。
+容器名 `rabbit-bot-sbx`，`--restart unless-stopped`。`src/core/shell-runner.ts` 的 `ensureSandboxContainer()` 会在容器缺失时按上表参数重建，所以删了也能自愈——**改这张表就是改安全边界**。
 
 **无沙盒模式（`mode=host`，仅本地开发）**：写进 `config/local.json`（已 gitignore），别写 `default.json`：
 
 ```json
-{ "sandbox": { "shell": { "mode": "host", "host": { "cwd": "data/sandbox", "inheritEnv": false } } } }
+{ "exec": { "shell": { "mode": "host", "host": { "cwd": "~/.config/rabbit-bot/runtime", "inheritEnv": false } } } }
 ```
 
-命令用 `bash -c`（不读登录 profile，免得把过滤掉的环境变量又塞回来）直接跑在宿主机上，cwd 默认 `data/sandbox`（和容器里的 `/work` 是同一个目录），只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`；超时、输出截断、4000 字上限和 docker 模式共用同一套逻辑。**它没有隔离**：模型能读 `~/.config/rabbit-bot/env`、能碰任意宿主路径——这正是当年排除 `sandbox-exec` 的理由。`mode=host` 不建容器，`npm run sbx` 的容器参数全部不生效，`npm run doctor` / `npm run sbx -- status` 会打黄色警告。`enabled:false` 仍等价于「shell 关闭」，和 mode 正交。
+命令用 `bash -c`（不读登录 profile，免得把过滤掉的环境变量又塞回来）直接跑在宿主机上，cwd 默认就是沙盒根（`exec.dir`，留空等于 `runtimeDir`，和容器里的 `/work` 是同一个目录），只透传 `PATH/HOME/LANG/LC_ALL/TERM/TMPDIR`；超时、输出截断、4000 字上限和 docker 模式共用同一套逻辑。**它没有隔离**：模型能读 `~/.config/rabbit-bot/env`、能碰任意宿主路径——这正是当年排除 `sandbox-exec` 的理由。`mode=host` 不建容器，`npm run sbx` 的容器参数全部不生效，`npm run doctor` / `npm run sbx -- status` 会打黄色警告。`enabled:false` 仍等价于「shell 关闭」，和 mode 正交。
 
 **沙盒里的技能脚本怎么用业务命令**（2026-10-31 加）：不再把 `scripts/` 或数据库挂进容器，宿主进程起一个 REST API（`src/api.ts`，默认 `0.0.0.0:3738`），覆盖池 / 计划 / 记忆 / 图片 / 联网 / 沙盒文件。容器创建时自动注入 `RB_API_URL`（`http://host.docker.internal:3738`）和 `RB_API_TOKEN`（`data/run/api.token`，首次启动自动生成 0600；token 变了会重建容器）。镜像里装了 `/usr/local/bin/rb`（源码 `docker/rb.mjs`），模型唯一的业务通道就是它：`rb pool-list` / `rb plan-add` 等走 API，`rb sb read/write/run` 直接操作 `/work`。`src/app` 启动时会先起 API 再把 `mode=docker` 的容器拉起来，所以 `sb run` 之前容器就已经在跑。`sb run` 本身不开放 HTTP 接口——技能脚本已经在 shell 里，再开一层只会递归。完整路由和 curl 示例见 `docs/sandbox-api.md`。
 
-**技能（2026-10-31）**：`data/sandbox/skills/<name>/` 一个技能一个目录，`SKILL.md` 等设计资产进 git，`skills/<name>/data/` 是运行时产物、被 `.gitignore` 排除；空 `data/` 由启动时和每次 `sb run` 前自动补（`src/ops/skills.ts`）。`data/sandbox` 本来就挂成 `/work`，所以容器里直接是 `/work/skills/<name>/`，没有同步步骤。`GET /v1/skills` 给技能自己发现名字和数据目录。
+**技能（2026-10-31）**：`~/.config/rabbit-bot/runtime/skills/<name>/` 一个技能一个目录，`SKILL.md` 给模型读；`skills/<name>/data/` 是运行时产物，空目录由启动时和每次 `sb run` 前自动补（`src/ops/skills.ts`）。沙盒根就是 `/work`，所以容器里直接是 `/work/skills/<name>/`，没有同步步骤。`GET /v1/skills` 给技能自己发现名字和数据目录。
 
 **这层 API 的边界**：绑 `0.0.0.0` 是为了容器能连，局域网也能访问，全靠 Bearer token；token 文件在 `data/run/`，别提交。API 不返回飞书/LLM 密钥，沙盒文件路径仍走 `createSandboxFs`（`../` 逃逸一律 400）。
 

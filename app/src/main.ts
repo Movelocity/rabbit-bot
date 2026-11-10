@@ -16,7 +16,7 @@ import { ensureSandboxContainer } from "./core/shell-runner.ts";
 import { shellRunnerOptions } from "./ops/exec.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
-import { ensureRuntime, ensureHostSandboxLinks, RUNTIME_SUBDIRS } from "./core/runtime.ts";
+import { ensureRuntime, ensureHostSandboxLinks, RUNTIME_SUBDIRS, sharedDir, filesDir } from "./core/runtime.ts";
 import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import path from "node:path";
@@ -26,11 +26,12 @@ async function main() {
   const log = new Logger(cfg.logDir);
   // Web 管理台保存过的调度间隔：先应用再建 App，重启后照旧生效
   loadSchedulerSettings(cfg, log);
-  // 运行时内容（人设/提示词/话题库）在仓库外：先保证目录在，再把模板目录指过去
-  ensureRuntime(cfg, [...RUNTIME_SUBDIRS]);
+  // 运行时内容（人设/提示词/话题库/汇报/附件）在仓库外：先保证目录在，再把模板目录指过去
+  ensureRuntime(cfg, [...RUNTIME_SUBDIRS, "shared", "files"]);
   log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
-  // host 模式下没有 volume 挂载：把 sandbox 里 prompt/ topics/ 换成软链，
-  // 否则她读的是运行时、写的是 data/sandbox 里的陈旧副本，很快就分叉
+  log.info(`沙盒根：${cfg.exec.dir}（/work），worker 汇报落点：${sharedDir(cfg)}`);
+  // host 模式下没有 volume 挂载：exec.dir 不在运行时目录时，把 prompt/ topics/ 换成软链，
+  // 否则她读的是运行时、写的是 exec.dir 里的陈旧副本，很快就分叉
   const linked = ensureHostSandboxLinks(cfg);
   if (linked.length) log.info(`宿主机模式已把沙盒子目录接到运行时：${linked.join("、")}`);
   // 主人名单：群聊里他说的话不 @ 也要回（hub 判唤醒、prompt 标 [主人] 都用它）
@@ -71,7 +72,7 @@ async function main() {
           accessToken: process.env.MATRIX_TOKEN,
           stateFile: path.join(cfg.dataDir, "matrix-sync.json"),
           media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes },
-          filesDir: path.join(cfg.dataDir, "sandbox", "files"),
+          filesDir: filesDir(cfg),
         },
         log,
       ),

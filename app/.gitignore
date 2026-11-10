@@ -1,14 +1,8 @@
 node_modules/
 dist/
 data/*
-# 提示词放在沙盒目录里（容器内外都能读写），但它仍是代码资产，要进版本控制
-!data/sandbox/
-data/sandbox/*
-!data/sandbox/prompt/
-!data/sandbox/topics/
-!data/sandbox/skills/
-# 技能：SKILL.md 等设计资产进 git；每个技能自己的 data/ 是运行时产物，不进
-data/sandbox/skills/*/data/
+# 默认提示词是代码资产，进 git；真实的提示词/话题库/技能都在运行时目录（家目录外）
+!prompts/
 logs/
 *.log
 .env

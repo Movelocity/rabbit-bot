@@ -236,6 +236,7 @@ test("UFA task create：只登记 pending_approval，等 Web 审批，不产生 
   process.env.FAKE_EXEC_OUT = out;
   const tools = createTools({
     store, hub: {} as any, cfg, now: () => Date.now(), primaryPool: () => pool,
+    profile: "ufa",
     dispatch: { apiBase: "http://127.0.0.1:9999", token: "tok", dataDir: createDataDir, executorBin: fakeBin },
   }) as any[];
   const taskTool = tools.find((t) => t.name === "task");

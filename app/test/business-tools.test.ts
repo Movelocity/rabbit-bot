@@ -27,6 +27,7 @@ function setup(opts: { withUser?: boolean } = {}) {
   const calls: string[][] = [];
   const tools = createTools({
     store, hub: {} as any, cfg, now: () => Date.now(),
+    profile: "ufa",
     primaryPool: () => pool,
     // rb 只该被运维命令用到；业务命令走不到这里
     rbExec: async (argv: string[]) => { calls.push(argv); return { ok: true, code: 0, output: "{}" }; },
@@ -160,7 +161,7 @@ function setupFs() {
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   });
   const pool = store.listPools()[0].pool_id;
-  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), primaryPool: () => pool }) as any[];
+  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), profile: "wa", primaryPool: () => pool }) as any[];
   const get = (n: string) => tools.find((t) => t.name === n)!;
   const run = async (n: string, params: any) => {
     const r = await get(n).execute("id", params);
@@ -189,7 +190,7 @@ test("read_file：文件不存在就报错，不返回空字符串", async () =>
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test("UFA 审批关时没有 terminal，但读写文件保留（host 模式也一样）", async () => {
+test("UFA 审批关时没有 terminal，也没有 write_file（host 模式也一样）", async () => {
   const base = loadConfig();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-host-"));
   const cfg = {
@@ -198,9 +199,9 @@ test("UFA 审批关时没有 terminal，但读写文件保留（host 模式也�
     exec: { ...base.exec, dir: path.join(dir, "sandbox"), shell: { ...base.exec.shell, mode: "host" as const } },
   };
   fs.mkdirSync(cfg.exec.dir, { recursive: true });
-  const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now() }) as any[];
+  const tools = createTools({ store: new Store(":memory:"), hub: {} as any, cfg, now: () => Date.now(), profile: "ufa" }) as any[];
   const names2 = tools.map((t) => t.name);
-  assert.ok(names2.includes("write_file"), `UFA 还要能写文件：${names2.join(",")}`);
+  assert.ok(!names2.includes("write_file"), `UFA 不该能写文件：${names2.join(",")}`);
   assert.ok(names2.includes("read_file"), "读文件要留着，她得看自己的 prompt/topics");
   assert.ok(!names2.includes("terminal"), `UFA 不该有 terminal：${names2.join(",")}`);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -302,7 +303,7 @@ test("chat：skip 把理由交给 markSilent", async () => {
   const cfg = loadConfig();
   const store = new Store(":memory:");
   let silent: string | null = null;
-  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), markSilent: (r) => { silent = r; } }) as any[];
+  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), profile: "ufa", markSilent: (r) => { silent = r; } }) as any[];
   const chat = tools.find((t) => t.name === "chat");
   await chat.execute("id", { action: "skip", reason: "他只是发了个表情" });
   assert.equal(silent, "他只是发了个表情");
@@ -408,7 +409,7 @@ test("approval 只给 UFA：WA 工具集里没有这个工具", () => {
   assert.equal(waTools.some((t) => t.name === "approval"), false);
 
   const ufaTools = createTools({
-    store, hub: {} as any, cfg, now: () => Date.now(),
+    store, hub: {} as any, cfg, now: () => Date.now(), profile: "ufa",
   }) as any[];
   assert.equal(ufaTools.some((t) => t.name === "approval"), true);
 });

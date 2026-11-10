@@ -58,7 +58,7 @@ export function saveImage(raw: Buffer, opts: MediaOptions, key: string): Attachm
 
 /**
  * 非图片附件落盘：文件名消毒后保留，前面挂 8 位事件号防重名。
- * 存到沙箱里（`data/sandbox/files`），这样她能直接用 read_file / terminal 读到。
+ * 存到沙箱里（`<runtimeDir>/files`，容器里是 `/work/files`），这样她能直接用 read_file / terminal 读到。
  */
 export function saveFile(raw: Buffer, dir: string, name: string, key: string): { path: string; bytes: number } {
   fs.mkdirSync(dir, { recursive: true });

@@ -21,7 +21,7 @@
 npm run sbx -- image     # 改过 docker/sandbox.Dockerfile 后重建镜像
 npm run sbx -- status    # 状态、边界参数、RB_API_* 是否注入
 npm run sbx -- rebuild   # 删容器，下次启动/sb run 按 config 自建
-npm run sbx -- clean     # 清空 data/sandbox（会二次确认）
+npm run sbx -- clean     # 清空 runtime/shared 与 runtime/files（会二次确认）
 ```
 
 `mode=docker`（默认）下宿主启动时会自动建容器；`mode=host` 是本地开发用的无隔离模式，

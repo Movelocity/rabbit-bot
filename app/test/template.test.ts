@@ -22,7 +22,7 @@ test("真实模板都在：主提示词 + 三份场景 + 三个附件", () => {
   for (const gone of ["part-tide", "part-proactive", "part-plan-why", "part-plan-nowhy"]) {
     assert.ok(!names.includes(gone), `${gone}.md 已并入别处，不该再存在`);
   }
-  assert.match(templateDir(), /data\/sandbox\/prompt$/);
+  assert.match(templateDir(), /prompts$/);
 });
 
 test("handoff 渲染出来是那段交接要求", () => {

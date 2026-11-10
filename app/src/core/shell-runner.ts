@@ -7,7 +7,7 @@
  *   --cap-drop ALL          丢弃全部 capability
  *   no-new-privileges       不许提权
  *   --memory 512m --pids-limit 64 --cpus 1（/tmp 是 256m 的 tmpfs，pip 装包落这里）
- *   只把 data/sandbox 挂成 /work，宿主其余路径在容器里根本不存在
+ *   只把运行时目录（默认 ~/.config/rabbit-bot/runtime）挂成 /work，宿主其余路径在容器里根本不存在
  *
  * 所以即使模型在容器里跑 `cat ~/.config/rabbit-bot/env`，它看到的是 No such file。
  *

@@ -50,6 +50,15 @@ function respond(context: any): any {
       const pools = [...new Set([...msgs.map(textOf).join("\n").matchAll(/\[(p\d+) /g)].map((x) => x[1]))];
       return fauxAssistantMessage(`交接文档（桩）\n- 涉及池：${pools.join(",") || "无"}\n- 共 ${msgs.length} 条上下文消息\n- 无未完成承诺`);
     }
+    // 任务汇报：按池发一条摘要，内容带任务数，方便 e2e 断言「合并成一条」
+    if (t.includes("【任务汇报】")) {
+      const calls: any[] = [];
+      for (const m of t.matchAll(/^- 池 (p\d+).*?（(\d+) 个任务）/gm)) {
+        calls.push(fauxToolCall("chat", { action: "send", pool: m[1], content: `任务结束：${m[2]} 个` }));
+      }
+      if (!calls.length) return fauxAssistantMessage("没有值得说的。");
+      return fauxAssistantMessage(calls);
+    }
     const calls: any[] = [];
     // 计划现在长这样（在「## 状态」块里）：- 到点计划：#12「一分钟后提醒」（池 p1）
     for (const m of t.matchAll(/^- 到点计划：#(\d+)「(.+?)」.*?（池 (p\d+)）/gm)) {

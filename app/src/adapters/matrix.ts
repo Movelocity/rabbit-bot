@@ -23,7 +23,7 @@ export interface MatrixOptions {
   skipBacklog?: boolean;
   /** 图片落盘参数；不给就不下图片（只留占位文字） */
   media?: MediaOptions;
-  /** 非图片附件落盘目录（沙箱内的 data/sandbox/files） */
+  /** 非图片附件落盘目录（沙箱内的 <runtimeDir>/files，容器里 /work/files） */
   filesDir?: string;
 }
 
