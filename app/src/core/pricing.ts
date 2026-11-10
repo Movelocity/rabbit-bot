@@ -96,12 +96,19 @@ export function costUsd(model: string, split: TokenSplit, atMs: number = Date.no
   );
 }
 
-/** 把 pi 报的 usage 拆成三段。input 里已经含命中部分，所以未命中 = input - hit */
+/**
+ * 把 pi 报的 usage 拆成三段。
+ *
+ * pi/DeepSeek 报的是：input = 未命中（cache miss）、cacheRead = 命中（cache hit）、
+ * output = 输出，且 totalTokens = input + output + cacheRead + cacheWrite。
+ * 用真实 session 核对过：input=279 / cacheRead=43008 / output=52 / total=43339。
+ * 所以命中直接用 cacheRead，未命中直接用 input（cacheWrite 并入 miss，避免丢 token）。
+ */
 export function splitUsage(u: any): TokenSplit {
-  const input = Number(u?.input ?? 0) || 0;
-  const hit = Math.min(Number(u?.cacheRead ?? 0) || 0, input);
+  const miss = (Number(u?.input ?? 0) || 0) + (Number(u?.cacheWrite ?? 0) || 0);
+  const hit = Number(u?.cacheRead ?? 0) || 0;
   const out = Number(u?.output ?? 0) || 0;
-  return { hit, miss: Math.max(0, input - hit), out };
+  return { hit, miss, out };
 }
 
 /** 缓存命中率（按输入 token 算），用来判断「上下文到底有没有被判重」 */
