@@ -7,7 +7,7 @@ import { registerWorker } from "../src/core/workers.ts";
 import { getTask } from "../src/core/tasks.ts";
 import { appendTaskEvent } from "../src/core/task-events.ts";
 
-function setup(profile: "ufa" | "wa" = "ufa", opts: { shellMode?: "host" | "docker"; approval?: boolean } = {}) {
+function setup(profile: "ufa" | "wa" = "ufa", opts: { shellMode?: "host" | "docker"; approval?: boolean; taskApproval?: any } = {}) {
   // 工具集要按模式/审批分岔，测试里显式给定，别依赖本机 config/local.json。
   const cfg = loadConfig({
     exec: { shell: { mode: opts.shellMode ?? "docker" } },
@@ -25,6 +25,7 @@ function setup(profile: "ufa" | "wa" = "ufa", opts: { shellMode?: "host" | "dock
     store, hub: {} as any, cfg, now: () => Date.now(),
     primaryPool: () => pool,
     profile,
+    taskApproval: opts.taskApproval,
     rbExec: async (argv: string[]) => { calls.push(argv); return { ok: true, code: 0, output: "{}" }; },
   }) as any[];
   const get = (n: string) => tools.find((t) => t.name === n);
@@ -217,4 +218,29 @@ test("rb task-list / worker-list：只读，直接查库，不进沙盒", async 
   assert.match(bad.text, /status/);
 
   assert.deepEqual(calls, []);
+});
+
+test("task：开启任务审批时建完就发到审批房并提示", async () => {
+  const notified: number[] = [];
+  const { run } = setup("ufa", {
+    taskApproval: { enabled: true, notify: async (t: any) => { notified.push(t.id); return true; } },
+  });
+  const created = await run("task", {
+    action: "create", name: "#发布", goal: "发一版", work_dir: process.cwd(),
+  });
+  assert.equal(created.details?.ok, true, created.text);
+  assert.deepEqual(notified, [created.details.task.id]);
+  assert.match(created.text, /已发审批提示/);
+});
+
+test("task：任务审批消息发不出去时回退提示 Web，不把任务算失败", async () => {
+  const { run } = setup("ufa", {
+    taskApproval: { enabled: true, notify: async () => false },
+  });
+  const created = await run("task", {
+    action: "create", name: "#发布", goal: "发一版", work_dir: process.cwd(),
+  });
+  assert.equal(created.details?.ok, true, created.text);
+  assert.match(created.text, /可在 Web 任务页审批/);
+  assert.equal(created.details.task.status, "pending_approval");
 });

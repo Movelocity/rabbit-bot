@@ -105,19 +105,43 @@ export interface Config {
   };
   /**
    * 宿主机命令的审批闸门（只在 exec.shell.mode === "host" 时生效）。
-   * 发到独立房间等主人一句话；超时按拒绝，审批内容不进她的会话上下文。
+   * 发到配置的审批聊天等主人一句话（独立审批房或私聊都行）；超时按拒绝，
+   * 只有审批提示和裁决不进她的会话上下文，同一聊天里的正常消息照常入池。
    */
   approval: {
     enabled: boolean;
     /** matrix / feishu */
     platform: string;
-    /** 审批房的 external chat id（不是池 id） */
+    /** 审批聊天的 external chat id（不是池 id） */
     roomId: string;
     /** 谁能批；空 = 谁都批不了（等于关） */
     ownerIds: string[];
     /** 超时毫秒，超时即拒绝 */
     timeoutMs: number;
-    /** 裁决后和执行完各回一句状态到审批房 */
+    /** 裁决后和执行完各回一句状态到审批聊天 */
+    notify?: boolean;
+  };
+  /**
+   * 任务发布审批：UFA 建的任务先发审批提示，主人贴 OK / No 表情裁决。
+   * target=origin 发到任务发起的聊天，target=room 发到固定审批房；关掉时回退 Web 任务页。
+   */
+  taskApproval: {
+    enabled: boolean;
+    /**
+     * 审批提示发到哪：
+     *   origin = 任务发起时的聊天（默认推荐，不另开审批房）
+     *   room   = 固定审批房（roomId）
+     */
+    target?: "origin" | "room";
+    /** matrix / feishu */
+    platform: string;
+    /** 固定审批房的 external chat id（target=room 时必填；origin 时作为兜底） */
+    roomId: string;
+    /** 谁能批；空 = 谁都批不了（等于关） */
+    ownerIds: string[];
+    /** 超时毫秒，超时即拒绝（默认 24h，避免睡觉时任务被判死） */
+    timeoutMs: number;
+    /** 裁决后回一句状态到原聊天/审批房 */
     notify?: boolean;
   };
   /** 本地 REST API：沙盒里的技能脚本通过它访问池/计划/记忆/沙盒文件 */
@@ -245,6 +269,19 @@ export function validateConfig(cfg: Config): void {
     const p = cfg.api.port;
     if (!Number.isInteger(p) || p < 0 || p > 65535) throw new Error("config: api.port 必须是 0~65535 的整数（0 = 随机端口）");
     if (!cfg.api.host) throw new Error("config: api.host 不能为空（默认 0.0.0.0）");
+  }
+  if (cfg.taskApproval?.enabled) {
+    pos(cfg.taskApproval.timeoutMs, "taskApproval.timeoutMs");
+    const target = cfg.taskApproval.target ?? "origin";
+    if (target !== "origin" && target !== "room") {
+      throw new Error('config: taskApproval.target 只能是 "origin" 或 "room"');
+    }
+    if (target === "room" && !String(cfg.taskApproval.roomId ?? "").trim()) {
+      throw new Error("config: taskApproval.roomId 不能为空（target=room 时）");
+    }
+    if (!(cfg.taskApproval.ownerIds ?? []).length) {
+      throw new Error("config: taskApproval.ownerIds 不能为空（taskApproval.enabled=true 时）");
+    }
   }
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");
   if (cfg.tide?.enabled) {

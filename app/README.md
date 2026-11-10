@@ -71,12 +71,12 @@ cp app/config/persona.example.md ~/.config/rabbit-bot/runtime/persona.md   # 然
 `RABBIT_BOT_API_TOKEN`（≥16 位）。页面本身不需要登录就能打开，但所有数据接口都要
 Bearer token，token 不对会明确提示。
 
-**聊天收发走已启用的 IM（飞书 / Matrix）；Web 负责任务审批、人格、提示词、记忆和只读面板。**
+**聊天收发走已启用的 IM（飞书 / Matrix）；任务审批在任务发起的 IM 聊天或固定审批房完成。Web 是可选的本地管理台，负责人格、提示词、记忆和只读面板。**
 
 能做的事：
 
 - 会话：看池列表（alias / 标题 / 私聊群聊 / 最后消息时间 / 总数），看消息时间线并区分机器人自己发的；每 3 秒轮询，支持向上翻页。
-- 任务：按 status 过滤，展开看 deliverable / constraints / acceptance / result / artifact / note 和 worker 快照；`pending_approval` 的任务可在这里改描述后通过并执行 / 驳回。
+- 任务：按 status 过滤，展开看 deliverable / constraints / acceptance / result / artifact / note 和 worker 快照；`pending_approval` 的任务可在这里改描述后通过并执行 / 驳回。开启 `taskApproval` 后，任务提示会发到任务发起的聊天（或固定的 IM 审批房），主人贴 OK 就直接启动，Web 只是可选的备用入口。
 - 权限：按 status 过滤查看权限申请；**这是运行时权限申请，审批请在已启用的 IM（飞书 / Matrix）里完成，此页只展示**。
 - Worker：只读查看 worker_id / name / kind / status / last_seen_at。
 - 计划：只读查看待办列表。
@@ -97,7 +97,7 @@ npm run web -- --host 0.0.0.0
 ```
 
 demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任务面板和人格、提示词、记忆管理。
-它没有入池能力，也不会生成回复；聊天收发走已启用的 IM（飞书 / Matrix），任务审批在 Web「任务」页。
+它没有入池能力，也不会生成回复；聊天收发走已启用的 IM（飞书 / Matrix），任务审批默认在任务发起时的 IM 聊天/审批房完成，Web「任务」页是可选的备用入口。
 
 ## 真实 worker 与 e2e
 
@@ -173,7 +173,7 @@ prompts/         默认提示词模板（真身在运行时目录）
 | `memory` | `recent` / `search` / `add` / `expire`（不再成立，关掉）/ `update`（就地订正）/ `help` |
 | `plan` | `add` / `done` / `list` / `help` |
 | `approval` | 查看和裁决 worker 的权限申请：`list` / `get` / `decide`（approved / rejected）/ `help` |
-| `task` | 任务面板：`create`（建任务，pending_approval 等 Web 审批）/ `list` / `get` / `updates` / `resume` / `note` / `cancel` / `status` / `help` |
+| `task` | 任务面板：`create`（建任务，pending_approval 等审批）/ `list` / `get` / `updates` / `resume` / `note` / `cancel` / `status` / `help` |
 | `worker` | `list` 看已注册的 worker（id / 名字 / kind / 状态 / 最近心跳）/ `help` |
 | `read_file` / `write_file` | 读写 `/work` 里的文件（整份覆盖；追加走 `terminal` 的 `>>`） |
 | `terminal` | 在 Docker 沙盒里跑命令：列目录、`rg` 搜内容、算数（碰不到宿主文件系统） |

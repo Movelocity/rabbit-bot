@@ -16,7 +16,7 @@ import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { listPools, readPool, searchPool } from "./ops/pools.ts";
 import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
-import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, updateTask } from "./core/tasks.ts";
+import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, updateTask, type Task } from "./core/tasks.ts";
 import {
   WorkerMismatchError, claimNextTask, completeTask, failTask, getWorker, listWorkers, progressTask,
   registerWorker, touchTask,
@@ -54,6 +54,10 @@ export interface ApiDeps {
   enqueue?: () => void;
   /** 测试注入：替换任务执行器可执行文件 */
   executorBin?: string;
+  /** 任务建好后发审批提示（原聊天或 IM 审批房）；不传则只能在 Web 任务页审批 */
+  onTaskCreated?: (task: Task) => void;
+  /** 任务在 Web 审批/驳回/取消后，清掉 IM 里的待审提示 */
+  onTaskDecided?: (taskId: number) => void;
   /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；不传则只持久化 */
   scheduler?: Pick<Scheduler, "updateConfig">;
 }
@@ -309,7 +313,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               status: "pending_approval",
             });
             // dispatch=true 只作为测试/内部逃生口，Web 和 UFA 都不走这条路。
-            if (body.dispatch !== true) return reply(201, formatTask(task));
+            if (body.dispatch !== true) {
+              d.onTaskCreated?.(task);
+              return reply(201, formatTask(task));
+            }
             writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, task.id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
@@ -388,6 +395,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
                 sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
               });
+              d.onTaskDecided?.(id);
               return reply(200, formatTask(started.task));
             } catch (e) {
               const message = (e as Error).message;
@@ -408,13 +416,14 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             const reason = typeof body.reason === "string" ? body.reason.trim() : "";
             const cancelled = updateTask(d.store, id, { status: "cancelled" });
             appendNote(d.store, id, reason ? `Web 驳回：${reason}` : "Web 驳回");
+            d.onTaskDecided?.(id);
             return reply(200, formatTask(getTask(d.store, id) ?? cancelled));
           }
           if (parts.length === 4 && parts[3] === "start" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
             if (task.status === "pending_approval") {
-              throw new HttpError(409, `任务 #${id} 等待 Web 审批，必须走 /v1/tasks/${id}/approve，不能直接 start`);
+              throw new HttpError(409, `任务 #${id} 等待审批，必须走 /v1/tasks/${id}/approve，不能直接 start`);
             }
             if (!task.work_dir) throw new HttpError(400, `任务 #${id} 没有 work_dir，不能启动`);
             if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
@@ -447,7 +456,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
             if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task);
-            return reply(200, formatTask(cancelTask(d.store, id)));
+            const resumed = cancelTask(d.store, id);
+            d.onTaskDecided?.(id);
+            return reply(200, formatTask(resumed));
           }
           if (parts.length === 4 && parts[3] === "status" && method === "POST") {
             if (!isTaskStatus(body.status)) throw new HttpError(400, `status 只能是 ${TASK_STATUSES.join(" / ")}`);

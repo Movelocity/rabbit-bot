@@ -722,7 +722,7 @@
     grid.appendChild(formField("constraints", constraints));
     grid.appendChild(formField("acceptance", acceptance));
     form.appendChild(grid);
-    form.appendChild(el("p", "muted task-approve-hint", "work_dir / executor / model 只读，v1 不支持在 Web 修改。"));
+    form.appendChild(el("p", "muted task-approve-hint", "优先在飞书审批房给任务提示贴 OK；这里是备用入口。work_dir / executor / model 只读，v1 不支持在 Web 修改。"));
 
     const actions = el("div", "card-actions");
     const approve = el("button", "primary small", "通过并执行");

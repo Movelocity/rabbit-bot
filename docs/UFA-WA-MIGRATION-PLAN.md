@@ -659,7 +659,7 @@ P3：`GET /v1/memories?asOf=`（控制台若要“按时间看记忆”再用）
 ### 8.5 审批链路
 
 - 现状：`ApprovalGate` 一次只允许一条待审（`approval.ts:64,99-105`），超时 fail-closed（`:107-131`），裁决/执行完回审批房（`:145-165`），日志 `data/approval.jsonl`（`app.ts:96`）。
-- 要求：只把 `terminal` 接到 WA；UFA 不注册 `terminal`，避免 UFA 聊天时触发审批、也避免审批房内容进 UFA 上下文（`hub.ts:53` 会吞掉审批房消息）。
+- 要求：只把 `terminal` 接到 WA；UFA 不注册 `terminal`，避免 UFA 聊天时触发审批。审批提示和裁决不进池，但审批房里的正常消息照常入池（按消息格式认裁决，不按聊天 id 整房拦截）。
 - host 模式：`approval.enabled=false` 时 `terminal` 对 `ask` 档直接拒绝（`tools.ts:450-453`），这是现有的 fail-closed；不要新增“关掉审批就放行”的配置。
 - `exec.shell.safeProgs` 是免审白名单（`config/default.json` + `cmd-rules.ts`），只放确认无副作用的程序；WA 不要自己改这个名单。
 - 回滚：把 `exec.shell.mode` 改回 `docker`，或把 WA 的 `terminal` 从工具集移除；审批日志保留，不影响回滚。

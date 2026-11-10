@@ -108,6 +108,8 @@ async function main() {
     apiSrv = await startApiServer({
       cfg, store: app.store, log, token,
       scheduler: app.scheduler,
+      onTaskCreated: (task) => app.notifyTaskApproval(task),
+      onTaskDecided: (id) => app.forgetTaskApproval(id),
       enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
     });
     if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {

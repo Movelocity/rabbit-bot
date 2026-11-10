@@ -1,9 +1,9 @@
 /**
- * 审批闸门：宿主机命令在跑之前，先发到主人的 Matrix 审批房，等一句话。
+ * 审批闸门：宿主机命令在跑之前，先发到配置的审批聊天（审批房或私聊），等一句话。
  *
  * 三条硬规矩：
  *   1. 超时 = 拒绝（fail-closed），不是默认放行
- *   2. 只有贴在审批提示上的 OK / No 表情算数，聊天消息照常进她的会话
+ *   2. 只有贴在审批提示上的 OK / No 表情算数；同一聊天里的正常消息照常进她的会话
  *   3. 一次只留一条待审，表情必须贴在对应那条提示上，避免批错
  */
 import fs from "node:fs";
@@ -19,7 +19,7 @@ export interface ApprovalConfig {
   enabled: boolean;
   /** 从哪个平台发（matrix / feishu） */
   platform: string;
-  /** 审批房的 external chat id */
+  /** 审批聊天的 external chat id（审批房或私聊） */
   roomId: string;
   /** 只有这些人能批；空 = 谁都不能批 */
   ownerIds: string[];
@@ -63,7 +63,7 @@ export interface ApprovalGateDeps {
 }
 
 /** 审批只认两个表情：OK = 允许，No = 拒绝。别的表情一律当聊天放行。 */
-function reactionDecision(key: string): Decision | null {
+export function reactionDecision(key: string): Decision | null {
   const k = key.replace(/[\uFE0F\uFE0E]/g, "").trim().toLowerCase();
   if (k === "ok" || k === "👍") return "approved";
   if (k === "no" || k === "👎") return "rejected";
@@ -79,7 +79,7 @@ export class ApprovalGate {
   constructor(
     private cfg: ApprovalConfig,
     private log: Logger,
-    /** 往审批房发一条系统通知（不经过池、不入她的对话） */
+    /** 往审批聊天发一条系统通知（不经过池、不入她的对话） */
     private send: (
       chatId: string,
       text: string,

@@ -10,8 +10,13 @@ import { PlanEngine } from "./core/plans.ts";
 import { evaluateGate } from "./core/gate.ts";
 import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
-import { listTasksUpdatedSince, takePendingTick, markPendingTick, taskDisplayName, type Task } from "./core/tasks.ts";
+import {
+  appendNote, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
+  taskDisplayName, updateTask, type Task,
+} from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
+import { isRunnerAlive, startTask, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
+import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey } from "./core/time.ts";
@@ -24,13 +29,14 @@ import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine, type RunResult } from "./agent/engine.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
+import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import { resolveAliases } from "./ops/memories.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Plan, StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
-import { runtimeDir, sharedDir } from "./core/runtime.ts";
+import { businessDir, runtimeDir, sharedDir } from "./core/runtime.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -42,6 +48,8 @@ export interface AppOptions {
   inMemorySessions?: boolean;
   /** 测试注入：进程内 rb 执行器（替代容器） */
   rbExec?: RbExec;
+  /** 测试注入：替换任务执行器可执行文件（审批通过后启动任务用） */
+  executorBin?: string;
 }
 
 /**
@@ -99,6 +107,8 @@ export class App {
   readonly emoji: EmojiTable;
   /** 宿主机命令的审批闸门（host 模式下 terminal 才会用它） */
   readonly approval: ApprovalGate;
+  /** 任务发布审批闸门：任务先发到原聊天/审批房，主人在 IM 里裁决 */
+  readonly taskApproval: TaskApprovalGate;
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: Wake | null = null;
@@ -130,7 +140,22 @@ export class App {
         enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
       },
     );
-    this.hub.approval = this.approval;
+    this.taskApproval = new TaskApprovalGate(
+      cfg.taskApproval,
+      this.log,
+      (target, text) => this.hub.sendSystem(target.platform, target.chatId, text),
+      {
+        onApprove: (task, by) => this.approveTaskFromChat(task, by),
+        onReject: (task, by) => this.rejectTaskFromChat(task, by),
+        onTimeout: (task) => this.timeoutTaskFromChat(task),
+      },
+    );
+    // 两个闸门可以共用一个审批房：先看是不是任务审批，再看是不是命令审批。
+    // 只有闸门明确认领的裁决消息才不进池；其余消息照常入池。
+    // 审批房也可能是私聊，不能因为聊天 id 命中审批配置就把正常对话吞掉。
+    this.hub.approval = {
+      tryHandle: (m) => this.taskApproval.tryHandle(m) || this.approval.tryHandle(m),
+    };
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
@@ -149,6 +174,11 @@ export class App {
       primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
       rbExec: o.rbExec,
       approval: this.approval,
+      // 工具只负责“建完要发通知”，发到哪由 App 按 target=origin/room 解析
+      taskApproval: {
+        enabled: this.taskApproval.enabled,
+        notify: (task: Task) => this.notifyTaskApprovalNow(task),
+      },
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
     });
     this.engine = new PiEngine({
@@ -163,6 +193,7 @@ export class App {
     this.scheduler.start();
     this.startReflectionLoop();
     this.startApprovalSweep();
+    this.recoverPendingTaskApprovals();
     this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms taskTick=${this.o.cfg.scheduler.taskTickMs}ms privateWake=${this.o.cfg.scheduler.privateWakeMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
   }
 
@@ -278,6 +309,130 @@ export class App {
     } catch (e) {
       this.log.warn(`审批超时清扫失败：${(e as Error).message}`);
     }
+  }
+
+  // ---------- 任务发布审批 ----------
+
+  /** 任务被 UFA / API 建好后调这里：把审批请求发到原聊天或固定审批房（不阻塞当前对话）。 */
+  notifyTaskApproval(task: Task): void {
+    void this.notifyTaskApprovalNow(task).catch((e) => {
+      this.log.warn(`任务 #${task.id} 审批通知失败：${(e as Error).message}`);
+    });
+  }
+
+  /** 工具/API 要的同步返回值：发出去 true，没目标/发失败 false。 */
+  private async notifyTaskApprovalNow(task: Task): Promise<boolean> {
+    if (task.status !== "pending_approval") return false;
+    const target = this.resolveTaskApprovalTarget(task);
+    if (!target) {
+      this.log.warn(`任务 #${task.id} 没有审批目标：发起聊天找不到，taskApproval.roomId 也没配`);
+      return false;
+    }
+    return this.taskApproval.notify(task, target);
+  }
+
+  /**
+   * target=origin：优先发到任务发起时所在的那个聊天；
+   * 找不到（例如 API/技能建任务没带池）再退回固定审批房。
+   */
+  private resolveTaskApprovalTarget(task: Task): TaskApprovalTarget | null {
+    const ta = this.o.cfg.taskApproval;
+    if ((ta.target ?? "origin") === "origin") {
+      const pool = task.pool_id ? this.store.getPool(task.pool_id) : null;
+      if (pool && pool.platform !== "task" && pool.external_id) {
+        return { platform: pool.platform, chatId: pool.external_id };
+      }
+    }
+    const roomId = String(ta.roomId ?? "").trim();
+    return roomId ? { platform: ta.platform, chatId: roomId } : null;
+  }
+
+  /** 任务已经在 Web 或别处裁决：把飞书里那条待审忘掉，避免之后误批/超时刷屏。 */
+  forgetTaskApproval(taskId: number): void {
+    this.taskApproval.cancel(taskId);
+  }
+
+  /**
+   * 重启后把还停在 pending_approval 的任务重新发一遍。
+   * 进程内没有待审状态，不发的话主人就只能在 Web 里找到它。
+   */
+  private recoverPendingTaskApprovals(): void {
+    if (!this.taskApproval.enabled) return;
+    const now = this.clock.now();
+    const timeoutMs = Math.max(1000, this.o.cfg.taskApproval.timeoutMs || 86_400_000);
+    for (const task of listTasks(this.store, { status: "pending_approval" })) {
+      if (task.created_at + timeoutMs <= now) {
+        const target = this.resolveTaskApprovalTarget(task);
+        void this.timeoutTaskFromChat(task).then((out) => {
+          if (out.text && this.o.cfg.taskApproval.notify !== false && target) {
+            void this.hub.sendSystem(target.platform, target.chatId, out.text);
+          }
+        });
+        continue;
+      }
+      this.notifyTaskApproval(task);
+    }
+  }
+
+  private taskDispatchDeps(): DispatchDeps {
+    return {
+      apiBase: `http://127.0.0.1:${this.o.cfg.api?.port ?? 3738}`,
+      token: resolveApiToken(this.o.cfg),
+      dataDir: this.o.cfg.dataDir,
+      executorBin: this.o.executorBin,
+      sharedDir: sharedDir(this.o.cfg),
+      businessDir: businessDir(this.o.cfg),
+    };
+  }
+
+  /** 审批提示上贴了 OK：补齐文档、启动一次性进程。 */
+  private async approveTaskFromChat(task: Task, by: string): Promise<TaskApprovalOutcome> {
+    const current = getTask(this.store, task.id);
+    if (!current) return { ok: false, text: `#${task.id} 已经不存在，没有执行` };
+    if (current.status !== "pending_approval") {
+      return { ok: false };
+    }
+    appendNote(this.store, current.id, `飞书审批通过（by=${by}）`);
+    try {
+      const deps = this.taskDispatchDeps();
+      writeTaskDoc(this.store, current, {
+        apiBase: deps.apiBase, sharedDir: deps.sharedDir, businessDir: deps.businessDir,
+      });
+      await startTask(this.store, getTask(this.store, current.id)!, deps);
+      return { ok: true, text: `#${current.id}「${taskDisplayName(current)}」已批准，开始执行` };
+    } catch (e) {
+      const message = (e as Error).message;
+      const fresh = getTask(this.store, current.id);
+      if (!fresh || !isRunnerAlive(fresh.runner_pid)) {
+        updateTask(this.store, current.id, {
+          status: "pending_approval", runner_pid: null, runner_started_at: null,
+        });
+      }
+      appendNote(this.store, current.id, `启动失败：${message}`);
+      // 任务退回 pending_approval 后重新发一次提示，主人可以直接重试
+      const retry = getTask(this.store, current.id);
+      if (retry?.status === "pending_approval") this.notifyTaskApproval(retry);
+      return { ok: false, text: `#${current.id} 启动失败：${message}` };
+    }
+  }
+
+  /** 审批提示上贴了 No：任务取消，不执行。 */
+  private async rejectTaskFromChat(task: Task, by: string): Promise<TaskApprovalOutcome> {
+    const current = getTask(this.store, task.id);
+    if (!current) return { ok: false, text: `#${task.id} 已经不存在，没有执行` };
+    if (current.status !== "pending_approval") return { ok: false };
+    updateTask(this.store, current.id, { status: "cancelled" });
+    appendNote(this.store, current.id, `飞书审批拒绝（by=${by}），未执行`);
+    return { ok: true, text: `#${current.id}「${taskDisplayName(current)}」已拒绝，没有执行` };
+  }
+
+  /** 超时 = 拒绝（fail-closed）；任务已经不在待审状态就不回消息。 */
+  private async timeoutTaskFromChat(task: Task): Promise<TaskApprovalOutcome> {
+    const current = getTask(this.store, task.id);
+    if (!current || current.status !== "pending_approval") return { ok: false };
+    updateTask(this.store, current.id, { status: "cancelled" });
+    appendNote(this.store, current.id, "审批超时，按拒绝处理，未执行");
+    return { ok: false, text: `#${current.id}「${taskDisplayName(current)}」审批超时，按拒绝处理，没有执行` };
   }
 
   // ---------- 自省 ----------

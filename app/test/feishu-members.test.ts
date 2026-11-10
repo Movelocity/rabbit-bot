@@ -55,3 +55,28 @@ test("群成员拉取失败：消息照常入池，仍用占位名", async () =>
   assert.equal(m.sender_name, "用户ab12");
   assert.equal(m.text, "hi");
 });
+
+test("飞书表情回复：带上被贴消息 id（reaction_to），审批才能认准是哪一条", async () => {
+  const a = adapter();
+  (a as any).client = {
+    im: { v1: {
+      message: { get: async () => ({ data: { items: [{
+        chat_id: "oc_approval", msg_type: "text",
+        body: { content: JSON.stringify({ text: "【任务待审批】#1 #修复登录" }) },
+        sender: { sender_type: "app", id: "ou_bot" },
+      }] } }) },
+      chat: { get: async () => ({ data: { chat_mode: "group", name: "审批房" } }) },
+    } },
+  };
+  const got = await (a as any).reactionToInbound({
+    operator_type: "user",
+    reaction_type: { emoji_type: "OK" },
+    user_id: { open_id: "ou_owner" },
+    message_id: "om_task_1",
+    action_time: "1792641840000",
+  });
+  assert.equal(got.reaction_to, "om_task_1");
+  assert.equal(got.reply_to, "om_task_1");
+  assert.equal(got.reaction_key, "OK");
+  assert.equal(got.external_chat_id, "oc_approval");
+});

@@ -30,6 +30,8 @@ async function main() {
     handoff: { contextTokenLimit: 1300 },
     llm: { provider: "faux", model: "faux-brain" },
     emoji: { map: { 微笑: { text: "🙂" }, 666: { sticker: "mock_sticker_666" } } },
+    // 模拟器不连真实 IM：任务审批回退到本地状态，不往飞书审批房发
+    taskApproval: { enabled: false },
   });
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const app = new App({ cfg, model, modelRuntime, logger: new Logger(cfg.logDir, true), inMemorySessions: true });

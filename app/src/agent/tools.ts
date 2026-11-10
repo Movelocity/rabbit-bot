@@ -17,6 +17,7 @@ import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
 import type { ApprovalGate } from "../core/approval.ts";
+import type { TaskApprovalGate } from "../core/task-approval.ts";
 import {
   APPROVAL_STATUSES, decideApproval, getApproval, isApprovalStatus, listApprovals,
 } from "../core/approvals.ts";
@@ -54,6 +55,8 @@ export interface ToolDeps {
   primaryPool?: () => string | null;
   /** 宿主机命令审批闸门（只在 exec.shell.mode=host 时被用到） */
   approval?: ApprovalGate;
+  /** 任务发布审批闸门：建完任务发审批提示（原聊天或审批房）；没开就回退 Web 任务页 */
+  taskApproval?: Pick<TaskApprovalGate, "enabled" | "notify">;
   /** 审批裁决后置位 pending tick 时喊一声（UFA 工具用） */
   enqueue?: () => void;
   /** 工具集归属：必填，避免漏传时回退到全量工具 */
@@ -478,7 +481,7 @@ export function createTools(d: ToolDeps) {
 
   const TASK_HELP = [
     "task 的用法（action 必填）：",
-    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at?  建任务（等 Web 审批通过后执行）",
+    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at?  建任务（等审批通过后执行）",
     "  list    status? limit?                                              看任务",
     "  get     id                                                          看一条（带最近 3 条事件）",
     "  updates id limit?                                                   看任务池最近事件（带时间戳）",
@@ -490,7 +493,7 @@ export function createTools(d: ToolDeps) {
     "",
     "create 的 name 必填，格式 #xxx（一眼认得出这是什么任务）；没带 # 会自动补上。",
     "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
-    "create 只登记成 pending_approval，不会立刻执行；要在 Web 任务页改描述并点「通过并执行」后才会启动。",
+    "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
     "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
     "",
     `status 只能是：${TASK_STATUSES.join(" / ")}`,
@@ -511,7 +514,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等 Web 审批通过后才执行）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -595,8 +598,18 @@ export function createTools(d: ToolDeps) {
               status: "pending_approval",
             });
             const view = formatTask(created);
+            const gate = d.taskApproval;
+            let notice = "等待 Web 审批，审批通过后才执行。";
+            if (gate?.enabled) {
+              let sent = false;
+              // 审批通知发失败不影响任务本身：任务仍在，回退到 Web 审批
+              try { sent = await gate.notify(created); } catch { sent = false; }
+              notice = sent
+                ? "已发审批提示，等主人贴 OK 批准后执行。"
+                : "审批消息没发出去（任务仍在 pending_approval），可在 Web 任务页审批。";
+            }
             return txt(
-              `已建任务 #${created.id}「${created.name}」，等待 Web 审批，审批通过后才执行。`,
+              `已建任务 #${created.id}「${created.name}」，${notice}`,
               { ok: true, task: view },
             );
           }

@@ -49,7 +49,7 @@ export class Hub {
 
   /** 入池；返回入库后的消息（重复则 null） */
   ingest(m: InboundMessage): StoredMessage | null {
-    // 审批房的事是系统跟主人之间的事，不该进她的对话
+    // 只有闸门明确认领的审批裁决才不进池；同一聊天里的正常消息照常入池
     if (this.approval?.tryHandle(m)) return null;
     const saved = this.store.insertMessage(m);
     if (!saved) {

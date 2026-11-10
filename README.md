@@ -37,6 +37,7 @@ mock 适配器(模拟) ──┘        │
 | `src/core/emoji.ts` | 表情映射表加载；出站 `[emoji:中文id]` 解析（匹配不上原样输出，普通 `[xxx]` 不处理）；入站 `[名字]` → `[emoji:中文id]` |
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
 | `src/core/tool-call.ts` | 工具调用的判定（`didSend` / `didSkip` / `didPlanAdd` / `didPlanDone`）：二级入口看名字不够，还要看 action |
+| `src/core/approval.ts` / `task-approval.ts` | 宿主机命令审批 / 任务发布审批：审批提示走系统消息、超时按拒绝；只有被闸门认领的裁决动作不进池，同一聊天里的正常文字照常入池（审批房可能就是私聊） |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
 | `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（add/done/list）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
@@ -73,6 +74,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `handoff.contextTokenLimit` | 60000 | 上下文 token 达到即交接 |
 | `limits.dailyLlmCalls` / `dailyTokens` / `turnTimeoutMs` | 300 / 2000000 / 300000 | 每日上限（按 Asia/Shanghai 日期）与单轮超时 |
 | `plans.missedPolicy` / `missedGraceMs` | catchup / 1 天 | 停机错过的触发：补发一次或跳过 |
+| `taskApproval` | enabled=false, target=origin, platform=feishu, roomId="", ownerIds=[], timeoutMs=86400000 | 任务发布审批：target=origin 发到任务发起的聊天，target=room 发到固定审批房；主人贴 OK 才启动。关掉时回退 Web 任务页 |
 | `llm.provider` / `llm.model` / `thinkingLevel` | deepseek / deepseek-flash / off | 任何 pi 支持的 provider/model（`npm run ctl -- models` 查看） |
 | `emoji.table` | `./config/emoji-feishu.json` | 飞书内置表情映射表（中文id/别名 → emoji_type） |
 | `emoji.map` | {} | 覆盖（优先于映射表）：`中文id → {sticker: 飞书file_key}` 或 `{text: "🙂"}` |
@@ -82,6 +84,8 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `runtimeDir` | `~/.config/rabbit-bot/runtime` | 人设 / 提示词 / 话题库的真身目录（`RABBIT_BOT_RUNTIME` 可改），见 app/README「定制它」 |
 
 任务事件（进度、开始、退出、note、完成、失败、阻塞）都不逐条唤醒 UFA；它们先写进任务池，由下一次任务事件 tick 批量带走。审批仍走立即唤醒。
+
+**任务发布不用开 Web**：`taskApproval` 开启后，UFA 建的任务会以一条带目标 / 产出 / 约束 / 验收 / 目录的提示发到任务发起时的聊天（`target=origin`，默认推荐），也可以发到固定审批房（`target=room`）；主人给那条消息贴 OK 表情就启动执行器，贴 No 或超时按拒绝。提示走系统消息、不建池，表情裁决也不入 Agent 的会话上下文；原聊天里的文字聊天照常，所以不会干扰正常对话。固定审批房可以和宿主机命令审批共用（`approval.roomId`）。
 
 **人设默认是简单助手**（`agent.name=小池`），仓库里不含任何人的真身设定：运行时目录有 `persona.md` 就用它，没有就用 `agent.persona` 那一句。想给它性格，照着 `app/config/persona.example.md` 写一份放进运行时目录。
 

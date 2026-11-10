@@ -240,7 +240,8 @@ export class FeishuAdapter implements IMAdapter {
       platform: "feishu", external_chat_id: chatId, pool_kind: kind, pool_title: await this.chatTitle(chatId, kind),
       msg_id: `reaction:${data.message_id}:${userId}:${key}:${data.action_time ?? Date.now()}`,
       sender_id: userId, sender_name: await this.resolveSenderName(chatId, userId, kind), ts: Number(data.action_time) || Date.now(),
-      text: `[表情回复] 给${mine ? "你" : ""}「${quoted}」点了 ${emo}`, reply_to: data.message_id, mentions: [],
+      text: `[表情回复] 给${mine ? "你" : ""}「${quoted}」点了 ${emo}`, reply_to: data.message_id,
+      reaction_to: data.message_id, mentions: [],
       is_mention_me: false, media_type: "reaction", from_self: false, reaction_key: key,
     };
   }
