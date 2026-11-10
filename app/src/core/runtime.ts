@@ -52,6 +52,11 @@ export function filesDir(cfg: Config): string {
   return runtimePath(cfg, "files");
 }
 
+/** 业务地图：对象、关系、动作、术语表；私有数据，只放运行时目录。 */
+export function businessDir(cfg: Config): string {
+  return runtimePath(cfg, "business");
+}
+
 /**
  * host 模式下把 sandbox 里这几个子目录换成指向运行时目录的软链。
  *

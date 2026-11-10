@@ -24,6 +24,7 @@ test("UFA：host + approval=true 时包含 terminal", () => {
     assert.ok(names.includes(name), `UFA 少了 ${name}：${names.join(",")}`);
   }
   assert.ok(!names.includes("write_file"), `UFA 不该有 write_file：${names.join(",")}`);
+  assert.ok(names.includes("map"), `UFA 该有 map：${names.join(",")}`);
 });
 
 test("UFA：docker 模式始终有 terminal；host 无审批时没有", () => {

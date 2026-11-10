@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "types": [
+    { "id": "project", "name": "项目", "description": "一个长期工作目标" },
+    { "id": "repo", "name": "代码仓库", "description": "一个 git 仓库" },
+    { "id": "service", "name": "服务", "description": "可部署的运行单元" },
+    { "id": "env", "name": "环境", "description": "dev / staging / prod" },
+    { "id": "person", "name": "人", "description": "参与项目的人" }
+  ],
+  "objects": [
+    {
+      "id": "project:rabbit-bot",
+      "type": "project",
+      "name": "rabbit-bot",
+      "aliases": ["兔子机器人", "这个 bot"],
+      "description": "个人 IM 聊天与任务 agent",
+      "key": { "kind": "name", "value": "rabbit-bot" },
+      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" }
+    },
+    {
+      "id": "repo:rabbit-bot",
+      "type": "repo",
+      "name": "rabbit-bot",
+      "description": "rabbit-bot 主仓库",
+      "key": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" },
+      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" }
+    },
+    {
+      "id": "service:rabbit-bot-admin",
+      "type": "service",
+      "name": "admin",
+      "aliases": ["管理后台"],
+      "description": "rabbit-bot 的 Web 管理页",
+      "key": { "kind": "name", "value": "rabbit-bot-admin" },
+      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot/app" }
+    },
+    {
+      "id": "service:rabbit-bot-api",
+      "type": "service",
+      "name": "api",
+      "aliases": ["API"],
+      "description": "rabbit-bot 的本地 REST API",
+      "key": { "kind": "name", "value": "rabbit-bot-api" },
+      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot/app/src" }
+    },
+    {
+      "id": "env:prod",
+      "type": "env",
+      "name": "prod",
+      "aliases": ["生产", "老地方"],
+      "description": "生产环境",
+      "key": { "kind": "name", "value": "prod" }
+    },
+    {
+      "id": "env:staging",
+      "type": "env",
+      "name": "staging",
+      "aliases": ["预发"],
+      "description": "预发环境",
+      "key": { "kind": "name", "value": "staging" }
+    },
+    {
+      "id": "person:viking",
+      "type": "person",
+      "name": "viking",
+      "aliases": ["主人"],
+      "description": "项目所有者",
+      "key": { "kind": "name", "value": "viking" }
+    }
+  ]
+}

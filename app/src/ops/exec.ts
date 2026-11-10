@@ -66,6 +66,14 @@ export function writeSandboxFile(cfg: Config, p: string, content: string, root?:
   return { path: p, bytes: sbox(cfg, root).write(p, content) };
 }
 
+/** terminal 的最终超时秒数：UFA 受 ufaMaxTimeoutMs 硬上限约束，WA 最多 600。 */
+export function shellTimeoutSec(profile: "ufa" | "wa", cfg: Config, requested?: number): number {
+  const defaultSec = Math.max(1, Math.floor(cfg.exec.shell.timeoutMs / 1000));
+  const maxSec = profile === "ufa" ? Math.max(1, Math.floor(cfg.exec.shell.ufaMaxTimeoutMs / 1000)) : 600;
+  const base = Number.isFinite(requested) && (requested as number) > 0 ? (requested as number) : defaultSec;
+  return Math.min(maxSec, Math.max(1, Math.floor(base)));
+}
+
 export async function execShell(
   cfg: Config,
   cmd: string,

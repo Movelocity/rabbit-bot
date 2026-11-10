@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   constraints   TEXT    NOT NULL DEFAULT '',
   acceptance    TEXT    NOT NULL DEFAULT '',
   files         TEXT    NOT NULL DEFAULT '[]',
+  context       TEXT    NOT NULL DEFAULT '{}',
   status        TEXT    NOT NULL DEFAULT 'pending',
   stage         TEXT    NOT NULL DEFAULT '',
   worker_id     TEXT,
@@ -205,6 +206,8 @@ export class Store {
     }
     // 任务池（UFA-WA P4）：每条任务对应一个 platform=task 的聊天池；老库补列
     try { this.db.exec("ALTER TABLE tasks ADD COLUMN task_pool_id TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+    // 业务地图上下文（2026-11-10）：任务涉及的对象/关系/禁止项；老库补列
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'"); } catch { /* 已存在 */ }
     // 一次性进程派发（2026-11-09）：工作目录、执行器、会话、runner 进程、任务文档；老库补列
     for (const col of [
       "work_dir TEXT NOT NULL DEFAULT ''",

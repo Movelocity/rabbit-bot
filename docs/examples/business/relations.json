@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "relations": [
+    {
+      "id": "repo_belongs_to_project",
+      "name": "belongs_to",
+      "fromType": "repo",
+      "toType": "project",
+      "kind": "manual",
+      "mapping": {
+        "kind": "manual",
+        "edges": [
+          { "from": "repo:rabbit-bot", "to": "project:rabbit-bot" }
+        ]
+      },
+      "cardinality": "N:1",
+      "direction": "forward",
+      "risk": "low",
+      "semantics": "仓库归属哪个项目"
+    },
+    {
+      "id": "service_belongs_to_project",
+      "name": "belongs_to",
+      "fromType": "service",
+      "toType": "project",
+      "kind": "manual",
+      "mapping": {
+        "kind": "manual",
+        "edges": [
+          { "from": "service:rabbit-bot-admin", "to": "project:rabbit-bot" },
+          { "from": "service:rabbit-bot-api", "to": "project:rabbit-bot" }
+        ]
+      },
+      "cardinality": "N:1",
+      "direction": "forward",
+      "risk": "low",
+      "semantics": "服务属于哪个项目"
+    },
+    {
+      "id": "service_deploys_to_env",
+      "name": "deploys_to",
+      "fromType": "service",
+      "toType": "env",
+      "kind": "file",
+      "mapping": {
+        "kind": "file",
+        "file": "deploy/{env}.json",
+        "select": "services[]"
+      },
+      "cardinality": "N:N",
+      "direction": "forward",
+      "risk": "high",
+      "semantics": "服务当前部署在哪些环境；改服务前先看这条，发布前用 map impact 看影响面"
+    },
+    {
+      "id": "person_owns_project",
+      "name": "owns",
+      "fromType": "person",
+      "toType": "project",
+      "kind": "manual",
+      "mapping": {
+        "kind": "manual",
+        "edges": [
+          { "from": "person:viking", "to": "project:rabbit-bot" }
+        ]
+      },
+      "cardinality": "N:1",
+      "direction": "forward",
+      "risk": "low",
+      "semantics": "谁负责这个项目"
+    }
+  ]
+}

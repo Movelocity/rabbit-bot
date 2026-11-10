@@ -14,7 +14,7 @@
  * mode="host" 是**无隔离**的本地开发模式：命令直接在本机 bash 里跑，cwd 是沙盒目录。
  * 模型能看到 ~/.config/rabbit-bot/env 和任意宿主路径。只在 config/local.json 里开。
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -86,6 +86,56 @@ function run(bin: string, args: string[], timeoutMs: number, cwd?: string, env?:
         });
       },
     );
+  });
+}
+
+/**
+ * 宿主模式专用：命令放进独立进程组，超时杀整组。
+ *
+ * execFile 的 timeout 只杀直接子进程（bash），它拉起的 npm/pytest 会继续跑成孤儿；
+ * 5 秒上限就会变成「返回了但后台还在写」。这里用 detached + kill(-pid) 把整组带走。
+ */
+function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, env?: NodeJS.ProcessEnv): Promise<RawResult> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(bin, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      resolve({ code: 1, out: "", err: (e as Error).message });
+      return;
+    }
+    const limit = 1 << 20;
+    let out = "";
+    let err = "";
+    let timedOut = false;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const append = (cur: string, chunk: Buffer | string): string =>
+      cur.length >= limit ? cur : (cur + String(chunk)).slice(0, limit);
+    const finish = (code: number, signal?: string) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, out, err, killed: timedOut || signal === "SIGKILL", signal });
+    };
+    child.stdout?.on("data", (c) => { out = append(out, c); });
+    child.stderr?.on("data", (c) => { err = append(err, c); });
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code: 1, out, err: err || (e as Error).message });
+    });
+    child.on("close", (code, signal) => finish(code ?? 1, signal ?? undefined));
+    timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        try { child.kill("SIGKILL"); } catch { /* 已经退出 */ }
+      }
+    }, timeoutMs);
   });
 }
 
@@ -230,7 +280,7 @@ function hostEnv(opts: ShellRunnerOptions, extra?: Record<string, string>): Node
 export async function runOnHost(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
   const trimmed = checkCmd(cmd);
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
-  const r = await run("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
+  const r = await runGroup("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
   const timedOut = r.killed === true || r.signal === "SIGKILL";
   return {
     ok: r.code === 0 && !timedOut,

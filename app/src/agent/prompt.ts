@@ -7,6 +7,7 @@ import { localDay } from "../core/tide.ts";
 import { isOwnerId } from "../core/owners.ts";
 import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
+import { businessIndexLine } from "../ops/business-map.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[]): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
@@ -18,6 +19,7 @@ export function systemPrompt(cfg: Config, emojis: string[]): string {
     emoji_block: emojis.length
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",
+    business_block: businessIndexLine(cfg),
   });
 }
 

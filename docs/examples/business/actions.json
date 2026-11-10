@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "id": "deploy",
+      "name": "发布",
+      "appliesTo": ["service"],
+      "risk": "high",
+      "requiresRelations": ["service_deploys_to_env"],
+      "description": "把服务发布到环境；必须先看影响面并拿到审批"
+    }
+  ]
+}

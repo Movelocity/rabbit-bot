@@ -91,6 +91,8 @@ export interface Config {
       image: string;
       network: "bridge" | "none";
       timeoutMs: number;
+      /** UFA 的 terminal 硬上限；超过就失败，逼长活写任务交给 WA */
+      ufaMaxTimeoutMs: number;
       maxOutputChars: number;
       /** 免审命令名单：只放「一个命令只做一件事、碰不到本地文件」的工具 */
       safeProgs?: string[];
@@ -232,7 +234,13 @@ export function validateConfig(cfg: Config): void {
   pos(cfg.exec.maxFiles, "exec.maxFiles");
   const mode = cfg.exec.shell.mode;
   if (mode !== "docker" && mode !== "host") throw new Error('config: exec.shell.mode 只能是 "docker" 或 "host"');
-  if (cfg.exec.shell.enabled) pos(cfg.exec.shell.timeoutMs, "exec.shell.timeoutMs");
+  if (cfg.exec.shell.enabled) {
+    pos(cfg.exec.shell.timeoutMs, "exec.shell.timeoutMs");
+    pos(cfg.exec.shell.ufaMaxTimeoutMs, "exec.shell.ufaMaxTimeoutMs");
+    if (cfg.exec.shell.ufaMaxTimeoutMs > 600_000) {
+      throw new Error("config: exec.shell.ufaMaxTimeoutMs 不能超过 600000");
+    }
+  }
   if (cfg.api?.enabled) {
     const p = cfg.api.port;
     if (!Number.isInteger(p) || p < 0 || p > 65535) throw new Error("config: api.port 必须是 0~65535 的整数（0 = 随机端口）");

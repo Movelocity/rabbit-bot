@@ -10,9 +10,9 @@ import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
-import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell } from "../ops/exec.ts";
+import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
-import { sharedDir } from "../core/runtime.ts";
+import { businessDir, sharedDir } from "../core/runtime.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -34,6 +34,7 @@ import {
 } from "../core/dispatch.ts";
 import { resolveApiToken } from "../api-token.ts";
 import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
+import { findPaths, formatPath, impactOf, loadBusinessMap, renderIndex, resolveObjects, showObject } from "../ops/business-map.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
 
@@ -70,6 +71,7 @@ function defaultDispatchDeps(cfg: Config): DispatchDeps {
     token: resolveApiToken(cfg),
     dataDir: cfg.dataDir,
     sharedDir: sharedDir(cfg),
+    businessDir: businessDir(cfg),
     captureMs: DEFAULT_CAPTURE_MS,
   };
 }
@@ -509,7 +511,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / start_at；建完是 pending_approval，等 Web 审批通过后才执行）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等 Web 审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -526,6 +528,9 @@ export function createTools(d: ToolDeps) {
       constraints: Type.Optional(Type.String({ description: "create 用：不能碰什么、必须遵守什么" })),
       acceptance: Type.Optional(Type.String({ description: "create 用：怎么算完成" })),
       files: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "create 用：相关文件路径" })),
+      objects: Type.Optional(Type.Array(Type.String(), { description: "create 用：业务地图对象 id（先用 map resolve）" })),
+      relations: Type.Optional(Type.Array(Type.String(), { description: "create 用：必须关注/遵守的关系 id" })),
+      forbidden: Type.Optional(Type.Array(Type.String(), { description: "create 用：不能碰的对象/关系 id" })),
       start_at: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "create 用：ISO 时间或毫秒时间戳，默认现在" })),
       status: Type.Optional(Type.String({ description: `list、status 用：${TASK_STATUSES.join(" / ")}` })),
       limit: Type.Optional(Type.Number({ description: "list 用：最多几条" })),
@@ -557,6 +562,22 @@ export function createTools(d: ToolDeps) {
             if (!poolId) return txt("建任务需要知道是哪个池，这一轮没有对应的池。", { ok: false });
             const startAt = parseStartAt(p.start_at);
             if (startAt === null) return txt("start_at 看不懂：给 ISO 时间或毫秒时间戳。", { ok: false });
+            const context = {
+              objects: Array.isArray(p.objects) ? p.objects : [],
+              relations: Array.isArray(p.relations) ? p.relations : [],
+              forbidden: Array.isArray(p.forbidden) ? p.forbidden : [],
+            };
+            if (context.objects.length || context.relations.length || context.forbidden.length) {
+              const map = loadBusinessMap(d.cfg);
+              if (!map) {
+                return txt("还没有业务地图：先在 runtime/business/ 下放 objects.json / relations.json，再给任务带 objects。", { ok: false });
+              }
+              const bad = [...new Set([...context.objects, ...context.relations, ...context.forbidden])]
+                .filter((id) => !map.byId.has(id) && !map.relationsById.has(id));
+              if (bad.length) {
+                return txt(`业务地图里没有这些 id：${bad.join(", ")}。先用 map index / resolve 查。`, { ok: false });
+              }
+            }
             const created = createTask(d.store, {
               userId: d.store.lastUserId(poolId) ?? "ufa",
               poolId,
@@ -566,6 +587,7 @@ export function createTools(d: ToolDeps) {
               constraints: p.constraints,
               acceptance: p.acceptance,
               files: p.files,
+              context,
               start_at: startAt,
               work_dir: workDir,
               executor,
@@ -748,6 +770,12 @@ export function createTools(d: ToolDeps) {
     },
   });
 
+  // UFA 的硬上限：默认 5 秒，超过直接失败，逼长活写成任务交给 WA
+  const shellMaxSec = d.profile === "ufa"
+    ? Math.max(1, Math.floor(d.cfg.exec.shell.ufaMaxTimeoutMs / 1000))
+    : 600;
+  const shellDefaultForProfile = shellTimeoutSec(d.profile, d.cfg);
+
   const runShellTool = defineTool({
     name: "terminal",
     label: "terminal",
@@ -757,11 +785,12 @@ export function createTools(d: ToolDeps) {
         ? "在**宿主机**上跑一条命令（不再是容器，碰得到真实文件）。写文件、建目录、跑脚本都走它；"
           + "会改状态的命令要先过主人的审批，审批没过就不会执行。"
         : "在沙盒容器里跑一条命令（碰不到宿主文件系统，/work 可写，内置 rg）。")
-      + "用来列目录（ls、rg --files）、搜内容、算数、批量处理；默认 30 秒，可放到 600 秒（构建、装包、转录这类长活别拆碎）。"
+      + `用来列目录（ls、rg --files）、搜内容、算数、批量处理；默认 ${shellDefaultForProfile} 秒，最多 ${shellMaxSec} 秒`
+      + (d.profile === "ufa" ? "——长活写成任务交给 WA，别在这里磨。" : "（构建、装包、转录这类长活别拆碎）。")
       + "输出太大时会截断并把全文落盘，回话里带路径。只读文件用 read_file 更快。",
     parameters: Type.Object({
       cmd: Type.String({ description: "完整命令行，例如 rg -n '关键词' topics" }),
-      timeout_sec: Type.Optional(Type.Number({ description: "超时秒数，默认按配置（通常 30），最多 600" })),
+      timeout_sec: Type.Optional(Type.Number({ description: `超时秒数；UFA 最多 ${shellMaxSec}，WA 最多 600` })),
       cwd: Type.Optional(Type.String({ description: "在这条命令的工作目录里跑（绝对路径）；不填就是沙盒目录" })),
     }),
     async execute(_id, p) {
@@ -795,7 +824,8 @@ export function createTools(d: ToolDeps) {
         const t0 = Date.now();
         // 输出超限时落盘，别让模型只看到开头几百字还以为命令没跑完整
         const overflowFile = path.join(d.cfg.dataDir, "tool-output", `term-${Date.now()}.log`);
-        const r = await execShell(d.cfg, cmd, p.timeout_sec, {
+        const timeoutSec = shellTimeoutSec(d.profile, d.cfg, p.timeout_sec);
+        const r = await execShell(d.cfg, cmd, timeoutSec, {
           cwd: p.cwd ? String(p.cwd) : undefined,
           overflowFile,
         });
@@ -807,6 +837,101 @@ export function createTools(d: ToolDeps) {
         return txt(out || `（命令跑完了，没有输出；退出码 ${r.code}）`, { ok: r.ok, code: r.code });
       } catch (e) {
         return txt(`跑不了：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  const MAP_HELP = [
+    "map 的用法（只读）：",
+    "  index                    看业务地图骨架（对象类型 / 关系 / 数量）",
+    "  show <id>                看一个对象和它的直接关系",
+    "  resolve <说法>           把「那个项目」这类说法解析成候选对象",
+    "  path <from> <to>         找两个对象之间的关系路径",
+    "  impact <id>              看改这个对象会影响谁",
+    "  help                     看这份说明",
+  ].join("\n");
+
+  const mapTool = defineTool({
+    name: "map",
+    label: "map",
+    executionMode: "sequential",
+    description:
+      "业务地图（只读）：先看 index 骨架，再 show / resolve / path / impact 逐层下钻。"
+      + "关系是显式声明的，不要猜；查不到就说查不到，别编关系。",
+    parameters: Type.Object({
+      action: Type.String({ description: "index / show / resolve / path / impact / help" }),
+      id: Type.Optional(Type.String({ description: "show、impact 用：对象 id" })),
+      term: Type.Optional(Type.String({ description: "resolve 用：用户说的词或别名" })),
+      from: Type.Optional(Type.String({ description: "path 用：起点对象 id" })),
+      to: Type.Optional(Type.String({ description: "path 用：终点对象 id" })),
+      depth: Type.Optional(Type.Number({ description: "path/impact 用：最大深度，path 默认 4，impact 默认 3" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        if (action === "help") return txt(MAP_HELP, { ok: true });
+        const map = loadBusinessMap(d.cfg);
+        if (!map) {
+          return txt("还没有业务地图：在 runtime/business/ 下放 objects.json / relations.json 后再查。", { ok: false });
+        }
+        switch (action) {
+          case "index":
+            return txt(renderIndex(map), {
+              ok: true, types: map.types.length, relations: map.relations.length, objects: map.objects.length,
+            });
+          case "show": {
+            if (!p.id?.trim()) return txt("show 要 id（对象 id 或 resolve 出来的 id）。", { ok: false });
+            let view = showObject(map, p.id.trim());
+            if (!view) {
+              const hits = resolveObjects(map, p.id);
+              if (hits.length === 1) view = showObject(map, hits[0].object.id);
+              if (!view) {
+                const list = hits.map((h) => `${h.object.id}（${h.object.name}，${h.reason}）`).join("\n");
+                return txt(hits.length ? `没有精确的 ${p.id}，候选：\n${list}` : `地图里没有 ${p.id}。`, { ok: false });
+              }
+            }
+            const lines = [`${view.object.id}（${view.object.name}，${view.object.type}）`];
+            if (view.object.description) lines.push(view.object.description);
+            if (view.object.aliases?.length) lines.push(`别名：${view.object.aliases.join(" / ")}`);
+            for (const n of view.outgoing) {
+              lines.push(`→ ${n.relationName} → ${n.other.id}（${n.other.name}）${n.risk === "high" ? " [high]" : ""}`);
+            }
+            for (const n of view.incoming) {
+              lines.push(`← ${n.relationName} ← ${n.other.id}（${n.other.name}）${n.risk === "high" ? " [high]" : ""}`);
+            }
+            return txt(lines.join("\n"), { ok: true, object: view.object.id });
+          }
+          case "resolve": {
+            if (!p.term?.trim()) return txt("resolve 要 term：用户说的词或别名。", { ok: false });
+            const hits = resolveObjects(map, p.term);
+            if (!hits.length) return txt(`没找到「${p.term}」。用 map index 看有哪些对象。`, { ok: true, count: 0 });
+            return txt(
+              hits.map((h) => `${h.object.id}（${h.object.name}，${h.object.type}；${h.reason}）`).join("\n"),
+              { ok: true, count: hits.length, hits: hits.map((h) => h.object.id) },
+            );
+          }
+          case "path": {
+            if (!p.from?.trim() || !p.to?.trim()) return txt("path 要 from 和 to（对象 id）。", { ok: false });
+            const paths = findPaths(map, p.from.trim(), p.to.trim(), p.depth ?? 4);
+            if (!paths.length) {
+              return txt(`没找到 ${p.from} → ${p.to} 的路径（也可能是没数据，不是没关系）。`, { ok: true, count: 0 });
+            }
+            return txt(paths.map((x) => formatPath(map, x)).join("\n"), { ok: true, count: paths.length });
+          }
+          case "impact": {
+            if (!p.id?.trim()) return txt("impact 要 id（对象 id）。", { ok: false });
+            const hits = impactOf(map, p.id.trim(), p.depth ?? 3);
+            if (!hits.length) return txt(`没有对象依赖 ${p.id}。`, { ok: true, count: 0 });
+            return txt(
+              hits.map((h) => `${h.object.id}（${h.object.name}）← ${h.relation}（深度 ${h.depth}）`).join("\n"),
+              { ok: true, count: hits.length },
+            );
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${MAP_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`业务地图有问题：${(e as Error).message}`, { ok: false });
       }
     },
   });
@@ -880,7 +1005,7 @@ export function createTools(d: ToolDeps) {
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   // UFA 只读 + 任务面板：不写文件（交接走 tasks 表），terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, plan, approval, task, worker, readFile,
+    chat, memory, plan, approval, task, worker, readFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

@@ -112,6 +112,7 @@
       "container": "rabbit-bot-sbx",
       "image": "rabbit-bot-sandbox:latest",
       "timeoutMs": 10000,
+      "ufaMaxTimeoutMs": 5000,
       "maxOutputChars": 8000,
       "safeProgs": [
         "bucket",

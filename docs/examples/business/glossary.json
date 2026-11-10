@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "terms": [
+    { "term": "老地方", "objectId": "env:prod", "note": "他说的老地方一般指生产" },
+    { "term": "管理后台", "objectId": "service:rabbit-bot-admin" }
+  ]
+}

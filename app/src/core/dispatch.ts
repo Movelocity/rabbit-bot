@@ -17,6 +17,7 @@ import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
 import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
+import { renderTaskContextFromDir } from "../ops/business-map.ts";
 
 export const MIMO_BIN = "/Users/viking/.mimocode/bin/mimo";
 export const DEFAULT_CAPTURE_MS = 3000;
@@ -31,6 +32,8 @@ export interface DispatchDeps {
   dataDir?: string;
   /** worker 汇报文件落点（宿主绝对路径），作为 RB_SHARED_DIR 交给执行器 */
   sharedDir?: string;
+  /** 业务地图目录；传了才会在任务文档里写“业务上下文” */
+  businessDir?: string;
   /** 测试注入：替换 opencode/mimo 可执行文件 */
   executorBin?: string;
   /** 启动后多少毫秒内没抓到 sessionID 就放弃（默认 3000） */
@@ -62,12 +65,13 @@ export function taskDocPath(task: Pick<Task, "id" | "work_dir">): string {
 }
 
 /** 任务文档：人/执行器都能直接照着做，更新方式用 curl 写死，token 只引用环境变量。 */
-export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string } = {}): string {
+export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string } = {}): string {
   const id = task.id;
   const executor = task.executor || "opencode";
   const workerId = `${executor}-${id}`;
   const apiBase = opts.apiBase || "http://127.0.0.1:3738";
   const shared = String(opts.sharedDir ?? "").trim();
+  const business = renderTaskContextFromDir(opts.businessDir, task.context);
   const files = parseFiles(task.files);
   const field = (label: string, value: string) => `- ${label}：${value || "（未填写）"}`;
 
@@ -92,6 +96,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     "## 工作目录",
     `\`${task.work_dir}\``,
     "",
+    ...(business ? [business, ""] : []),
     ...(shared ? [
       "## 汇报文件",
       "",
@@ -157,7 +162,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
 }
 
 /** 写任务文档并回填 doc_path；目录不存在就建。返回绝对路径。 */
-export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string; sharedDir?: string } = {}): string {
+export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string } = {}): string {
   const workDir = String(task.work_dir ?? "").trim();
   if (!workDir) throw new Error("任务没有 work_dir，不能写任务文档");
   if (!path.isAbsolute(workDir)) throw new Error(`work_dir 必须是绝对路径：${workDir}`);
@@ -253,7 +258,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   // 文档缺失就补一份（dispatch 正常路径会先写，这里兜底显式 start/resume）
   let docPath = fresh.doc_path && fs.existsSync(fresh.doc_path) ? fresh.doc_path : "";
-  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase, sharedDir: opts.sharedDir });
+  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase, sharedDir: opts.sharedDir, businessDir: opts.businessDir });
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
   const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);

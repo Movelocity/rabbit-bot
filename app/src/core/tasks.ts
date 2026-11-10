@@ -24,6 +24,8 @@ export interface Task {
   acceptance: string;
   /** JSON 数组字符串，关联文件 */
   files: string;
+  /** 业务地图上下文：{ objects, relations, forbidden } 的 JSON 字符串 */
+  context: string;
   status: TaskStatus;
   stage: string;
   /** 领到这条任务的 worker；没被领过是 null */
@@ -54,6 +56,12 @@ export interface Task {
   updated_at: number;
 }
 
+export interface TaskContext {
+  objects?: string[];
+  relations?: string[];
+  forbidden?: string[];
+}
+
 export interface CreateTaskInput extends Partial<Pick<Task,
   "deliverable" | "constraints" | "acceptance" | "status" | "stage" | "note" | "result" | "artifact" | "start_at" | "end_at"
   | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at" | "doc_path"
@@ -63,6 +71,7 @@ export interface CreateTaskInput extends Partial<Pick<Task,
   name: string;
   goal: string;
   files?: string | string[] | null;
+  context?: TaskContext | string | null;
 }
 
 export interface TaskFilter {
@@ -71,6 +80,36 @@ export interface TaskFilter {
   /** start_at <= dueBefore 的任务 */
   dueBefore?: number;
   limit?: number;
+}
+
+function cleanIdList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return [...new Set(v.map((x) => String(x ?? "").trim()).filter(Boolean))].slice(0, 50);
+}
+
+/** 规范成 { objects, relations, forbidden } 三个字符串数组，空字段也保留。 */
+export function normalizeTaskContext(v: TaskContext | string | null | undefined): string {
+  let src: TaskContext = {};
+  if (typeof v === "string") {
+    try { src = JSON.parse(v) ?? {}; } catch { src = {}; }
+  } else if (v && typeof v === "object") {
+    src = v;
+  }
+  return JSON.stringify({
+    objects: cleanIdList(src.objects),
+    relations: cleanIdList(src.relations),
+    forbidden: cleanIdList(src.forbidden),
+  });
+}
+
+export function parseTaskContext(raw: string | null | undefined): Required<TaskContext> {
+  let src: TaskContext = {};
+  try { src = JSON.parse(String(raw ?? "{}")) ?? {}; } catch { src = {}; }
+  return {
+    objects: cleanIdList(src.objects),
+    relations: cleanIdList(src.relations),
+    forbidden: cleanIdList(src.forbidden),
+  };
 }
 
 function normalizeFiles(files: CreateTaskInput["files"]): string {
@@ -126,12 +165,12 @@ export function createTask(store: Store, t: CreateTaskInput): Task {
   const startAt = Number.isFinite(t.start_at) ? Number(t.start_at) : now;
   const status: TaskStatus = t.status ?? "pending";
   const r = store.db.prepare(`INSERT INTO tasks(
-    user_id,pool_id,name,goal,deliverable,constraints,acceptance,files,status,stage,note,result,artifact,
+    user_id,pool_id,name,goal,deliverable,constraints,acceptance,files,context,status,stage,note,result,artifact,
     start_at,end_at,work_dir,executor,model,session_id,runner_pid,runner_started_at,doc_path,created_at,updated_at
-  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     t.userId, t.poolId, name, goal,
     t.deliverable ?? "", t.constraints ?? "", t.acceptance ?? "",
-    normalizeFiles(t.files), status, t.stage ?? "", t.note ?? "", t.result ?? "", t.artifact ?? "",
+    normalizeFiles(t.files), normalizeTaskContext(t.context), status, t.stage ?? "", t.note ?? "", t.result ?? "", t.artifact ?? "",
     startAt, t.end_at ?? null,
     String(t.work_dir ?? ""), String(t.executor ?? "opencode") || "opencode", String(t.model ?? ""),
     String(t.session_id ?? ""), t.runner_pid ?? null, t.runner_started_at ?? null, String(t.doc_path ?? ""),
@@ -165,13 +204,13 @@ export function listTasks(store: Store, filter: TaskFilter = {}): Task[] {
 }
 
 export type TaskPatch = Partial<Pick<Task,
-  "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files"
+  "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files" | "context"
   | "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
   | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at" | "doc_path"
 >>;
 
 const PATCH_KEYS = [
-  "name", "goal", "deliverable", "constraints", "acceptance", "files",
+  "name", "goal", "deliverable", "constraints", "acceptance", "files", "context",
   "status", "stage", "worker_id", "claimed_at", "lease_until", "attempt", "note", "result", "artifact", "end_at",
   "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at", "doc_path",
 ] as const;
@@ -183,7 +222,9 @@ export function updateTask(store: Store, id: number, patch: TaskPatch): Task {
   const sets: string[] = [];
   const args: any[] = [];
   for (const key of PATCH_KEYS) {
-    if (patch[key] !== undefined) { sets.push(`${key}=?`); args.push(patch[key]); }
+    if (patch[key] === undefined) continue;
+    sets.push(`${key}=?`);
+    args.push(key === "context" ? normalizeTaskContext(patch.context) : patch[key]);
   }
   sets.push("updated_at=?");
   args.push(Date.now(), id);
