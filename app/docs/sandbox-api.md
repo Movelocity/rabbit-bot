@@ -46,6 +46,8 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_URL/v1/pools"
 | PATCH | `/v1/plans/:id` `{status}` | `plan-update` |
 | GET | `/v1/memories?user=u1&pool=p1&limit=20` | `mem-search` |
 | POST | `/v1/memories` `{user,content,pool,kind,scope,from,until,supersede}` | `mem-add`（**只给运维**）|
+| GET | `/v1/business` | —（业务地图快照：types/objects/relations/edges/actions/terms） |
+| PUT | `/v1/business` `{version,types,objects,relations,edges,actions,terms}` | —（WA 全量替换业务地图；先 GET 再 PUT） |
 | GET | `/v1/images?source=media\|inbox\|all&page=1&size=20` | `img-list` |
 | GET | `/v1/images/file?path=media/x.jpg` | `img-get`（下载到 /work） |
 | GET | `/v1/web/search?q=…&count=6&content=1` | `web-search` |

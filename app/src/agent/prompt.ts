@@ -7,9 +7,10 @@ import { localDay } from "../core/tide.ts";
 import { isOwnerId } from "../core/owners.ts";
 import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
-import { businessIndexLine } from "../ops/business-map.ts";
+import { businessIndexLine, businessIndexLineFromDir } from "../ops/business-map.ts";
+import { businessDir } from "../core/runtime.ts";
 
-export function systemPrompt(cfg: Config, emojis: string[]): string {
+export function systemPrompt(cfg: Config, emojis: string[], store?: Store): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
   // 模型把 key=value 当状态，把「你不要…」当建议——同一个要求，写成参数执行率明显更高。
   // 文案本身在 config/prompt/system.md，改它不用动这里。
@@ -19,7 +20,7 @@ export function systemPrompt(cfg: Config, emojis: string[]): string {
     emoji_block: emojis.length
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",
-    business_block: businessIndexLine(cfg),
+    business_block: store ? businessIndexLine(store) : businessIndexLineFromDir(businessDir(cfg)),
   });
 }
 

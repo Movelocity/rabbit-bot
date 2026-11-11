@@ -3,6 +3,8 @@
 > 定位：把 BKN《本体驱动的业务关系组织》里可复现的部分裁小，落到 rabbit-bot 的 UFA/WA 上。
 > 前置阅读：`docs/PLAN-UFA-WA-DSH-ALIGNMENT.md`（UFA/WA 分层）、`docs/ARCH-UFA-WA.md`（行为）。
 > 状态：P0 已实施（2026-11-10），`npm run typecheck` + 504 tests 全绿。待拍板项见第 9 节。
+>
+> 2026-11-11 更新：存储已从 `runtime/business/*.json` 迁到 SQLite（`business_*` 表）。运行时只读 Store；写入走 `GET/PUT /v1/business` 全量快照；旧 JSON 只在首次启动导入一次。下文关于文件、mapping、deploy 文件的内容保留作历史设计，当前字段以技能库 `_shared/business-map-schema.md` 为准。
 
 ---
 

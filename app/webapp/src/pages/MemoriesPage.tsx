@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
 import { formatTs, friendlyError } from "../lib/format.ts";
-import type { Memory, MemoryList } from "../lib/types.ts";
+import type { Memory, MemoryList, MemoryTrace } from "../lib/types.ts";
+import { Drawer } from "../components/Drawer.tsx";
 import {
   Badge,
   Button,
@@ -55,6 +56,8 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [tracingId, setTracingId] = useState<number | null>(null);
+  const [trace, setTrace] = useState<MemoryTrace | null>(null);
   const [localTick, setLocalTick] = useState(0);
 
   useEffect(() => {
@@ -153,6 +156,25 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
       setStatus({ text: `删除失败：${friendlyError(e)}`, error: true });
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const showTrace = async (m: Memory) => {
+    const owner = m.user_id || user.trim();
+    if (!owner) {
+      setStatus({ text: "这条记忆缺少 user id，无法回溯来源。", error: true });
+      return;
+    }
+    setTracingId(m.id);
+    try {
+      const data = await request<MemoryTrace>(
+        `/v1/memories/${m.id}/trace?user=${encodeURIComponent(owner)}&before=5&after=5`,
+      );
+      setTrace(data);
+    } catch (e) {
+      setStatus({ text: `回溯失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setTracingId(null);
     }
   };
 
@@ -261,6 +283,16 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
                   </>
                 ) : (
                   <>
+                    {m.source_seq_start ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={tracingId === m.id}
+                        onClick={() => void showTrace(m)}
+                      >
+                        {tracingId === m.id ? "回溯中…" : "来源"}
+                      </Button>
+                    ) : null}
                     <Button variant="ghost" size="sm" onClick={() => startEdit(m)}>
                       编辑
                     </Button>
@@ -317,6 +349,38 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
           />
         </div>
       )}
+
+      {trace ? (
+        <Drawer title={`记忆 #${trace.id} 的来源`} onClose={() => setTrace(null)}>
+          <div className="mb-3 rounded-[14px] border border-border bg-surface2 px-3 py-2.5 text-sm">
+            <div className="font-semibold">{trace.content}</div>
+            <div className="mt-1 text-xs text-muted">
+              {trace.source
+                ? `来源 ${trace.source.pool} · #${trace.source.from}${trace.source.to !== trace.source.from ? `-${trace.source.to}` : ""}`
+                : "没有来源消息索引"}
+            </div>
+          </div>
+          {trace.note ? <p className="text-sm text-muted">{trace.note}</p> : null}
+          <div className="grid gap-2">
+            {trace.messages.map((msg) => (
+              <div
+                key={msg.seq}
+                className={`rounded-[12px] border px-3 py-2 text-sm ${
+                  msg.anchor ? "border-accent bg-accent-soft" : "border-border bg-surface"
+                }`}
+              >
+                <div className="mb-1 flex flex-wrap items-center gap-x-2 text-xs text-muted">
+                  <span className="font-mono">#{msg.seq}</span>
+                  <span>{msg.local}</span>
+                  <span className={msg.from_self ? "text-accent" : ""}>{msg.from_self ? "我" : msg.sender}</span>
+                  {msg.anchor ? <Badge variant="done">来源</Badge> : null}
+                </div>
+                <div className="whitespace-pre-wrap break-words">{msg.text}</div>
+              </div>
+            ))}
+          </div>
+        </Drawer>
+      ) : null}
     </div>
   );
 }

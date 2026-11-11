@@ -132,6 +132,29 @@ export interface Memory {
   user_id?: string;
   source_pool?: string;
   created_at?: number;
+  source_seq_start?: number | null;
+  source_seq_end?: number | null;
+}
+
+export interface MemoryTraceMessage {
+  seq: number;
+  ts: number;
+  local: string;
+  from_self: boolean;
+  sender: string;
+  user_id: string | null;
+  text: string;
+  anchor: boolean;
+}
+
+export interface MemoryTrace {
+  id: number;
+  user_id: string;
+  kind: string;
+  content: string;
+  source: { pool_id: string; pool: string; from: number; to: number } | null;
+  note?: string;
+  messages: MemoryTraceMessage[];
 }
 
 export interface MemoryList {
@@ -245,7 +268,7 @@ export interface BusinessRelation {
   direction?: string;
   risk?: "low" | "medium" | "high";
   semantics?: string;
-  mapping: { kind?: string; file?: string; select?: string };
+  mapping?: { kind?: string; file?: string; select?: string };
   edge_count?: number;
 }
 

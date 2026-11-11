@@ -37,6 +37,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Plan, StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
 import { businessDir, runtimeDir, sharedDir } from "./core/runtime.ts";
+import { ensureBusinessSeeded } from "./ops/business-map.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -126,6 +127,8 @@ export class App {
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: Wake | null = null;
+  /** 本轮读进来的未读消息：记记忆时绑来源 seq，唤醒结束即清空 */
+  private currentUnread: StoredMessage[] = [];
   /** 本轮是否决定不回（chat action=skip）；每轮唤醒重置 */
   private silenceReason: string | null = null;
   /** 本轮 send 成功次数 */
@@ -139,6 +142,8 @@ export class App {
     this.log = o.logger ?? new Logger(cfg.logDir);
     this.store = new Store(o.dbFile ?? path.join(cfg.dataDir, "rabbit-bot.db"));
     this.store.backfillUsageEventsFromWakeLog();
+    // 业务地图：老库第一次启动从 runtime/business 文件导一次，之后只读 SQLite
+    try { ensureBusinessSeeded(this.store, businessDir(cfg)); } catch (e) { this.log.warn(`业务地图导入失败：${(e as Error).message}`); }
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
@@ -183,6 +188,7 @@ export class App {
       profile: "ufa",
       readRoot: runtimeDir(cfg),
       currentWake: () => this.activeWake,
+      currentUnread: () => this.currentUnread,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
       primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
@@ -196,7 +202,7 @@ export class App {
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
     });
     this.engine = new PiEngine({
-      cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds()),
+      cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds(), this.store),
       model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions,
       onUsage: (u) => this.store.addUsageEvent({ ...u, source: "llm" }),
     });
@@ -781,6 +787,7 @@ export class App {
   /** 唤醒处理：纯代码决定要不要调用 LLM；真正需要时才调用 pi。 */
   async handleWake(w: Wake): Promise<void> {
     this.activeWake = w;
+    this.currentUnread = [];
     this.silenceReason = null;
     this.sendsThisTurn = 0;
     try {
@@ -791,6 +798,7 @@ export class App {
       await this.notifySys("crash", this.errorText((e as Error).message)).catch(() => {});
     } finally {
       this.activeWake = null;
+      this.currentUnread = [];
       // 终态任务池读完就收起来：不参与唤醒和默认列表，历史仍可按需查
       try { archiveSettledTaskPools(this.store); } catch (e) { this.log.warn(`任务池归档失败：${(e as Error).message}`); }
     }
@@ -845,6 +853,7 @@ export class App {
     const plans: Plan[] = w.planFires.map((f) => this.store.getPlan(f.planId)).filter((p): p is Plan => !!p);
     const cursorsBefore = new Map(this.store.poolsWithUnread().map((p) => [p, this.store.getCursor(p)]));
     const unread = this.hub.takeUnread();
+    this.currentUnread = unread;
     const proactive = w.proactive ?? [];
     if (!unread.length && !plans.length && !proactive.length) return finish("skipped:nothing-new");
 

@@ -59,7 +59,10 @@ CREATE TABLE IF NOT EXISTS memories (
   -- 时间维度：一条记忆说的是「什么时候的事」，不只是「什么时候记下的」
   valid_from INTEGER,      -- NULL = 从 created_at 开始成立
   valid_to INTEGER,        -- NULL = 至今有效
-  superseded_by INTEGER    -- 被哪一条顶掉（写法上等价于 valid_to = 那一条的时间）
+  superseded_by INTEGER,   -- 被哪一条顶掉（写法上等价于 valid_to = 那一条的时间）
+  -- 对话索引：这条记忆是从哪段消息来的（seq 区间）。NULL = 老数据或管理台手写，回不到原文
+  source_seq_start INTEGER,
+  source_seq_end INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
 CREATE TABLE IF NOT EXISTS topics (
@@ -69,6 +72,35 @@ CREATE TABLE IF NOT EXISTS topics (
   retired INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_topics_pick ON topics(retired, cooldown_until, used_count, last_used_at);
+-- 业务地图（2026-11-11）：从 runtime/business/*.json 搬进 SQLite，边是一等行
+CREATE TABLE IF NOT EXISTS business_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS business_types (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS business_objects (
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+  key_kind TEXT, key_value TEXT, source_kind TEXT, source_value TEXT,
+  aliases TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_business_objects_type ON business_objects(type);
+CREATE TABLE IF NOT EXISTS business_relations (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', from_type TEXT NOT NULL, to_type TEXT NOT NULL,
+  cardinality TEXT, direction TEXT, risk TEXT, semantics TEXT
+);
+CREATE TABLE IF NOT EXISTS business_edges (
+  relation_id TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL,
+  evidence TEXT, updated_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(relation_id, from_id, to_id)
+);
+CREATE INDEX IF NOT EXISTS idx_business_edges_from ON business_edges(from_id);
+CREATE INDEX IF NOT EXISTS idx_business_edges_to ON business_edges(to_id);
+CREATE TABLE IF NOT EXISTS business_actions (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', applies_to TEXT NOT NULL DEFAULT '[]',
+  risk TEXT, requires_relations TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS business_terms (
+  term TEXT PRIMARY KEY, object_id TEXT NOT NULL, note TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT);
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, cache_miss INTEGER NOT NULL DEFAULT 0, out_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
@@ -195,6 +227,10 @@ export class Store {
     try { this.db.exec("ALTER TABLE usage_events ADD COLUMN calls INTEGER NOT NULL DEFAULT 1"); } catch { /* 已存在 */ }
     // 记忆时间维度（2026-11-03）：以前记忆是扁平快照，「想辞职」和「想升职」会一起活着
     for (const col of ["valid_from INTEGER", "valid_to INTEGER", "superseded_by INTEGER"]) {
+      try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
+    // 记忆来源索引（对话溯源）：记住写入时那批消息的 seq 区间。老数据留 NULL，不猜
+    for (const col of ["source_seq_start INTEGER", "source_seq_end INTEGER"]) {
       try { this.db.exec(`ALTER TABLE memories ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
     // 任务面板（UFA-WA P0）：老库若已有 tasks 但没有 stage，补一列；失败不影响启动
@@ -401,6 +437,19 @@ export class Store {
     const side = who === "self" ? " AND from_self=1" : who === "other" ? " AND from_self=0" : "";
     const sql = `SELECT * FROM messages WHERE pool_id=? AND text LIKE ? ESCAPE '\\'${side} ORDER BY seq DESC LIMIT ?`;
     return (this.db.prepare(sql).all(poolId, kw, limit) as any[]).map(rowToMsg).reverse();
+  }
+
+  /**
+   * 取一段 seq 区间的前后消息，用来把记忆回溯到对话现场。
+   * 入参是「来源消息区间」；前后各多给 before/after 条，返回按 seq 正序。
+   * 仍然按 pool_id 过滤——seq 是全局自增，区间里会夹着别的池的消息。
+   */
+  messagesAround(poolId: string, startSeq: number, endSeq: number, before = 5, after = 5): StoredMessage[] {
+    const lo = Math.max(0, startSeq - Math.max(0, before));
+    const hi = endSeq + Math.max(0, after);
+    return (this.db.prepare(
+      "SELECT * FROM messages WHERE pool_id=? AND seq>=? AND seq<=? AND internal=0 ORDER BY seq",
+    ).all(poolId, lo, hi) as any[]).map(rowToMsg);
   }
 
   // ---------- 游标 ----------
@@ -730,12 +779,13 @@ export class Store {
   addMemory(m: {
     user_id: string; kind?: string; content: string; source_pool_id: string; source_kind: PoolKind; scope: MemoryScope;
     valid_from?: number | null; valid_to?: number | null; supersede?: number | null;
+    source_seq_start?: number | null; source_seq_end?: number | null;
   }): number {
     const now = Date.now();
     const id = Number(this.db.prepare(
-      "INSERT INTO memories(user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to) VALUES(?,?,?,?,?,?,?,?,?)")
+      "INSERT INTO memories(user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to,source_seq_start,source_seq_end) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
       .run(m.user_id, m.kind ?? "fact", m.content, m.source_pool_id, m.source_kind, m.scope, now,
-        m.valid_from ?? null, m.valid_to ?? null).lastInsertRowid);
+        m.valid_from ?? null, m.valid_to ?? null, m.source_seq_start ?? null, m.source_seq_end ?? null).lastInsertRowid);
     if (m.supersede) this.supersedeMemory(m.supersede, id, m.valid_from ?? now);
     return id;
   }
@@ -790,7 +840,7 @@ export class Store {
     userId: string, viewingPool: Pool, limit: number,
     opts: { at?: number; includeExpired?: boolean; kinds?: string[]; q?: string } = {},
   ): any[] {
-    const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by
+    const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by,source_seq_start,source_seq_end
       FROM memories WHERE user_id=? AND (
         scope='all' OR (scope='pool' AND source_pool_id=?) OR (scope='private' AND ?='private') OR (scope='group' AND ?='group')
       )`;
@@ -838,10 +888,82 @@ export class Store {
       (this.db.prepare(`SELECT COUNT(*) AS n FROM memories${clause}`).get(...args) as any)?.n ?? 0,
     );
     const rows = this.db.prepare(
-      `SELECT id,user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to,superseded_by
+      `SELECT id,user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to,superseded_by,source_seq_start,source_seq_end
        FROM memories${clause} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
     ).all(...args, opts.limit, opts.offset) as any[];
     return { rows, total };
+  }
+
+  // ---------- 业务地图 ----------
+  // 结构化查询直接读这几张表；写入走 replaceBusinessMap 全量替换（事务内），
+  // 不让半份地图留在库里。
+  businessMetaAll(): Record<string, string> {
+    const rows = this.db.prepare("SELECT k,v FROM business_meta").all() as any[];
+    return Object.fromEntries(rows.map((r) => [String(r.k), String(r.v)]));
+  }
+  setBusinessMeta(k: string, v: string) {
+    this.db.prepare("INSERT INTO business_meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(k, v);
+  }
+  listBusinessTypes(): any[] {
+    return this.db.prepare("SELECT id,name,description FROM business_types ORDER BY id").all() as any[];
+  }
+  listBusinessObjects(): any[] {
+    return this.db.prepare("SELECT id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags FROM business_objects ORDER BY id").all() as any[];
+  }
+  listBusinessRelations(): any[] {
+    return this.db.prepare("SELECT id,name,from_type,to_type,cardinality,direction,risk,semantics FROM business_relations ORDER BY id").all() as any[];
+  }
+  listBusinessEdges(): any[] {
+    return this.db.prepare("SELECT relation_id,from_id,to_id,evidence,updated_at FROM business_edges ORDER BY relation_id,from_id,to_id").all() as any[];
+  }
+  listBusinessActions(): any[] {
+    return this.db.prepare("SELECT id,name,applies_to,risk,requires_relations,description FROM business_actions ORDER BY id").all() as any[];
+  }
+  listBusinessTerms(): any[] {
+    return this.db.prepare("SELECT term,object_id,note FROM business_terms ORDER BY term").all() as any[];
+  }
+  /** 全量替换业务地图：先清后写，失败整体回滚。 */
+  replaceBusinessMap(data: {
+    version: number;
+    types: { id: string; name?: string; description?: string }[];
+    objects: { id: string; type: string; name?: string; description?: string; key?: { kind?: string; value: string } | null; source?: { kind?: string; value: string } | null; aliases?: string[]; tags?: string[] }[];
+    relations: { id: string; name?: string; fromType: string; toType: string; cardinality?: string; direction?: string; risk?: string; semantics?: string }[];
+    edges: { relation: string; from: string; to: string; evidence?: string | null }[];
+    actions: { id: string; name?: string; appliesTo?: string[]; risk?: string; requiresRelations?: string[]; description?: string }[];
+    terms: { term: string; objectId: string; note?: string }[];
+  }): void {
+    const now = Date.now();
+    const tx = this.db.transaction(() => {
+      for (const t of ["business_edges", "business_terms", "business_actions", "business_relations", "business_objects", "business_types", "business_meta"]) {
+        this.db.prepare(`DELETE FROM ${t}`).run();
+      }
+      const typeStmt = this.db.prepare("INSERT INTO business_types(id,name,description) VALUES(?,?,?)");
+      for (const t of data.types) typeStmt.run(t.id, t.name ?? "", t.description ?? "");
+      const objStmt = this.db.prepare(`INSERT INTO business_objects(id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`);
+      for (const o of data.objects) {
+        objStmt.run(o.id, o.type, o.name ?? "", o.description ?? "", o.key?.kind ?? null, o.key?.value ?? null,
+          o.source?.kind ?? null, o.source?.value ?? null, JSON.stringify(o.aliases ?? []), JSON.stringify(o.tags ?? []));
+      }
+      const relStmt = this.db.prepare(`INSERT INTO business_relations(id,name,from_type,to_type,cardinality,direction,risk,semantics)
+        VALUES(?,?,?,?,?,?,?,?)`);
+      for (const r of data.relations) {
+        relStmt.run(r.id, r.name ?? "", r.fromType, r.toType, r.cardinality ?? null, r.direction ?? null, r.risk ?? null, r.semantics ?? null);
+      }
+      const edgeStmt = this.db.prepare("INSERT INTO business_edges(relation_id,from_id,to_id,evidence,updated_at) VALUES(?,?,?,?,?)");
+      for (const e of data.edges) edgeStmt.run(e.relation, e.from, e.to, e.evidence ?? null, now);
+      const actStmt = this.db.prepare(`INSERT INTO business_actions(id,name,applies_to,risk,requires_relations,description)
+        VALUES(?,?,?,?,?,?)`);
+      for (const a of data.actions) {
+        actStmt.run(a.id, a.name ?? "", JSON.stringify(a.appliesTo ?? []), a.risk ?? null,
+          JSON.stringify(a.requiresRelations ?? []), a.description ?? "");
+      }
+      const termStmt = this.db.prepare("INSERT INTO business_terms(term,object_id,note) VALUES(?,?,?)");
+      for (const t of data.terms) termStmt.run(t.term, t.objectId, t.note ?? "");
+      this.setBusinessMeta("version", String(data.version));
+      this.setBusinessMeta("updated_at", String(now));
+    });
+    tx();
   }
 
   // ---------- 交接 / 日志 / 用量 ----------

@@ -389,7 +389,7 @@ function BusinessDetail({
         ])}
         <Subhead>实际边（{edges.length}）</Subhead>
         {!edges.length ? (
-          <p className="text-sm text-muted">没有解析出边：可能是 file mapping 缺数据。</p>
+          <p className="text-sm text-muted">没有边：这条关系还没写入对象实例。</p>
         ) : (
           <div>
             {edges.map((e, i) => (
@@ -1052,7 +1052,7 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
       {!data ? null : !data.exists ? (
         <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">
           <p className="m-0 max-w-[380px] text-[13px] leading-relaxed text-muted">
-            {`还没有知识数据。在 ${data.dir || "runtime/business"} 下放 objects.json / relations.json 后再刷新。`}
+            还没有知识数据。由任务通过 `PUT /v1/business` 写入后再刷新。
           </p>
         </div>
       ) : (

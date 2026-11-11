@@ -98,13 +98,13 @@ test("memory expire：只关掉，不写新的", async () => {
   assert.equal(searchMemories(store, { user: uid, pool: pool!, all: true }).length, 1);
 });
 
-test("memory expire：关别人的记忆会被挡住", async () => {
+test("memory expire：按 id 关，不校验 user", async () => {
   const { store, get } = setup();
   const a = await run(get("memory"), { action: "add", content: "他这周在出差" });
   const id = Number(/（#(\d+)）/.exec(a.text)?.[1]);
   const r = await run(get("memory"), { action: "expire", id, user: "u_someone_else" });
-  assert.equal(r.details?.ok, false);
-  assert.match(String(r.text), /不是 u_someone_else 的记忆/);
+  assert.equal(r.details?.ok, true);
+  assert.ok(store.getMemory(id)?.valid_to, "按 id 关掉了");
 });
 
 test("plan add / plan done：一件事从记下到标完成", async () => {

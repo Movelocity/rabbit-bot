@@ -9,6 +9,7 @@ import { loadConfig } from "../src/config.ts";
 import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
+import { importBusinessMap } from "../src/ops/business-map.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-api-"));
 const cfg = loadConfig({
@@ -286,6 +287,7 @@ test("业务知识：没有地图返回空；有地图返回对象/关系/动作
   const examples = path.resolve(import.meta.dirname, "../../docs/examples/business");
   const target = path.join(cfg.runtimeDir, "business");
   fs.cpSync(examples, target, { recursive: true });
+  importBusinessMap(store, target);
 
   const r = await call("/v1/business");
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -300,6 +302,20 @@ test("业务知识：没有地图返回空；有地图返回对象/关系/动作
   assert.equal(d.edges_truncated, false);
   assert.ok(d.actions.some((a: any) => a.id === "deploy"));
   assert.ok(d.terms.some((t: any) => t.term === "老地方"));
+
+  // 写入口：PUT 全量替换
+  const put = await call("/v1/business", {
+    method: "PUT",
+    body: JSON.stringify({
+      version: 3,
+      types: [{ id: "service", name: "服务" }],
+      objects: [{ id: "service:x", type: "service", name: "x" }],
+      relations: [], edges: [], actions: [], terms: [],
+    }),
+  });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.equal(put.body.data.version, 3);
+  assert.ok(put.body.data.objects.some((o: any) => o.id === "service:x"));
 
   fs.rmSync(target, { recursive: true, force: true });
 });

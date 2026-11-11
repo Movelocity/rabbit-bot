@@ -69,13 +69,12 @@ test("--until 到期就自己失效，不用手动顶", () => {
   assert.equal(searchMemories(store, { user: "u1", pool, at: t0 + 8 * DAY }).length, 0, "回来了");
 });
 
-test("不许顶别人的记忆", () => {
+test("顶旧条只看 id，不校验是不是同一个人", () => {
   const { store, pool } = setup();
   const mine = addMemory(store, { user: "u1", content: "他想辞职", pool });
-  assert.throws(
-    () => addMemory(store, { user: "u2", content: "他不想辞职了", pool, supersede: mine.id }),
-    /不是 u2 的记忆/,
-  );
+  const r = addMemory(store, { user: "u2", content: "他不想辞职了", pool, supersede: mine.id });
+  assert.equal(r.superseded, mine.id);
+  assert.ok(store.getMemory(mine.id)?.valid_to, "旧条被顶掉");
 });
 
 test("顶一条不存在的记忆直接报错，别静默写新条目", () => {
@@ -127,8 +126,10 @@ test("重复关同一个东西不报错，也不改时间", () => {
   assert.equal(b.closed_at, a.closed_at, "第一次的失效时间算数");
 });
 
-test("不许关别人的记忆", () => {
+test("关记忆只看 id，不校验 user", () => {
   const { store, pool } = setup();
   const m = addMemory(store, { user: "u1", content: "他在减肥", pool });
-  assert.throws(() => closeMemory(store, { user: "u2", id: m.id }), /不是 u2 的记忆/);
+  const r = closeMemory(store, { id: m.id });
+  assert.equal(r.already, false);
+  assert.ok(store.getMemory(m.id)?.valid_to, "关掉了");
 });

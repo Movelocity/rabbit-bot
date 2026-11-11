@@ -28,13 +28,13 @@ import {
 } from "./core/approvals.ts";
 import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
-import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, updateMemory } from "./ops/memories.ts";
+import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
-import { loadBusinessMap, relationEdges } from "./ops/business-map.ts";
+import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
@@ -188,6 +188,8 @@ function normalizeFiles(raw: unknown): string | undefined {
 /** 起 API；cfg.api.enabled=false 时返回 null。 */
 export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
   if (d.cfg.api?.enabled === false) return null;
+  // 老库第一次启动：把 runtime/business 的文件地图导一次；之后只读 SQLite
+  try { ensureBusinessSeeded(d.store, businessDir(d.cfg)); } catch { /* 坏地图不挡 API */ }
   const port = d.cfg.api?.port ?? DEFAULT_PORT;
   const host = d.cfg.api?.host ?? "0.0.0.0";
   /** 给任务子进程的回环地址；listen 后才知道真实端口 */
@@ -716,7 +718,15 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               id: parts[2],
             }));
           }
-          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、GET /v1/memories?global=1[&user=&kind=&scope=&status=&q=&limit=&offset=]、POST /v1/memories、PATCH /v1/memories/:id（关闭）、PUT /v1/memories/:id（改正文）、DELETE /v1/memories/:id?user=");
+          if (parts.length === 4 && parts[3] === "trace" && method === "GET") {
+            return reply(200, traceMemory(d.store, {
+              user: url.searchParams.get("user") ?? undefined,
+              id: parts[2],
+              before: qInt(url.searchParams.get("before")),
+              after: qInt(url.searchParams.get("after")),
+            }));
+          }
+          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、GET /v1/memories?global=1[&user=&kind=&scope=&status=&q=&limit=&offset=]、GET /v1/memories/:id/trace?user=、POST /v1/memories、PATCH /v1/memories/:id（关闭）、PUT /v1/memories/:id（改正文）、DELETE /v1/memories/:id?user=");
         }
         case "images": {
           if (parts.length === 2 && method === "GET") {
@@ -767,7 +777,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 2 && method === "GET") {
             let map;
             try {
-              map = loadBusinessMap(d.cfg);
+              map = loadBusinessMap(d.store);
             } catch (e) {
               throw new HttpError(400, `业务地图读取失败：${(e as Error).message}`);
             }
@@ -782,7 +792,6 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               id: r.id, name: r.name, fromType: r.fromType, toType: r.toType,
               kind: r.kind, cardinality: r.cardinality, direction: r.direction,
               risk: r.risk, semantics: r.semantics,
-              mapping: { kind: r.mapping.kind, file: r.mapping.file, select: r.mapping.select },
               edge_count: relationEdges(map, r.id).length,
             }));
             const edges: { relation: string; relation_name: string; from: string; to: string }[] = [];
@@ -796,7 +805,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               }
             }
             return reply(200, {
-              exists: true, dir: map.dir, version: map.version,
+              exists: true, dir: map.dir || businessDir(d.cfg), version: map.version,
               types: map.types,
               objects: map.objects,
               relations,
@@ -807,7 +816,14 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               edges_truncated: edgeTotal > edges.length,
             });
           }
-          throw new HttpError(404, "用法：GET /v1/business");
+          if (parts.length === 2 && method === "PUT") {
+            try {
+              return reply(200, replaceBusinessMap(d.store, body));
+            } catch (e) {
+              throw new HttpError(400, `业务地图写入失败：${(e as Error).message}`);
+            }
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/business（PUT 全量替换；body 含 version/types/objects/relations/edges/actions/terms）");
         }
         case "sandbox": {
           // 只暴露文件区；`sb run` 不给 —— 技能脚本本来就在 shell 里

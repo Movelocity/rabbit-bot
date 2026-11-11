@@ -17,7 +17,7 @@ import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
 import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
-import { renderTaskContextFromDir } from "../ops/business-map.ts";
+import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 
 export const MIMO_BIN = "/Users/viking/.mimocode/bin/mimo";
 export const DEFAULT_CAPTURE_MS = 3000;
@@ -65,13 +65,17 @@ export function taskDocPath(task: Pick<Task, "id" | "work_dir">): string {
 }
 
 /** 任务文档：人/执行器都能直接照着做，更新方式用 curl 写死，token 只引用环境变量。 */
-export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string } = {}): string {
+export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string; map?: BusinessMap | null } = {}): string {
   const id = task.id;
   const executor = task.executor || "opencode";
   const workerId = `${executor}-${id}`;
   const apiBase = opts.apiBase || "http://127.0.0.1:3738";
   const shared = String(opts.sharedDir ?? "").trim();
-  const business = renderTaskContextFromDir(opts.businessDir, task.context);
+  // 正式路径用 SQLite 里的地图；显式传 map=null 表示「确认没有地图」，
+  // 不传才回退到按目录读文件（测试/旧调用）。
+  const business = opts.map !== undefined
+    ? (opts.map ? renderTaskContext(opts.map, task.context) : "")
+    : renderTaskContextFromDir(opts.businessDir, task.context);
   const files = parseFiles(task.files);
   const field = (label: string, value: string) => `- ${label}：${value || "（未填写）"}`;
 
@@ -168,7 +172,8 @@ export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string;
   if (!path.isAbsolute(workDir)) throw new Error(`work_dir 必须是绝对路径：${workDir}`);
   const docPath = taskDocPath(task);
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
-  fs.writeFileSync(docPath, renderTaskDoc(task, opts), "utf8");
+  const map = loadBusinessMap(store);
+  fs.writeFileSync(docPath, renderTaskDoc(task, { ...opts, map: map ?? undefined }), "utf8");
   updateTask(store, task.id, { doc_path: docPath });
   return docPath;
 }

@@ -4,6 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import type { Hub } from "../core/hub.ts";
+import type { StoredMessage } from "../types.ts";
 import { fmtGrouped } from "./prompt.ts";
 import fs from "node:fs";
 import os from "node:os";
@@ -21,7 +22,7 @@ import type { TaskApprovalGate } from "../core/task-approval.ts";
 import {
   APPROVAL_STATUSES, decideApproval, getApproval, isApprovalStatus, listApprovals,
 } from "../core/approvals.ts";
-import { addMemory, closeMemory, searchMemories, updateMemory } from "../ops/memories.ts";
+import { addMemory, closeMemory, searchMemories, traceMemory, updateMemory } from "../ops/memories.ts";
 import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
 import { addPlan, updatePlan } from "../ops/plans.ts";
 import {
@@ -52,6 +53,8 @@ export interface ToolDeps {
   markSilent?: (reason: string) => void;
   /** 这一轮的主要池：记记忆/加计划时自动落到这里，模型不用自己填池 */
   primaryPool?: () => string | null;
+  /** 本轮读进来的未读消息：记记忆时自动绑来源 seq，之后能回查到原文 */
+  currentUnread?: () => StoredMessage[];
   /** 宿主机命令审批闸门（只在 exec.shell.mode=host 时被用到） */
   approval?: ApprovalGate;
   /** 任务发布审批闸门：建完任务发审批提示（原聊天或审批房）；没开就回退 Web 任务页 */
@@ -81,11 +84,13 @@ function defaultDispatchDeps(cfg: Config): DispatchDeps {
 const txt = (text: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text }], details });
 
 /** 记忆列表的显示格式：带上 #id 和有效期，她才知道改哪条 */
-function fmtMemories(list: { id: number; kind: string; content: string; from: number; to: number | null; replaced_by: number | null }[]): string {
+function fmtMemories(list: { id: number; kind: string; content: string; from: number; to: number | null; replaced_by: number | null; source?: { from: number; to: number } | null }[]): string {
   if (!list.length) return "（没有匹配的记忆）";
   const day = (ts: number) => new Date(ts).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" });
   return list
-    .map((m) => `#${m.id} [${m.kind}] ${m.content}` + (m.to ? `（${day(m.from)} 起，${day(m.to)} 已失效${m.replaced_by ? `，被 #${m.replaced_by} 顶掉` : ""}）` : ""))
+    .map((m) => `#${m.id} [${m.kind}] ${m.content}`
+      + (m.to ? `（${day(m.from)} 起，${day(m.to)} 已失效${m.replaced_by ? `，被 #${m.replaced_by} 顶掉` : ""}）` : "")
+      + (m.source ? `（来源 #${m.source.from}${m.source.to !== m.source.from ? `-${m.source.to}` : ""}）` : ""))
     .join("\n");
 }
 
@@ -271,18 +276,30 @@ export function createTools(d: ToolDeps) {
     if (!uid) throw new Error("这个池里还没有对方的消息，拿不到 user_id");
     return uid;
   };
+  /** 这一轮他说的消息 seq 区间；没有就返回空，让记忆留成无来源而不是硬绑 */
+  const wakeSeqRange = (user: string, pool: string): { from?: number; to?: number } => {
+    const seqs = (d.currentUnread?.() ?? [])
+      .filter((m) => m.pool_id === pool && m.user_id === user && !m.from_self)
+      .map((m) => m.seq)
+      .sort((a, b) => a - b);
+    return seqs.length ? { from: seqs[0], to: seqs[seqs.length - 1] } : {};
+  };
 
   const MEMORY_HELP = [
     "memory 的用法（action 必填）：",
     "  recent  [limit]                          最近记下的（默认 20 条，只给还生效的）",
     "  search  q? at? all? limit?               按关键词翻，all=1 连失效的也翻",
-    "  add     content kind? supersede? from? until?   记一条",
+    "  add     content kind? supersede? from? until? source_seq?   记一条",
+    "  trace   id before? after?                回看这条记忆的来源消息和前后文",
     "  expire  id                               这条不再成立了，关掉（不写新的）",
     "  update  id content? from?                就地订正正文/起始时间，不动时间线",
     "  help                                     看这份说明",
     "",
     "只记对方明说过的具体事实，不记推断和总结。说变了的事用 add + supersede 顶掉旧的；",
     "事实没变只是不再成立（「他这周在出差」回来了）用 expire。",
+    "正文要能单独看懂：群里、或被记的不是当前说话人时，写清名字（「小王搬家」），别只写「他」；",
+    "被记的是别人时，把 user 填成那个人。",
+    "add 默认把来源绑到这一轮他说的消息上；引用更早的某句时，把那条消息的 #seq 填进 source_seq。",
   ].join("\n");
 
   const memory = defineTool({
@@ -291,14 +308,14 @@ export function createTools(d: ToolDeps) {
     executionMode: "sequential",
     description:
       "长期记忆。action 决定做什么：recent（最近记下的）/ search（按关键词翻，all=1 连失效的）/ "
-      + "add（记一条）/ expire（不再成立，关掉）/ update（就地订正）/ help。"
+      + "add（记一条）/ trace（回看来源消息和前后文）/ expire（不再成立，关掉）/ update（就地订正）/ help。"
       + "记的是对方明说过的具体事实，不是你的推断。他说变了的事，add 时把旧条目的 #id 填进 supersede；"
       + "没有新事实、只是不再成立，用 expire。别名也走 add：kind=alias，content 写「那个项目 → 电商 AI Agent」。"
       + "拿不准就先 memory action=help。",
     parameters: Type.Object({
-      action: Type.String({ description: "recent / search / add / expire / update / help" }),
-      id: Type.Optional(Type.Number({ description: "expire、update 用：记忆 id（提示词里记忆前的 #号）" })),
-      content: Type.Optional(Type.String({ description: "add、update 用：正文，带日期更好" })),
+      action: Type.String({ description: "recent / search / add / trace / expire / update / help" }),
+      id: Type.Optional(Type.Number({ description: "trace、expire、update 用：记忆 id（提示词里记忆前的 #号）" })),
+      content: Type.Optional(Type.String({ description: "add、update 用：正文，带日期更好；群里写清是谁，别只写「他」" })),
       kind: Type.Optional(Type.String({ description: "add 用：fact（默认）/ plan / alias / topic" })),
       supersede: Type.Optional(Type.Number({ description: "add 用：被这条顶掉的旧记忆 id" })),
       from: Type.Optional(Type.String({ description: "add、update 用：从什么时候起成立，ISO" })),
@@ -307,6 +324,9 @@ export function createTools(d: ToolDeps) {
       at: Type.Optional(Type.String({ description: "search 用：查那一刻有效，ISO" })),
       all: Type.Optional(Type.Boolean({ description: "search 用：连失效的一起给" })),
       limit: Type.Optional(Type.Number({ description: "recent、search 用：条数，默认 20" })),
+      source_seq: Type.Optional(Type.Number({ description: "add 用：来源消息的 #seq（引用更早某句时填；不填就绑本轮他的话）" })),
+      before: Type.Optional(Type.Number({ description: "trace 用：来源往前看几条，默认 5" })),
+      after: Type.Optional(Type.Number({ description: "trace 用：来源往后看几条，默认 5" })),
       user: Type.Optional(Type.String({ description: "一般不用填，默认是当前对话的人" })),
     }),
     async execute(_id, p) {
@@ -327,11 +347,28 @@ export function createTools(d: ToolDeps) {
           }
           case "add": {
             if (!p.content) return txt("add 要 content（记什么）。用 memory action=help 看说明。", { ok: false });
+            const user = userOf(p.user);
+            const pool = poolOf();
+            // 显式 source_seq 优先（引用更早的某句）；否则绑到这一轮他说的消息上
+            const bound = wakeSeqRange(user, pool);
             const r = addMemory(d.store, {
-              user: userOf(p.user), content: p.content, pool: poolOf(), kind: p.kind,
+              user, content: p.content, pool, kind: p.kind,
               from: p.from, until: p.until, supersede: p.supersede,
+              source_seq: p.source_seq ?? bound.from,
+              source_seq_end: p.source_seq ?? bound.to,
             });
-            return txt(r.superseded ? `记下了（#${r.id}），原来 #${r.superseded} 那条已经失效。` : `记下了（#${r.id}）。`, { ok: true, id: r.id });
+            return txt(
+              (r.superseded ? `记下了（#${r.id}），原来 #${r.superseded} 那条已经失效。` : `记下了（#${r.id}）。`)
+              + (r.source ? ` 来源 #${r.source.from}${r.source.to !== r.source.from ? `-${r.source.to}` : ""}，要回看用 trace。` : ""),
+              { ok: true, id: r.id, source: r.source },
+            );
+          }
+          case "trace": {
+            if (p.id === undefined) return txt("trace 要 id（提示词里记忆前的 #号）。", { ok: false });
+            const r = traceMemory(d.store, { user: userOf(p.user), id: p.id, before: p.before, after: p.after });
+            if (!r.source) return txt(r.note ?? "这条记忆没有来源消息。", { ok: true, id: r.id });
+            const body = r.messages.map((m) => `${m.anchor ? "→" : " "} #${m.seq} ${m.local} ${m.from_self ? "我" : m.sender}：${m.text}`).join("\n");
+            return txt(`记忆 #${r.id}（${r.content}）\n来源 #${r.source.from}${r.source.to !== r.source.from ? `-${r.source.to}` : ""} · ${r.source.pool}\n${body || "（找不到消息）"}`, { ok: true, id: r.id, source: r.source });
           }
           case "expire": {
             if (p.id === undefined) return txt("expire 要 id（提示词里记忆前的 #号）。", { ok: false });
@@ -586,7 +623,7 @@ export function createTools(d: ToolDeps) {
               forbidden: Array.isArray(p.forbidden) ? p.forbidden : [],
             };
             if (context.objects.length || context.relations.length || context.forbidden.length) {
-              const map = loadBusinessMap(d.cfg);
+              const map = loadBusinessMap(d.store);
               if (!map) {
                 return txt("还没有业务地图：先在 runtime/business/ 下放 objects.json / relations.json，再给任务带 objects。", { ok: false });
               }
@@ -863,7 +900,7 @@ export function createTools(d: ToolDeps) {
       const action = String(p.action ?? "").trim().toLowerCase();
       try {
         if (action === "help") return txt(MAP_HELP, { ok: true });
-        const map = loadBusinessMap(d.cfg);
+        const map = loadBusinessMap(d.store);
         if (!map) {
           return txt("还没有业务地图：在 runtime/business/ 下放 objects.json / relations.json 后再查。", { ok: false });
         }

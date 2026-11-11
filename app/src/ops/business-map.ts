@@ -6,8 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { Config } from "../config.ts";
-import { businessDir } from "../core/runtime.ts";
+import type { Store } from "../core/db.ts";
 import { parseTaskContext } from "../core/tasks.ts";
 
 export interface BusinessObjectType {
@@ -391,8 +390,220 @@ export function loadBusinessMapFromDir(dir: string): BusinessMap | null {
   return map;
 }
 
-export function loadBusinessMap(cfg: Config): BusinessMap | null {
-  return loadBusinessMapFromDir(businessDir(cfg));
+function jsonList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
+  try {
+    const parsed = JSON.parse(String(v ?? "[]"));
+    return Array.isArray(parsed) ? parsed.map((x) => String(x)).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 从 SQLite 拼出运行时的 BusinessMap。边已在库里物化，不再查文件。 */
+function buildMapFromStore(store: Store): BusinessMap {
+  const meta = store.businessMetaAll();
+  const types: BusinessObjectType[] = store.listBusinessTypes().map((t) => ({
+    id: String(t.id), name: t.name ?? "", description: t.description ?? "",
+  }));
+  const objects: BusinessObject[] = store.listBusinessObjects().map((o) => {
+    const obj: BusinessObject = { id: String(o.id), type: String(o.type), name: String(o.name ?? "") };
+    if (o.description) obj.description = String(o.description);
+    if (o.key_value) obj.key = { ...(o.key_kind ? { kind: String(o.key_kind) } : {}), value: String(o.key_value) };
+    if (o.source_value) obj.source = { ...(o.source_kind ? { kind: String(o.source_kind) } : {}), value: String(o.source_value) };
+    const aliases = jsonList(o.aliases);
+    if (aliases.length) obj.aliases = aliases;
+    const tags = jsonList(o.tags);
+    if (tags.length) obj.tags = tags;
+    return obj;
+  });
+  const relations: BusinessRelation[] = store.listBusinessRelations().map((r) => ({
+    id: String(r.id), name: String(r.name ?? ""), fromType: String(r.from_type), toType: String(r.to_type),
+    ...(r.cardinality ? { cardinality: r.cardinality } : {}),
+    ...(r.direction ? { direction: r.direction } : {}),
+    ...(r.risk ? { risk: r.risk } : {}),
+    ...(r.semantics ? { semantics: r.semantics } : {}),
+    kind: "manual", mapping: { kind: "manual" },
+  } as BusinessRelation));
+  const actions: BusinessAction[] = store.listBusinessActions().map((a) => ({
+    id: String(a.id), name: a.name ?? "",
+    ...(jsonList(a.applies_to).length ? { appliesTo: jsonList(a.applies_to) } : {}),
+    ...(a.risk ? { risk: a.risk } : {}),
+    ...(jsonList(a.requires_relations).length ? { requiresRelations: jsonList(a.requires_relations) } : {}),
+    ...(a.description ? { description: String(a.description) } : {}),
+  } as BusinessAction));
+  const terms: GlossaryTerm[] = store.listBusinessTerms().map((t) => ({
+    term: String(t.term), objectId: String(t.object_id), ...(t.note ? { note: String(t.note) } : {}),
+  }));
+
+  const byId = new Map(objects.map((o) => [o.id, o]));
+  const typesById = new Map(types.map((t) => [t.id, t]));
+  const relationsById = new Map(relations.map((r) => [r.id, r]));
+  const edges = new Map<string, BusinessEdge[]>(relations.map((r) => [r.id, []]));
+  for (const e of store.listBusinessEdges()) {
+    const list = edges.get(String(e.relation_id));
+    if (!list) continue;
+    list.push({ from: String(e.from_id), to: String(e.to_id), relation: String(e.relation_id) });
+  }
+  return {
+    dir: meta.dir ?? "", version: Number(meta.version ?? 1),
+    types, objects, relations, actions, terms, byId, typesById, relationsById, edges,
+  };
+}
+
+/** 运行时唯一的读取入口：没有地图（无 version 且无对象）返回 null。 */
+export function loadBusinessMap(store: Store): BusinessMap | null {
+  const meta = store.businessMetaAll();
+  if (!meta.version && store.listBusinessObjects().length === 0 && store.listBusinessRelations().length === 0) return null;
+  return buildMapFromStore(store);
+}
+
+/**
+ * 把 runtime/business 的旧文件一次性导入 SQLite。
+ * 关系实例（含 file mapping 算出来的边）在导入时就物化，之后运行时不再读文件。
+ */
+export function importBusinessMap(store: Store, dir: string): BusinessMap | null {
+  const map = loadBusinessMapFromDir(dir);
+  if (!map) return null;
+  const edges = map.relations.flatMap((r) => relationEdges(map, r.id).map((e) => ({
+    relation: e.relation, from: e.from, to: e.to,
+  })));
+  store.replaceBusinessMap({
+    version: map.version, types: map.types, objects: map.objects, relations: map.relations,
+    edges, actions: map.actions, terms: map.terms,
+  });
+  store.setBusinessMeta("dir", map.dir);
+  store.setBusinessMeta("imported_from", map.dir);
+  return loadBusinessMap(store);
+}
+
+/** 启动时调用：库里已经有地图就不动；没有且目录里有 objects.json 才导一次。 */
+export function ensureBusinessSeeded(store: Store, dir: string): BusinessMap | null {
+  const meta = store.businessMetaAll();
+  if (meta.version || store.listBusinessObjects().length) return null;
+  if (!dir || !fs.existsSync(path.join(dir, "objects.json"))) return null;
+  return importBusinessMap(store, dir);
+}
+
+/** 当前地图的可写快照：PUT /v1/business 的返回体，也是 GET 的来源。 */
+export function businessSnapshot(store: Store) {
+  const map = loadBusinessMap(store);
+  if (!map) return null;
+  return {
+    version: map.version,
+    types: map.types,
+    objects: map.objects,
+    relations: map.relations.map((r) => ({
+      id: r.id, name: r.name, fromType: r.fromType, toType: r.toType,
+      cardinality: r.cardinality, direction: r.direction, risk: r.risk, semantics: r.semantics,
+    })),
+    edges: [...map.edges.values()].flat().map((e) => ({ relation: e.relation, from: e.from, to: e.to })),
+    actions: map.actions,
+    terms: map.terms,
+  };
+}
+
+/** 全量替换：API 写入的唯一入口。校验不过直接抛 BusinessMapError，库里保持原样。 */
+export function replaceBusinessMap(store: Store, raw: unknown) {
+  const data = validateSnapshot(raw);
+  store.replaceBusinessMap(data);
+  return businessSnapshot(store);
+}
+
+function validateSnapshot(raw: unknown): Parameters<Store["replaceBusinessMap"]>[0] {
+  if (!raw || typeof raw !== "object") throw new BusinessMapError("快照要是一个对象");
+  const x = raw as any;
+  const version = Number(x.version ?? 1);
+  if (!Number.isInteger(version) || version <= 0) throw new BusinessMapError("version 要是正整数");
+
+  const arr = (v: unknown, name: string): any[] => {
+    if (v === undefined || v === null) return [];
+    if (!Array.isArray(v)) throw new BusinessMapError(`${name} 要是数组`);
+    return v;
+  };
+  const types = arr(x.types, "types").map((t, i) => {
+    const id = String(t?.id ?? "").trim();
+    if (!id) throw new BusinessMapError(`types[${i}].id 不能为空`);
+    return { id, name: String(t?.name ?? ""), description: String(t?.description ?? "") };
+  });
+  const typeIds = new Set(types.map((t) => t.id));
+  if (typeIds.size !== types.length) throw new BusinessMapError("types 里 id 重复");
+
+  const objects = arr(x.objects, "objects").map((o, i) => {
+    const id = String(o?.id ?? "").trim();
+    const type = String(o?.type ?? "").trim();
+    if (!id) throw new BusinessMapError(`objects[${i}].id 不能为空`);
+    if (!type) throw new BusinessMapError(`objects[${i}].type 不能为空`);
+    if (!typeIds.has(type)) throw new BusinessMapError(`对象 ${id} 的 type「${type}」没有在 types 里声明`);
+    const key = o?.key && typeof o.key === "object" ? { kind: o.key.kind ? String(o.key.kind) : undefined, value: String(o.key.value ?? "") } : null;
+    if (key && !key.value) throw new BusinessMapError(`对象 ${id} 的 key.value 不能为空`);
+    const source = o?.source && typeof o.source === "object" ? { kind: o.source.kind ? String(o.source.kind) : undefined, value: String(o.source.value ?? "") } : null;
+    if (source && !source.value) throw new BusinessMapError(`对象 ${id} 的 source.value 不能为空`);
+    return {
+      id, type, name: String(o?.name ?? ""), description: String(o?.description ?? ""), key, source,
+      aliases: jsonList(o?.aliases), tags: jsonList(o?.tags),
+    };
+  });
+  const objectIds = new Set(objects.map((o) => o.id));
+  if (objectIds.size !== objects.length) throw new BusinessMapError("objects 里 id 重复");
+
+  const relations = arr(x.relations, "relations").map((r, i) => {
+    const id = String(r?.id ?? "").trim();
+    if (!id) throw new BusinessMapError(`relations[${i}].id 不能为空`);
+    const fromType = String(r?.fromType ?? "").trim();
+    const toType = String(r?.toType ?? "").trim();
+    if (!typeIds.has(fromType)) throw new BusinessMapError(`关系 ${id} 的 fromType「${fromType}」没有声明`);
+    if (!typeIds.has(toType)) throw new BusinessMapError(`关系 ${id} 的 toType「${toType}」没有声明`);
+    const cardinality = r?.cardinality ? String(r.cardinality) : undefined;
+    if (cardinality && !["1:1", "1:N", "N:1", "N:N"].includes(cardinality)) throw new BusinessMapError(`关系 ${id} 的 cardinality 不合法`);
+    const direction = r?.direction ? String(r.direction) : undefined;
+    if (direction && !["forward", "both"].includes(direction)) throw new BusinessMapError(`关系 ${id} 的 direction 不合法`);
+    const risk = r?.risk ? String(r.risk) : undefined;
+    if (risk && !["low", "medium", "high"].includes(risk)) throw new BusinessMapError(`关系 ${id} 的 risk 不合法`);
+    return {
+      id, name: String(r?.name ?? ""), fromType, toType, cardinality, direction, risk,
+      semantics: r?.semantics ? String(r.semantics) : undefined,
+    };
+  });
+  const relationIds = new Set(relations.map((r) => r.id));
+  if (relationIds.size !== relations.length) throw new BusinessMapError("relations 里 id 重复");
+
+  const seenEdge = new Set<string>();
+  const edges = arr(x.edges, "edges").map((e, i) => {
+    const relation = String(e?.relation ?? "").trim();
+    const from = String(e?.from ?? "").trim();
+    const to = String(e?.to ?? "").trim();
+    if (!relationIds.has(relation)) throw new BusinessMapError(`edges[${i}] 的 relation「${relation}」不存在`);
+    if (!objectIds.has(from)) throw new BusinessMapError(`edges[${i}] 的 from「${from}」不存在`);
+    if (!objectIds.has(to)) throw new BusinessMapError(`edges[${i}] 的 to「${to}」不存在`);
+    const k = `${relation}|${from}|${to}`;
+    if (seenEdge.has(k)) throw new BusinessMapError(`edges 重复：${k}`);
+    seenEdge.add(k);
+    return { relation, from, to, evidence: e?.evidence ? String(e.evidence) : null };
+  });
+
+  const actions = arr(x.actions, "actions").map((a, i) => {
+    const id = String(a?.id ?? "").trim();
+    if (!id) throw new BusinessMapError(`actions[${i}].id 不能为空`);
+    const appliesTo = jsonList(a?.appliesTo);
+    for (const t of appliesTo) if (!typeIds.has(t)) throw new BusinessMapError(`动作 ${id} 的 appliesTo「${t}」没有声明`);
+    const requiresRelations = jsonList(a?.requiresRelations);
+    for (const r of requiresRelations) if (!relationIds.has(r)) throw new BusinessMapError(`动作 ${id} 的 requiresRelations「${r}」不存在`);
+    const risk = a?.risk ? String(a.risk) : undefined;
+    if (risk && !["low", "medium", "high"].includes(risk)) throw new BusinessMapError(`动作 ${id} 的 risk 不合法`);
+    return { id, name: String(a?.name ?? ""), appliesTo, risk, requiresRelations, description: String(a?.description ?? "") };
+  });
+  if (new Set(actions.map((a) => a.id)).size !== actions.length) throw new BusinessMapError("actions 里 id 重复");
+
+  const terms = arr(x.terms, "terms").map((t, i) => {
+    const term = String(t?.term ?? "").trim();
+    const objectId = String(t?.objectId ?? "").trim();
+    if (!term) throw new BusinessMapError(`terms[${i}].term 不能为空`);
+    if (!objectIds.has(objectId)) throw new BusinessMapError(`术语「${term}」指向不存在的对象：${objectId}`);
+    return { term, objectId, note: String(t?.note ?? "") };
+  });
+
+  return { version, types, objects, relations, edges, actions, terms };
 }
 
 function expandTemplate(tmpl: string, obj: BusinessObject): string {
@@ -506,9 +717,19 @@ export function indexLine(map: BusinessMap): string {
     + "要查对象、关系路径或影响面，先用 map 工具（index / show / resolve / path / impact）。";
 }
 
-export function businessIndexLine(cfg: Config): string {
+export function businessIndexLine(store: Store): string {
   try {
-    const map = loadBusinessMap(cfg);
+    const map = loadBusinessMap(store);
+    return map ? indexLine(map) : "";
+  } catch {
+    return "";
+  }
+}
+
+/** 兼容直接传目录的调用方（测试/迁移）；正式路径走 businessIndexLine(store)。 */
+export function businessIndexLineFromDir(dir: string): string {
+  try {
+    const map = loadBusinessMapFromDir(dir);
     return map ? indexLine(map) : "";
   } catch {
     return "";
