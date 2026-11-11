@@ -127,8 +127,8 @@ export interface ReflectionPromptInput {
 
 /** urgency 的锚点。不写这张表，模型会全给 0.5，门控就形同虚设 */
 export const URGENCY_ANCHORS = `0.0–0.2  手上没有正事，也没有新结果
-0.3–0.5  有个待确认项或小进展，但不急，可以等下次一起说
-0.6–0.8  有可交付的结果、需要他决定的事，或任务有风险
+0.3–0.5  有个小进展但没新结论，不急，可以等下次一起说
+0.6–0.8  有可交付的结果、真正要他拍板的取舍或要给的权限/资源，或任务有风险
 0.9–1.0  任务卡住/有风险/到点必须提醒，再不说会误事`;
 
 function fmtTime(ts: number, tz: string): string {
@@ -166,13 +166,13 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
     parts.push("");
   }
 
-  parts.push(`你是${i.agentName}。此刻没人跟你说话。扫一眼手上的任务、计划和待确认项，判断有没有需要主动开口的正事。`);
+  parts.push(`你是${i.agentName}。此刻没人跟你说话。扫一眼手上的任务和计划，只判断有没有真需要他拍板、要他给权限或资源、可交付的结果、或真卡点。常规进度和方向讨论不算正事。`);
   parts.push("不要为了找话说而找话题；没有正事就不说。想清楚之后，只输出一个 JSON 对象，六个键，不要别的任何内容：");
   parts.push(`{
   "thought": "你此刻手上正事的进展和判断，一到两句话。写具体的任务号、状态、卡点，别写心情和空话",
   "style_hint": "如果开口，用什么语气。默认：同事同步，先结论后依据",
   "urgency": 0.0,
-  "topic_pick": "要提醒的事或待确认项，没有就空字符串",
+  "topic_pick": "要他拍板/给权限/给资源的事，或可交付结果、真卡点，没有就空字符串",
   "topic_angle": "从哪个角度切入，没有就空字符串",
   "next_reflection_in": 1800
 }`);
