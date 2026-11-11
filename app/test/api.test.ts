@@ -317,6 +317,12 @@ test("业务知识：没有地图返回空；有地图返回对象/关系/动作
   assert.equal(put.body.data.version, 3);
   assert.ok(put.body.data.objects.some((o: any) => o.id === "service:x"));
 
+  // 只读 lint：报告异常但不改地图
+  const lint = await call("/v1/business/lint");
+  assert.equal(lint.status, 200, JSON.stringify(lint.body));
+  assert.equal(lint.body.data.counts.objects, 1);
+  assert.ok(Array.isArray(lint.body.data.findings));
+
   fs.rmSync(target, { recursive: true, force: true });
 });
 
@@ -402,6 +408,23 @@ test("任务面板：6 个路由 + 鉴权与校验", async () => {
   assert.equal((await call(`/v1/tasks/${id}/status`, { method: "POST", body: JSON.stringify({ status: "wat" }) })).status, 400);
   assert.equal((await call("/v1/tasks/999999")).status, 404);
   assert.equal((await call("/v1/tasks/abc")).status, 400);
+});
+
+test("记忆梳理设置：默认关闭，PUT 后生效并持久化", async () => {
+  const get0 = await call("/v1/memory-review");
+  assert.equal(get0.status, 200, JSON.stringify(get0.body));
+  assert.equal(get0.body.data.enabled, false);
+
+  const put = await call("/v1/memory-review", {
+    method: "PUT",
+    body: JSON.stringify({ enabled: true, everyTurns: 5, minIntervalSec: 60 }),
+  });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.deepEqual(put.body.data, { enabled: true, everyTurns: 5, minIntervalSec: 60 });
+
+  assert.equal((await call("/v1/memory-review", {
+    method: "PUT", body: JSON.stringify({ everyTurns: 0 }),
+  })).status, 400);
 });
 
 test("未知路由 404，缺 token 时也不泄露路由", async () => {

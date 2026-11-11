@@ -31,6 +31,7 @@ import type {
   BusinessCategory,
   BusinessData,
   BusinessEdge,
+  BusinessLintReport,
   BusinessSelection,
   BusinessRelation,
 } from "../lib/types.ts";
@@ -953,6 +954,8 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
   const [data, setData] = useState<BusinessData | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [lint, setLint] = useState<BusinessLintReport | null>(null);
+  const [linting, setLinting] = useState(false);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<BusinessCategory>("objects");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -981,6 +984,17 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
     if (reloadSignal === 0) return;
     void load();
   }, [reloadSignal, load]);
+
+  const runLint = async () => {
+    setLinting(true);
+    try {
+      setLint(await request<BusinessLintReport>("/v1/business/lint"));
+    } catch (e) {
+      setStatus({ text: `检查失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setLinting(false);
+    }
+  };
 
   const query = search.trim().toLowerCase();
 
@@ -1048,6 +1062,28 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
       <StatusText text={status.text} error={status.error} />
+
+      <div className="my-3 flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="sm" disabled={linting} onClick={() => void runLint()}>
+          {linting ? "检查中…" : "检查异常"}
+        </Button>
+        {lint ? (
+          <span className="text-xs text-muted">
+            {`error ${lint.summary.error} · warn ${lint.summary.warn} · info ${lint.summary.info}`}
+          </span>
+        ) : null}
+      </div>
+      {lint ? (
+        <div className="mb-3 grid gap-2">
+          {lint.findings.length ? lint.findings.map((f, i) => (
+            <div key={`${f.code}-${i}`} className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-surface px-3 py-2 text-sm">
+              <Badge variant={f.level === "error" ? "closed" : f.level === "warn" ? "warn" : "info"}>{f.level}</Badge>
+              <span>{f.message}</span>
+              {f.ref ? <span className="font-mono text-xs text-muted">{f.ref}</span> : null}
+            </div>
+          )) : <p className="text-sm text-muted">没有发现异常。</p>}
+        </div>
+      ) : null}
 
       {!data ? null : !data.exists ? (
         <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">

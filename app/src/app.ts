@@ -19,7 +19,7 @@ import { isRunnerAlive, startTask, writeTaskDoc, type DispatchDeps } from "./cor
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
-import { dayKey } from "./core/time.ts";
+import { dayKey, fmtShort } from "./core/time.ts";
 import { costUsd } from "./core/pricing.ts";
 import { EmojiTable } from "./core/emoji.ts";
 import { needsPlanNudge } from "./core/nudge.ts";
@@ -37,6 +37,11 @@ import type { Plan, StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
 import { businessDir, runtimeDir, sharedDir } from "./core/runtime.ts";
 import { ensureBusinessSeeded } from "./ops/business-map.ts";
+import { render } from "./agent/template.ts";
+import {
+  effectiveMemoryReviewSettings, loadMemoryReviewState, memoryReviewDue, saveMemoryReviewState,
+  type MemoryReviewState,
+} from "./ops/memory-review.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -132,6 +137,11 @@ export class App {
   private silenceReason: string | null = null;
   /** 本轮 send 成功次数 */
   private sendsThisTurn = 0;
+  /** 后台记忆梳理：计数状态、是否在跑、临时上下文和专用工具集 */
+  private memoryReviewState: MemoryReviewState = { turns: 0, lastReviewAt: 0, lastOutcome: "" };
+  private reviewBusy = false;
+  private reviewCtx: { pool: string | null; unread: StoredMessage[] } = { pool: null, unread: [] };
+  private reviewTools: ReturnType<typeof createTools> = [];
   /** 每次唤醒结束后的回调（模拟器/测试用） */
   onWakeDone?: (entry: any) => void;
 
@@ -182,15 +192,12 @@ export class App {
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
-    const tools = createTools({
+    const baseToolDeps = {
       store: this.store, hub: this.hub, cfg, now: () => this.clock.now(),
-      profile: "ufa",
-      readRoot: runtimeDir(cfg),
       currentWake: () => this.activeWake,
       currentUnread: () => this.currentUnread,
       silenceReason: () => this.silenceReason,
       markSilent: (reason: string) => { this.silenceReason = reason; },
-      primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
       rbExec: o.rbExec,
       approval: this.approval,
       // 工具只负责“建完要发通知”，发到哪由 App 按 target=origin/room 解析
@@ -199,6 +206,20 @@ export class App {
         notify: (task: Task) => this.notifyTaskApprovalNow(task),
       },
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
+    };
+    const tools = createTools({
+      ...baseToolDeps,
+      profile: "ufa",
+      readRoot: runtimeDir(cfg),
+      primaryPool: () => resolvePrimaryPool(this.store, this.activeWake),
+    });
+    // 后台记忆梳理：独立工具集，只有 memory；上下文由 reviewCtx 提供。
+    this.memoryReviewState = loadMemoryReviewState(cfg);
+    this.reviewTools = createTools({
+      ...baseToolDeps,
+      profile: "review",
+      currentUnread: () => this.reviewCtx.unread,
+      primaryPool: () => this.reviewCtx.pool,
     });
     this.engine = new PiEngine({
       cfg, store: this.store, log: this.log, tools, systemPrompt: () => systemPrompt(cfg, this.emoji.commonIds(), this.store),
@@ -452,6 +473,73 @@ export class App {
     updateTask(this.store, current.id, { status: "cancelled" });
     appendNote(this.store, current.id, "审批超时，按拒绝处理，未执行");
     return { ok: false, text: `#${current.id}「${taskDisplayName(current)}」审批超时，按拒绝处理，没有执行` };
+  }
+
+  // ---------- 后台记忆梳理 ----------
+
+  /** 每轮唤醒后累加用户回合；到点由 maybeMemoryReview 决定跑不跑。 */
+  private noteInboundMessages(unread: StoredMessage[]): void {
+    const inbound = unread.filter((m) => !m.from_self).length;
+    if (!inbound) return;
+    this.memoryReviewState = { ...this.memoryReviewState, turns: this.memoryReviewState.turns + inbound };
+    try { saveMemoryReviewState(this.o.cfg, this.memoryReviewState); } catch { /* 状态写失败不影响唤醒 */ }
+  }
+
+  private pickReviewPool(unread: StoredMessage[]): string | null {
+    const inbound = unread.filter((m) => !m.from_self && m.user_id);
+    if (inbound.length) return inbound[inbound.length - 1].pool_id;
+    return resolvePrimaryPool(this.store, this.activeWake) ?? null;
+  }
+
+  /**
+   * 后台记忆梳理：到点就 fork 一个只带 memory 的临时会话。
+   * 技能和业务关系都不在这里做——它们走主动（ufa-maintenance 技能）。
+   */
+  private async maybeMemoryReview(unread: StoredMessage[]): Promise<void> {
+    const cfg = this.o.cfg;
+    const settings = effectiveMemoryReviewSettings(cfg);
+    const now = this.clock.now();
+    if (this.reviewBusy || this.store.isPaused() || !memoryReviewDue(settings, this.memoryReviewState, now)) return;
+
+    const day = dayKey(now, cfg.timezone);
+    const usage = this.store.getUsage(day);
+    const tokensLeft = tokensLeftOf(cfg, usage.tokens);
+    const callsLeft = callsLeftOf(cfg, usage.llm_calls);
+    if (tokensLeft < 3000 || callsLeft < 1) return;
+
+    const poolId = this.pickReviewPool(unread);
+    if (!poolId) return;
+
+    this.reviewBusy = true;
+    this.memoryReviewState = { ...this.memoryReviewState, turns: 0, lastReviewAt: now, lastOutcome: "running" };
+    try { saveMemoryReviewState(cfg, this.memoryReviewState); } catch { /* ignore */ }
+    try {
+      const rows = this.store.recentMessages(poolId, 30);
+      const recent = rows.map((m) =>
+        `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
+      ).join("\n");
+      this.reviewCtx = { pool: poolId, unread: rows };
+      const prompt = render("memory-review", {
+        now: new Intl.DateTimeFormat("zh-CN", {
+          timeZone: cfg.timezone, dateStyle: "medium", timeStyle: "short",
+        }).format(new Date(now)),
+        pool: this.store.poolAlias(poolId),
+        recent: recent || "（没有最近消息）",
+      });
+      const res = await this.engine.review(
+        prompt, { tokensLeft, callsLeft }, this.reviewTools, render("memory-review-system", {}),
+      );
+      this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
+      this.memoryReviewState = { ...this.memoryReviewState, lastOutcome: res.error ? `error:${res.error}` : "ok" };
+      this.log.info(`记忆梳理${res.error ? `失败：${res.error}` : "完成"}（${this.store.poolAlias(poolId)}，${res.llmCalls} 次调用）`);
+    } catch (e) {
+      this.memoryReviewState = { ...this.memoryReviewState, lastOutcome: `error:${(e as Error).message}` };
+      this.log.warn(`记忆梳理失败：${(e as Error).message}`);
+    } finally {
+      this.reviewCtx = { pool: null, unread: [] };
+      this.reviewBusy = false;
+      try { saveMemoryReviewState(cfg, this.memoryReviewState); } catch { /* ignore */ }
+    }
   }
 
   // ---------- 自省 ----------
@@ -948,6 +1036,9 @@ export class App {
       // 模型/接口报错也是「程序的事」，别让她背锅
       await this.notifySys("error", this.errorText(res.error));
     }
+    // 后台只做记忆梳理；技能和业务关系走主动，不在这里触发
+    this.noteInboundMessages(unread);
+    void this.maybeMemoryReview(unread).catch((e) => this.log.warn(`记忆梳理异常：${(e as Error).message}`));
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {
       tools: res.toolCalls.map((c) => ({ name: c.name, args: c.args, result: c.result, isError: c.isError })),
       sent, assistantText: res.assistantText, llmCalls: res.llmCalls, tokens: res.tokens,

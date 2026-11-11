@@ -196,6 +196,11 @@ test("map 工具：UFA 有、WA 没有；index/path 可用", async () => {
   assert.equal(p.details?.ok, true);
   assert.match(textOf(p), /deploys_to/);
 
+  const lint: any = await mapTool.execute("id", { action: "lint" });
+  assert.equal(lint.details?.ok, true);
+  assert.match(textOf(lint), /业务地图 lint/);
+  assert.equal(typeof lint.details?.summary?.warn, "number");
+
   const wa = createTools({ store, hub: {} as any, cfg: x.cfg, now: () => Date.now(), profile: "wa" }) as any[];
   assert.ok(!wa.some((t) => t.name === "map"));
   store.close();

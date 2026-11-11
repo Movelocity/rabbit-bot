@@ -61,6 +61,8 @@ export interface AgentEngine {
    * 在会话里问会被前面的聊天带偏，所以另起一个。
    */
   reflect(prompt: string, limits: RunLimits, systemPrompt: string): Promise<RunResult>;
+  /** 后台记忆梳理：独立临时会话，只给传入的工具（memory），用完即弃。 */
+  review(prompt: string, limits: RunLimits, tools: ToolDefinition[], systemPrompt: string): Promise<RunResult>;
   dispose(): Promise<void>;
 }
 
@@ -228,6 +230,29 @@ export class PiEngine implements AgentEngine {
       this.d.log.info("自省会话就绪（无工具、独立 system prompt）");
     }
     return this.runPrompt(this.reflectSession, prompt, limits);
+  }
+
+  /**
+   * 后台记忆梳理：每次新开一个临时会话，只给传入的工具（memory），
+   * 不落盘、不碰主会话，也不能发消息或建任务。用完立即 dispose。
+   */
+  async review(prompt: string, limits: RunLimits, tools: ToolDefinition[], systemPrompt: string): Promise<RunResult> {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: true, maxRetries: this.d.cfg.llm.maxRetries },
+    } as any);
+    const { loader } = await this.buildLoader(settingsManager, false, systemPrompt);
+    const { session } = await createAgentSession({
+      cwd: this.cwd, agentDir: this.piDir, model: this.d.model, thinkingLevel: this.d.cfg.llm.thinkingLevel,
+      modelRuntime: this.d.modelRuntime, resourceLoader: loader, settingsManager,
+      sessionManager: SessionManager.inMemory(this.cwd),
+      noTools: "builtin", tools: [], customTools: tools,
+    });
+    try {
+      return await this.runPrompt(session, prompt, limits);
+    } finally {
+      try { session.dispose(); } catch { /* 临时会话，dispose 失败不影响结果 */ }
+    }
   }
 
   private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {

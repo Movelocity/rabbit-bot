@@ -235,6 +235,12 @@ export interface SchedulerSettings {
   taskWakeMs: number;
 }
 
+export interface MemoryReviewSettings {
+  enabled: boolean;
+  everyTurns: number;
+  minIntervalSec: number;
+}
+
 export interface RuntimeFile {
   path: string;
   content: string;
@@ -292,6 +298,22 @@ export interface BusinessEdge {
   relation_name: string;
   from: string;
   to: string;
+}
+
+export interface BusinessLintFinding {
+  level: "error" | "warn" | "info";
+  code: string;
+  message: string;
+  ref?: string;
+}
+
+export interface BusinessLintReport {
+  checked_at: number;
+  exists: boolean;
+  version: number | null;
+  counts: { types: number; objects: number; relations: number; edges: number; actions: number; terms: number };
+  findings: BusinessLintFinding[];
+  summary: { error: number; warn: number; info: number };
 }
 
 export interface BusinessData {

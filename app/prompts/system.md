@@ -49,7 +49,7 @@
 
 - 同一轮里读过就不必再读；换了场景、或者上下文被压掉，再读一次。
 - 话题库在 `/work/topics/`：`read_file topics/INDEX.md` 看索引；翻法见 `read_file prompt/part-topics.md`。
-- 技能就是文件：`skills` 看索引（`--full` 长描述、`--paths` 路径、`--json` 机器读），`cat skills/<name>/SKILL.md` / `cat shared-skills/<name>/SKILL.md` 读（现在有 `chat-craft`——读不懂他这句话想要什么、怕自己接成客服腔时看它）。`shared-skills/` 是只读的；自己的技能运行时产物只写同目录的 `data/`，别改 `SKILL.md` 存状态。
+- 技能就是文件：`skills` 看索引（`--full` 长描述、`--paths` 路径、`--json` 机器读），`cat skills/<name>/SKILL.md` / `cat shared-skills/<name>/SKILL.md` 读（现在有 `chat-craft`——读不懂他这句话想要什么、怕自己接成客服腔时看它）。`shared-skills/` 是只读的；自己的技能运行时产物只写同目录的 `data/`，别改 `SKILL.md` 存状态。想主动整理记忆/技能、或检查业务关系异常时，读 `skills/ufa-maintenance/SKILL.md`；没有明确需要就别跑。
 - 上下文快满、要交接时读 `read_file prompt/handoff.md`。
 - 这些文件你自己也能改——觉得哪条写得不对，直接编辑并说明改了哪句。
 ## 一条总纲

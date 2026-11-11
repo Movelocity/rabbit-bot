@@ -35,11 +35,15 @@ import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listSkills } from "./ops/skills.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
+import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
 } from "./ops/scheduler-settings.ts";
+import {
+  effectiveMemoryReviewSettings, saveMemoryReviewSettings, validateMemoryReviewSettings,
+} from "./ops/memory-review.ts";
 import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 512 * 1024;
@@ -650,6 +654,24 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET|PUT /v1/scheduler");
         }
+        case "memory-review": {
+          if (parts.length === 2 && method === "GET") return reply(200, effectiveMemoryReviewSettings(d.cfg));
+          if (parts.length === 2 && method === "PUT") {
+            let settings;
+            try {
+              settings = validateMemoryReviewSettings(body);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            try {
+              saveMemoryReviewSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入记忆梳理设置失败：${(e as Error).message}`);
+            }
+            return reply(200, effectiveMemoryReviewSettings(d.cfg));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/memory-review");
+        }
         case "persona": {
           if (parts.length === 2 && method === "GET") return reply(200, readPersona(d.cfg));
           if (parts.length === 2 && method === "PUT") {
@@ -823,7 +845,12 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               throw new HttpError(400, `业务地图写入失败：${(e as Error).message}`);
             }
           }
-          throw new HttpError(404, "用法：GET|PUT /v1/business（PUT 全量替换；body 含 version/types/objects/relations/edges/actions/terms）");
+          if (parts.length === 3 && parts[2] === "lint" && method === "GET") {
+            const report = lintBusinessMap(d.store);
+            try { writeBusinessLintReport(d.cfg, report); } catch { /* 报告落盘失败不影响返回 */ }
+            return reply(200, report);
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/business、GET /v1/business/lint（只读检查）");
         }
         case "sandbox": {
           // 只暴露文件区；`sb run` 不给 —— 技能脚本本来就在 shell 里

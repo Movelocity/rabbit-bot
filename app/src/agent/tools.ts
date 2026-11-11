@@ -36,6 +36,7 @@ import {
 import { resolveApiToken } from "../api-token.ts";
 import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
 import { findPaths, formatPath, impactOf, loadBusinessMap, renderIndex, resolveObjects, showObject } from "../ops/business-map.ts";
+import { lintBusinessMap } from "../ops/business-lint.ts";
 
 export type RbExec = (argv: string[]) => Promise<{ ok: boolean; code: number; output: string }>;
 
@@ -62,7 +63,7 @@ export interface ToolDeps {
   /** 审批裁决后置位 pending tick 时喊一声（UFA 工具用） */
   enqueue?: () => void;
   /** 工具集归属：必填，避免漏传时回退到全量工具 */
-  profile: "ufa" | "wa";
+  profile: "ufa" | "wa" | "review";
   /** read_file 的根目录覆盖；UFA 固定为 runtime，传了就不跟着 exec.dir 漂 */
   readRoot?: string;
   /** 任务派发依赖（测试注入假执行器）；默认从 cfg.api + data/run/api.token 组出来 */
@@ -879,6 +880,7 @@ export function createTools(d: ToolDeps) {
     "  resolve <说法>           把「那个项目」这类说法解析成候选对象",
     "  path <from> <to>         找两个对象之间的关系路径",
     "  impact <id>              看改这个对象会影响谁",
+    "  lint                     只读检查异常（悬空引用/没边/没证据/重名）",
     "  help                     看这份说明",
   ].join("\n");
 
@@ -887,10 +889,11 @@ export function createTools(d: ToolDeps) {
     label: "map",
     executionMode: "sequential",
     description:
-      "业务地图（只读）：先看 index 骨架，再 show / resolve / path / impact 逐层下钻。"
+      "业务地图（只读）：先看 index 骨架，再 show / resolve / path / impact 逐层下钻；"
+      + "lint 只读检查异常（悬空引用、关系没边、边没证据、重名）。"
       + "关系是显式声明的，不要猜；查不到就说查不到，别编关系。",
     parameters: Type.Object({
-      action: Type.String({ description: "index / show / resolve / path / impact / help" }),
+      action: Type.String({ description: "index / show / resolve / path / impact / lint / help" }),
       id: Type.Optional(Type.String({ description: "show、impact 用：对象 id" })),
       term: Type.Optional(Type.String({ description: "resolve 用：用户说的词或别名" })),
       from: Type.Optional(Type.String({ description: "path 用：起点对象 id" })),
@@ -901,6 +904,16 @@ export function createTools(d: ToolDeps) {
       const action = String(p.action ?? "").trim().toLowerCase();
       try {
         if (action === "help") return txt(MAP_HELP, { ok: true });
+        if (action === "lint") {
+          const report = lintBusinessMap(d.store);
+          const body = report.findings.length
+            ? report.findings.map((f) => `${f.level} [${f.code}] ${f.message}${f.ref ? `（${f.ref}）` : ""}`).join("\n")
+            : "没有发现异常。";
+          return txt(
+            `业务地图 lint：error ${report.summary.error} / warn ${report.summary.warn} / info ${report.summary.info}\n${body}`,
+            { ok: true, summary: report.summary, findings: report.findings },
+          );
+        }
         const map = loadBusinessMap(d.store);
         if (!map) {
           return txt("还没有业务地图：在 runtime/business/ 下放 objects.json / relations.json 后再查。", { ok: false });
@@ -1032,5 +1045,7 @@ export function createTools(d: ToolDeps) {
   ];
   // WA 才需要写文件和跑命令。
   const waTools = [readFile, writeFile, runShellTool, rb];
+  // 后台记忆梳理：只给 memory，不能发消息、建任务、建技能、改业务地图。
+  if (d.profile === "review") return [memory];
   return d.profile === "wa" ? waTools : ufaTools;
 }
