@@ -50,6 +50,8 @@ export interface Task {
   /** 正在跑的 runner 进程 pid；没在跑是 null */
   runner_pid: number | null;
   runner_started_at: number | null;
+  /** 本次执行超过阈值时在任务池提醒过一次的时刻；每次启动/恢复重置 */
+  long_run_notified_at: number | null;
   /** 任务文档路径（<work_dir>/.ufa/tasks/task-<id>.md） */
   doc_path: string;
   /** 执行耗费：进程退出时从 runner.jsonl 聚合；老任务首次看看板时回填 */
@@ -216,7 +218,8 @@ export function listTasks(store: Store, filter: TaskFilter = {}): Task[] {
 export type TaskPatch = Partial<Pick<Task,
   "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files" | "context"
   | "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
-  | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at" | "doc_path"
+  | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at"
+  | "long_run_notified_at" | "doc_path"
   | "exec_usage_at" | "exec_steps" | "exec_duration_ms" | "exec_total_tokens" | "exec_input_tokens"
   | "exec_output_tokens" | "exec_reasoning_tokens" | "exec_cache_read_tokens" | "exec_cache_write_tokens" | "exec_cost_usd"
 >>;
@@ -224,7 +227,8 @@ export type TaskPatch = Partial<Pick<Task,
 const PATCH_KEYS = [
   "name", "goal", "deliverable", "constraints", "acceptance", "files", "context",
   "status", "stage", "worker_id", "claimed_at", "lease_until", "attempt", "note", "result", "artifact", "end_at",
-  "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at", "doc_path",
+  "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at",
+  "long_run_notified_at", "doc_path",
   "exec_usage_at", "exec_steps", "exec_duration_ms", "exec_total_tokens", "exec_input_tokens",
   "exec_output_tokens", "exec_reasoning_tokens", "exec_cache_read_tokens", "exec_cache_write_tokens", "exec_cost_usd",
 ] as const;

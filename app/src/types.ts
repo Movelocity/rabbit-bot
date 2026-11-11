@@ -1,5 +1,5 @@
-export type Platform = "feishu" | "mock" | "matrix" | "task";
-export type PoolKind = "private" | "group" | "task";
+export type Platform = "feishu" | "mock" | "matrix" | "task" | "schedule";
+export type PoolKind = "private" | "group" | "task" | "schedule";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 
 /** 落到本地的一张图片（已压缩）。path 是绝对路径，喂模型时读成 base64。 */
@@ -37,6 +37,8 @@ export interface PoolMessage {
 export interface StoredMessage extends PoolMessage {
   seq: number; // 自增，游标基于它
   user_id: string | null; // 身份映射后的统一 user_id
+  /** 系统留痕：不进上下文、不算未读 */
+  internal?: boolean;
 }
 
 export interface Pool {
@@ -56,7 +58,7 @@ export interface InboundMessage extends Omit<PoolMessage, "pool_id"> {
   pool_title?: string;
 }
 
-export type WakeType = "tick" | "message" | "plan" | "task-updated";
+export type WakeType = "tick" | "message" | "plan" | "schedule" | "task-updated";
 export interface Wake {
   type: WakeType;
   pools: Set<string>; // 触发的池
@@ -65,6 +67,24 @@ export interface Wake {
   proactive?: { pool: string | null; stage: number; a: number; peak: number; sessionTs: number; detail: string }[];
   reasons: string[];
   enqueuedAt: number;
+}
+
+export type ScheduleKind = "cron" | "delay";
+export type ScheduleStatus = "active" | "cancelled" | "done";
+/** 定时日程：cron 重复或创建后 delay_minutes 分钟一次性触发。 */
+export interface Schedule {
+  id: number;
+  title: string;
+  /** 到点唤醒时交给 agent 的原话 */
+  content: string;
+  kind: ScheduleKind;
+  cron: string | null;
+  delay_minutes: number | null;
+  next_at: number;
+  status: ScheduleStatus;
+  last_fired_at: number | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export type PlanStatus = "pending" | "done" | "cancelled" | "expired";

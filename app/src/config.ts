@@ -32,7 +32,15 @@ export interface Config {
    * 仓库和配置里都不写死用户名，换一台 Mac 不用改。
    */
   paths?: { desktopDir?: string };
-  scheduler: { tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean; runnerWatchMs?: number };
+  scheduler: {
+    tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number;
+    debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number;
+    batchToTick?: boolean; runnerWatchMs?: number;
+    /** 日程轮询间隔；只影响发现到点的速度 */
+    scheduleTickMs?: number;
+    /** running 任务超过这个时长就在任务池提醒一次；0 = 关闭，默认 10 分钟 */
+    longTaskWarnMs?: number;
+  };
   send: {
     confirmWaitMs: number; confirmViaApi: boolean;
     /** 分条投递的间隔（按上一条长度缩放，见 core/pacing.ts）。关掉=所有句子立刻连发 */
@@ -62,7 +70,6 @@ export interface Config {
     /** 程序自己出的错（模型报错、异常崩了）：直接发 IM，不过模型、不进上下文 */
     errorNotice?: { enabled: boolean; text: string; dedupeMinutes: number };
   };
-  plans: { missedPolicy: "catchup" | "skip"; missedGraceMs: number };
   tide: {
     enabled: boolean;
     dailyCap: { L1: number; L2: number };
@@ -265,6 +272,14 @@ export function validateConfig(cfg: Config): void {
   const runnerWatchMs = cfg.scheduler.runnerWatchMs;
   if (runnerWatchMs !== undefined && !(Number.isFinite(runnerWatchMs) && runnerWatchMs >= 0)) {
     throw new Error("config: scheduler.runnerWatchMs 必须是非负数（0 = 关闭巡检）");
+  }
+  for (const [key, name] of [
+    [cfg.scheduler.scheduleTickMs, "scheduler.scheduleTickMs"],
+    [cfg.scheduler.longTaskWarnMs, "scheduler.longTaskWarnMs"],
+  ] as const) {
+    if (key !== undefined && !(Number.isFinite(key) && key >= 0)) {
+      throw new Error(`config: ${name} 必须是非负数`);
+    }
   }
   // 缓存折算汇率：0~1 之间（1 = 不打折）
   const rate = cfg.limits.cacheReadRate;

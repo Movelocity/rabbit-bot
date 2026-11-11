@@ -10,10 +10,11 @@ import { Store } from "../src/core/db.ts";
 import { wakePrompt } from "../src/agent/prompt.ts";
 import { render } from "../src/agent/template.ts";
 import { localDay } from "../src/core/tide.ts";
+import { appendScheduleEvent, ensureSchedulePool } from "../src/core/schedules.ts";
 
 const TZ = "Asia/Shanghai";
 
-function mkWake(type: "message" | "tick"): any {
+function mkWake(type: "message" | "tick" | "schedule"): any {
   return { type, pools: new Set<string>(), planFires: [], reasons: ["test"], enqueuedAt: Date.now() };
 }
 
@@ -51,6 +52,31 @@ test("message 剧本：路由指向 scene-message，先判断需求再回", () =
   assert.doesNotMatch(script, /连发 2~3 条/, "旧的连发闲聊已废弃");
   assert.doesNotMatch(script, /往下延半步/, "不再要求为续聊而续聊");
   assert.doesNotMatch(script, /定时检查/);
+});
+
+test("schedule 剧本：路由指向 scene-schedule，并从共用日程池读到原文", () => {
+  const s = mkStore();
+  const now = Date.now();
+  const poolId = ensureSchedulePool(s);
+  appendScheduleEvent(s, {
+    id: 7, title: "交周报", content: "提醒他周五下班前交周报",
+    kind: "delay", cron: null, delay_minutes: 1, next_at: now, status: "active",
+    last_fired_at: null, created_at: now, updated_at: now,
+  }, now);
+  const wake = mkWake("schedule");
+  wake.pools = new Set([poolId]);
+  const unread = s.unread(poolId);
+  const p = wakePrompt(s, { wake, now, unread, context: new Map() });
+  assert.match(p, /【这一轮：schedule】/);
+  assert.match(p, /read_file prompt\/scene-schedule\.md/);
+  assert.match(p, /日程/);
+  assert.match(p, /提醒他周五下班前交周报/, "日程原文要进提示词");
+  assert.equal(s.poolsWithUnread().includes(poolId), true);
+
+  const script = render("scene-schedule", {});
+  assert.match(script, /日程池有到点的事件/);
+  assert.match(script, /不要往这个池发消息/);
+  assert.match(script, /不代表现在还合适/, "过期日程允许跳过");
 });
 
 test("状态行：第一次主动 + 今天已发 0 条", () => {

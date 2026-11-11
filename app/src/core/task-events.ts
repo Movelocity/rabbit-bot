@@ -15,6 +15,10 @@ export interface AppendTaskEventInput {
   senderName?: string;
   /** 测试/回放注入「现在」；默认 Date.now() */
   ts?: number;
+  /** 系统留痕：不进上下文、不算未读（任务面板和事件接口仍能看到） */
+  internal?: boolean;
+  /** false = 不叫醒任务事件 tick；默认 true */
+  notify?: boolean;
 }
 
 export interface TaskEvent {
@@ -65,9 +69,10 @@ export function appendTaskEvent(store: Store, taskId: number, input: AppendTaskE
     is_mention_me: false,
     media_type: "text",
     from_self: false,
+    internal: input.internal === true,
   });
   if (!stored) throw new Error(`任务 #${id} 的事件写入失败`);
-  notifiers.get(store)?.();
+  if (input.notify !== false) notifiers.get(store)?.();
   return { seq: stored.seq, ts, local: fmtLocal(ts), sender: senderName, text };
 }
 

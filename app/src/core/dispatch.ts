@@ -18,7 +18,7 @@ import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
 import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
-import { parseRunnerUsage, taskUsagePatch } from "./task-usage.ts";
+import { parseRunnerUsage, runnerLogPath, taskUsagePatch } from "./task-usage.ts";
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 
 // 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
@@ -262,6 +262,51 @@ export function sweepDeadRunners(store: Store, opts: { dataDir?: string; now?: n
   return { checked: running.length, dead };
 }
 
+export interface LongRunningSweepResult {
+  /** 这轮扫了多少条 running 任务 */
+  checked: number;
+  /** 首次超过阈值、刚写过提醒的任务 id */
+  warned: number[];
+}
+
+/**
+ * 长任务提醒：running 且超过阈值（默认 10 分钟）的任务，在任务池写一条 internal 提醒。
+ *
+ * 只提醒一次：用 `UPDATE ... WHERE long_run_notified_at IS NULL` 原子认领；
+ * 每次启动/恢复任务时把这个字段清空，所以「同一轮执行」只提醒一次。
+ * 消息标 internal 且不通知调度器：只留痕给任务面板/事件接口，不唤醒 UFA，也不进上下文。
+ */
+export function sweepLongRunningTasks(
+  store: Store,
+  opts: { now?: number; thresholdMs?: number } = {},
+): LongRunningSweepResult {
+  const thresholdMs = opts.thresholdMs ?? 10 * 60_000;
+  const now = opts.now ?? Date.now();
+  if (!(thresholdMs > 0)) return { checked: 0, warned: [] };
+  const running = store.db.prepare(
+    "SELECT * FROM tasks WHERE status='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
+  ).all() as Task[];
+  const warned: number[] = [];
+  for (const task of running) {
+    const startedAt = task.runner_started_at ?? task.start_at;
+    if (now - startedAt < thresholdMs) continue;
+    const claimed = store.db.prepare(
+      "UPDATE tasks SET long_run_notified_at=?, updated_at=? WHERE id=? AND long_run_notified_at IS NULL AND status='running'",
+    ).run(now, now, task.id);
+    if (Number(claimed.changes) === 0) continue;
+    warned.push(task.id);
+    const mins = Math.round((now - startedAt) / 60_000);
+    appendTaskEvent(store, task.id, {
+      text: `任务 #${task.id} 已持续 ${mins} 分钟，可能有异常。勿回复此消息。`,
+      sender: "dispatcher",
+      senderName: "调度器",
+      internal: true,
+      notify: false,
+    });
+  }
+  return { checked: running.length, warned };
+}
+
 function killTree(pid: number, signal: NodeJS.Signals): void {
   // detached 子进程是进程组组长：先杀整组，失败再退回到单 pid
   try {
@@ -411,6 +456,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
     session_id: opts.resume ? fresh.session_id : "",
     runner_pid: pid,
     runner_started_at: startedAt,
+    long_run_notified_at: null,
     doc_path: docPath,
   });
 
@@ -488,11 +534,16 @@ export async function resumeTask(store: Store, task: Task, deps: DispatchDeps): 
 }
 
 /** 杀进程树：TERM → graceMs → KILL；清 runner 字段，running 的任务回到 pending。 */
-export async function stopTask(store: Store, task: Task, opts: { now?: number; graceMs?: number } = {}): Promise<Task> {
+export async function stopTask(
+  store: Store,
+  task: Task,
+  opts: { now?: number; graceMs?: number; dataDir?: string } = {},
+): Promise<Task> {
   const fresh = getTask(store, task.id);
   if (!fresh) throw new Error(`没有任务 #${task.id}`);
   const pid = fresh.runner_pid;
   const wasAlive = !!pid && isRunnerAlive(pid);
+  const startedAt = fresh.runner_started_at ?? fresh.claimed_at;
   if (pid && wasAlive) {
     killTree(pid, "SIGTERM");
     const deadline = Date.now() + (opts.graceMs ?? 5000);
@@ -501,7 +552,17 @@ export async function stopTask(store: Store, task: Task, opts: { now?: number; g
   }
   const patch: Parameters<typeof updateTask>[2] = { runner_pid: null, runner_started_at: null };
   if (fresh.status === "running") patch.status = "pending";
-  const updated = updateTask(store, fresh.id, patch);
+  updateTask(store, fresh.id, patch);
+  // 关闭也要落一次用量：进程被 SIGTERM/KILL 时不一定还能等到 exit 回调。
+  // 已记录过的退出耗时之和 + 本轮实际跑的时长；token 从 runner.jsonl 重算，不会重复累加。
+  if (pid !== null) {
+    const usage = parseRunnerUsage(runnerLogPath(opts.dataDir ?? DEFAULT_DATA_DIR, fresh.id));
+    if (wasAlive && startedAt) {
+      usage.durationMs = usage.exitedMs + Math.max(0, (opts.now ?? Date.now()) - startedAt);
+    }
+    updateTask(store, fresh.id, taskUsagePatch(usage));
+  }
+  const updated = getTask(store, fresh.id)!;
   appendTaskEvent(store, fresh.id, {
     text: wasAlive ? `已停止执行（pid=${pid}）` : pid ? `runner 已退出（pid=${pid}），清理状态` : "没有在跑的进程，只清理 runner 状态",
     sender: "dispatcher",

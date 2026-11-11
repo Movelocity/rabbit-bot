@@ -43,6 +43,7 @@ import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMa
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
+import { createSchedule, formatSchedule, isScheduleStatus } from "./core/schedules.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
 } from "./ops/scheduler-settings.ts";
@@ -68,8 +69,8 @@ export interface ApiDeps {
   onTaskCreated?: (task: Task) => void;
   /** 任务在 Web 审批/驳回/取消后，清掉 IM 里的待审提示 */
   onTaskDecided?: (taskId: number) => void;
-  /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；不传则只持久化 */
-  scheduler?: Pick<Scheduler, "updateConfig">;
+  /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；日程变更后叫它马上重查 */
+  scheduler?: Pick<Scheduler, "updateConfig"> & Partial<Pick<Scheduler, "notifyScheduleChange">>;
 }
 
 const WEB_ROOT = path.join(APP_ROOT, "web");
@@ -324,6 +325,43 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET/POST /v1/plans、GET/PATCH/DELETE /v1/plans/:id");
         }
+        case "schedules": {
+          const tz = d.cfg.timezone;
+          if (parts.length === 2 && method === "GET") {
+            const want = String(url.searchParams.get("status") ?? "all").trim().toLowerCase();
+            const status = want === "all" ? undefined : (isScheduleStatus(want) ? want : null);
+            if (status === null) throw new HttpError(400, "status 只能是 active / cancelled / done / all");
+            return reply(200, d.store.listSchedules(status).map((s) => formatSchedule(s, tz)));
+          }
+          if (parts.length === 2 && method === "POST") {
+            let created;
+            try {
+              created = createSchedule(d.store, body, Date.now(), tz);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            d.scheduler?.notifyScheduleChange?.();
+            return reply(201, formatSchedule(created, tz));
+          }
+          const id = parts.length >= 3 ? Number(parts[2]) : NaN;
+          if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "日程 id 要是正整数");
+          if (parts.length === 3 && method === "GET") {
+            const s = d.store.getSchedule(id);
+            if (!s) throw new HttpError(404, `没有日程 #${id}`);
+            return reply(200, formatSchedule(s, tz));
+          }
+          if (parts.length === 3 && (method === "PATCH" || method === "DELETE")) {
+            const want = method === "DELETE"
+              ? "cancelled"
+              : String(body.status ?? "").trim().toLowerCase();
+            if (!isScheduleStatus(want)) throw new HttpError(400, "status 只能是 active / cancelled / done");
+            const s = d.store.setScheduleStatus(id, want, Date.now());
+            if (!s) throw new HttpError(404, `没有日程 #${id}`);
+            d.scheduler?.notifyScheduleChange?.();
+            return reply(200, formatSchedule(s, tz));
+          }
+          throw new HttpError(404, "用法：GET|POST /v1/schedules、GET/PATCH/DELETE /v1/schedules/:id");
+        }
         case "tasks": {
           if (parts.length === 2 && method === "GET") {
             const status = url.searchParams.get("status");
@@ -500,12 +538,12 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 4 && parts[3] === "stop" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
-            return reply(200, formatTask(await stopTask(d.store, task)));
+            return reply(200, formatTask(await stopTask(d.store, task, { dataDir: d.cfg.dataDir })));
           }
           if (parts.length === 4 && parts[3] === "cancel" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
-            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task);
+            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const resumed = cancelTask(d.store, id);
             d.onTaskDecided?.(id);
             return reply(200, formatTask(resumed));

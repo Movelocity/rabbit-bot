@@ -6,12 +6,14 @@ import { SettingsView } from "./manage/SettingsView.tsx";
 import { UsageView } from "./manage/UsageView.tsx";
 import { TaskStatsView } from "./manage/TaskStatsView.tsx";
 import { SkillsView } from "./manage/SkillsView.tsx";
+import { SchedulesView } from "./manage/SchedulesView.tsx";
 
 const LABELS: Record<ManageView, string> = {
   usage: "用量",
   "task-stats": "任务统计",
   persona: "提示词编辑",
   users: "用户",
+  schedules: "日程",
   settings: "调度",
   skills: "技能",
 };
@@ -48,6 +50,7 @@ export function ManagePage({
         {view === "task-stats" && <TaskStatsView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
+        {view === "schedules" && <SchedulesView reloadSignal={reloadSignal} />}
         {view === "settings" && <SettingsView reloadSignal={reloadSignal} />}
         {view === "skills" && <SkillsView reloadSignal={reloadSignal} />}
       </div>

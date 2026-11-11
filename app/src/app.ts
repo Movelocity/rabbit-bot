@@ -15,9 +15,10 @@ import {
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
 import { setTaskEventNotifier } from "./core/task-events.ts";
-import { isRunnerAlive, startTask, sweepDeadRunners, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
+import { isRunnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
+import { appendScheduleEvent, ensureSchedulePool, fireSchedule } from "./core/schedules.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey, fmtShort } from "./core/time.ts";
 import { costUsd } from "./core/pricing.ts";
@@ -186,6 +187,13 @@ export class App {
       poolsWithUnread: () => this.store.poolsWithUnread(),
       poolKind: (id) => this.store.getPool(id)?.kind,
       proactivePools: (now) => this.proactivePools(now),
+      dueSchedules: (now) => this.store.dueSchedules(now),
+      fireSchedule: (s, now) => {
+        const updated = fireSchedule(this.store, s, now, cfg.timezone);
+        appendScheduleEvent(this.store, s, now);
+        if (updated) this.log.info(`日程 #${s.id}「${s.title}」下一次 ${updated.next_at}（${updated.status}）`);
+      },
+      schedulePoolId: ensureSchedulePool(this.store),
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
@@ -204,6 +212,7 @@ export class App {
         notify: (task: Task) => this.notifyTaskApprovalNow(task),
       },
       enqueue: () => this.queue.enqueue(makeWake("task-updated", [], "approval")),
+      scheduleChanged: () => this.scheduler.notifyScheduleChange(),
     };
     const tools = createTools({
       ...baseToolDeps,
@@ -270,7 +279,7 @@ export class App {
 
     for (const pool of this.store.listPools()) {
       // 任务池是任务事件的落点，不是她跟人说话的地方：不主动、不自省
-      if (pool.kind === "task") continue;
+      if (pool.kind === "task" || pool.kind === "schedule") continue;
       if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const r = this.store.latestReflection(pid);
@@ -377,6 +386,16 @@ export class App {
       }
     } catch (e) {
       this.log.warn(`执行器存活巡检失败：${(e as Error).message}`);
+    }
+    const thresholdMs = this.o.cfg.scheduler.longTaskWarnMs ?? 600_000;
+    if (!(thresholdMs > 0)) return;
+    try {
+      const r = sweepLongRunningTasks(this.store, { now: this.clock.now(), thresholdMs });
+      if (r.warned.length) {
+        this.log.info(`长任务巡检：${r.warned.length} 个任务超过 ${Math.round(thresholdMs / 60_000)} 分钟，任务池已留提醒（${r.warned.map((id) => `#${id}`).join(" ")}）`);
+      }
+    } catch (e) {
+      this.log.warn(`长任务巡检失败：${(e as Error).message}`);
     }
   }
 
@@ -608,7 +627,7 @@ export class App {
     const delay = cfg.proactive?.reflectionDelayMs ?? 300_000;
     for (const pool of this.store.listPools()) {
       // 任务池的进度/完成事件不该触发「她想说话了」
-      if (pool.kind === "task") continue;
+      if (pool.kind === "task" || pool.kind === "schedule") continue;
       if (!this.platformLive(pool.platform)) continue;
       const pid = pool.pool_id;
       const lastUser = this.store.lastUserMessageTs(pid);
@@ -727,7 +746,7 @@ export class App {
     const key = `capNotice.${day}`;
     if (n.oncePerDay && this.store.getKv(key)) return null;
     const waiting = this.store.poolsWithUnread()
-      .filter((id) => this.store.getPool(id)?.kind !== "task");
+      .filter((id) => !["task", "schedule"].includes(this.store.getPool(id)?.kind ?? ""));
     if (!waiting.length) return null;
     const sent: string[] = [];
     for (const pool of waiting) {
@@ -758,7 +777,7 @@ export class App {
     const n = this.o.cfg.limits.errorNotice;
     if (!n?.enabled) return;
     const waiting = this.store.poolsWithUnread()
-      .filter((id) => this.store.getPool(id)?.kind !== "task");
+      .filter((id) => !["task", "schedule"].includes(this.store.getPool(id)?.kind ?? ""));
     if (!waiting.length) return;
     const key = `sysNotice.${kind}`;
     const now = this.clock.now();
@@ -923,7 +942,10 @@ export class App {
   private async handleWakeInner(w: Wake): Promise<void> {
     const cfg = this.o.cfg;
     const t0 = this.clock.now();
-    const entry: any = { ts: new Date(t0).toISOString(), type: w.type, reasons: w.reasons, pools: [...w.pools], plans: w.planFires.map((f) => f.planId) };
+    const entry: any = {
+      ts: new Date(t0).toISOString(), type: w.type, reasons: w.reasons, pools: [...w.pools],
+      plans: w.planFires.map((f) => f.planId),
+    };
     const finish = (outcome: string, extra: Record<string, unknown> = {}) => {
       Object.assign(entry, { outcome, ms: this.clock.now() - t0 }, extra);
       this.store.addWakeLog(entry);

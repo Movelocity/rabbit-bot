@@ -3,7 +3,9 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { InboundMessage, MemoryScope, Plan, PlanStatus, Pool, PoolKind, StoredMessage } from "../types.ts";
+import type {
+  InboundMessage, MemoryScope, Plan, PlanStatus, Pool, PoolKind, Schedule, ScheduleKind, ScheduleStatus, StoredMessage,
+} from "../types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pools (
@@ -53,6 +55,21 @@ CREATE TABLE IF NOT EXISTS proactive_log (
 );
 CREATE INDEX IF NOT EXISTS idx_proactive_ts ON proactive_log(ts DESC);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
+CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  pool_id TEXT,
+  kind TEXT NOT NULL,
+  cron TEXT,
+  delay_minutes INTEGER,
+  next_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_fired_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(status, next_at);
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fact', content TEXT NOT NULL,
   source_pool_id TEXT NOT NULL, source_kind TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -164,6 +181,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   session_id        TEXT    NOT NULL DEFAULT '',
   runner_pid        INTEGER,
   runner_started_at INTEGER,
+  long_run_notified_at INTEGER,
   doc_path          TEXT    NOT NULL DEFAULT '',
   -- 执行耗费（2026-11-11）：进程退出时从 runner.jsonl 聚合 token / 费用 / 实际耗时
   exec_usage_at          INTEGER,
@@ -204,12 +222,21 @@ function rowToPool(r: any): Pool & { last_msg_at?: number } {
   };
 }
 
+function rowToSchedule(r: any): Schedule {
+  return {
+    id: r.id, title: r.title, content: r.content,
+    kind: r.kind as ScheduleKind, cron: r.cron ?? null, delay_minutes: r.delay_minutes ?? null,
+    next_at: r.next_at, status: r.status as ScheduleStatus, last_fired_at: r.last_fired_at ?? null,
+    created_at: r.created_at, updated_at: r.updated_at,
+  };
+}
+
 function rowToMsg(r: any): StoredMessage {
   return {
     seq: r.seq, pool_id: r.pool_id, platform: r.platform, msg_id: r.msg_id, sender_id: r.sender_id,
     sender_name: r.sender_name, user_id: r.user_id, ts: r.ts, text: r.text, reply_to: r.reply_to,
     mentions: JSON.parse(r.mentions), is_mention_me: !!r.is_mention_me, media_type: r.media_type, from_self: !!r.from_self,
-    attachment: r.attachment ? JSON.parse(r.attachment) : null,
+    attachment: r.attachment ? JSON.parse(r.attachment) : null, internal: !!r.internal,
   };
 }
 
@@ -284,6 +311,8 @@ export class Store {
     ]) {
       try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }
+    // 长任务提醒（2026-11-11）：同一轮执行只提醒一次；老库补列
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN long_run_notified_at INTEGER"); } catch { /* 已存在 */ }
     // 执行耗费（2026-11-11）：从 data/tasks/<id>/runner.jsonl 聚合；老库补列
     for (const col of [
       "exec_usage_at INTEGER",
@@ -509,10 +538,12 @@ export class Store {
   }
   /** 未读：游标之后、非自己发的消息 */
   unread(poolId: string, limit = 200): StoredMessage[] {
-    return this.messagesAfter(poolId, this.getCursor(poolId), limit).filter((m) => !m.from_self);
+    // internal 是系统留痕（额度提示、长任务提醒等），不该被当成未读交给模型
+    return this.messagesAfter(poolId, this.getCursor(poolId), limit).filter((m) => !m.from_self && !m.internal);
   }
   poolsWithUnread(): string[] {
     return (this.db.prepare(`SELECT p.pool_id FROM pools p WHERE p.archived=0 AND EXISTS (SELECT 1 FROM messages m WHERE m.pool_id=p.pool_id AND m.from_self=0
+      AND m.internal=0
       AND m.seq > COALESCE((SELECT last_seq FROM cursors c WHERE c.pool_id=p.pool_id),0))`).all() as any[]).map((r) => r.pool_id);
   }
 
@@ -731,6 +762,57 @@ export class Store {
   /** 同一计划同一时间点只触发一次：插入成功才返回 true */
   recordPlanFire(planId: number, fireTs: number): boolean {
     return this.db.prepare("INSERT OR IGNORE INTO plan_fires(plan_id,fire_ts,fired_at) VALUES(?,?,?)").run(planId, fireTs, Date.now()).changes > 0;
+  }
+
+  // ---------- 日程（2026-11-11，取代旧 plans 表） ----------
+  insertSchedule(s: {
+    title: string; content: string; kind: ScheduleKind;
+    cron: string | null; delay_minutes: number | null; next_at: number;
+    status?: ScheduleStatus; now: number;
+  }): Schedule {
+    const r = this.db.prepare(
+      `INSERT INTO schedules(title,content,pool_id,kind,cron,delay_minutes,next_at,status,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      s.title, s.content, null, s.kind, s.cron, s.delay_minutes, s.next_at,
+      s.status ?? "active", s.now, s.now,
+    );
+    return this.getSchedule(Number(r.lastInsertRowid))!;
+  }
+
+  getSchedule(id: number): Schedule | undefined {
+    const r = this.db.prepare("SELECT * FROM schedules WHERE id=?").get(id);
+    return r ? rowToSchedule(r) : undefined;
+  }
+
+  listSchedules(status?: ScheduleStatus): Schedule[] {
+    const rows = status
+      ? this.db.prepare("SELECT * FROM schedules WHERE status=? ORDER BY next_at ASC, id ASC").all(status)
+      : this.db.prepare("SELECT * FROM schedules ORDER BY status='active' DESC, next_at ASC, id ASC").all();
+    return rows.map(rowToSchedule);
+  }
+
+  /** 到点且仍 active 的日程，按时间先后；同一轮只取最先到点的几条 */
+  dueSchedules(now: number, limit = 20): Schedule[] {
+    return this.db.prepare(
+      "SELECT * FROM schedules WHERE status='active' AND next_at<=? ORDER BY next_at ASC, id ASC LIMIT ?",
+    ).all(now, limit).map(rowToSchedule);
+  }
+
+  /** 取消/恢复；只改状态，不删行 */
+  setScheduleStatus(id: number, status: ScheduleStatus, now: number): Schedule | undefined {
+    this.db.prepare("UPDATE schedules SET status=?, updated_at=? WHERE id=?").run(status, now, id);
+    return this.getSchedule(id);
+  }
+
+  /**
+   * 触发后推进：只有 next_at 仍是触发时的值才更新，避免重复唤醒把下一档覆盖掉。
+   * nextAt=null 表示一次性日程，status 落 done。
+   */
+  advanceSchedule(id: number, fromNextAt: number, nextAt: number | null, firedAt: number, status: ScheduleStatus): boolean {
+    return this.db.prepare(
+      "UPDATE schedules SET next_at=?, status=?, last_fired_at=?, updated_at=? WHERE id=? AND next_at=? AND status='active'",
+    ).run(nextAt ?? fromNextAt, status, firedAt, firedAt, id, fromNextAt).changes > 0;
   }
 
   // ---------- 谈资（话题库） ----------

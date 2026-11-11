@@ -16,6 +16,7 @@ export const MANAGE_VIEWS = [
   "task-stats",
   "persona",
   "users",
+  "schedules",
   "settings",
   "skills",
 ] as const;
@@ -24,6 +25,7 @@ export type ManageView = (typeof MANAGE_VIEWS)[number];
 const LEGACY_TAB_VIEW: Record<string, ManageView> = {
   users: "users",
   persona: "persona",
+  schedules: "schedules",
   settings: "settings",
   usage: "usage",
   "task-stats": "task-stats",

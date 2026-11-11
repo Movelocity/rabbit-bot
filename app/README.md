@@ -95,6 +95,7 @@ Bearer token，token 不对会明确提示。
 - 权限：按 status 过滤查看权限申请；**这是运行时权限申请，审批请在已启用的 IM（飞书 / Matrix）里完成，此页只展示**。
 - Worker：只读查看 worker_id / name / kind / status / last_seen_at。
 - 计划：只读查看待办列表。
+- 日程：管理 tab 里新建 cron / N 分钟后一次的日程，查看下次触发时间和状态，可取消；到点事件写进共用的 schedule 池。
 - 记忆：按当前池和用户查看，可直接改正文或删除（新增/过期仍走 IM）。
 - 人格：可直接编辑人设和系统提示词，保存到运行时目录；下一轮换新会话生效。
 - 调度：私聊唤醒间隔、群聊 tick 周期、任务群 tick 周期三个值（按秒展示）；保存后立即生效，并写入 `<dataDir>/run/scheduler.json`，重启后仍保留。被 @ 的消息仍走快速去抖。任务事件按任务群周期 batch 进下一次 tick，不对每条进度单独唤醒。
@@ -152,13 +153,14 @@ data/            运行时数据（db / media / 会话），.gitignore
 prompts/         默认提示词模板（真身在运行时目录）
 ```
 
-## 工具清单（模型能调的 10 个）
+## 工具清单（模型能调的 11 个）
 
 | 工具 | 干什么 |
 |---|---|
 | `chat` | `send` 发消息（唯一对外出口）/ `skip` 这轮不回 / `view` 读图进上下文 / `list` 有哪些池 / `search` 翻原话 |
 | `memory` | `recent` / `search` / `add` / `expire`（不再成立，关掉）/ `update`（就地订正）/ `help` |
 | `plan` | 计划看板（md）：`create` / `list` / `show` / `goal-add` / `goal-check` / `progress` / `status` / `archive` / `help` |
+| `schedule` | 定时日程：`create`（cron 重复 / `delay_minutes` 后一次，content 是到点带给自己的原话）/ `list` / `cancel` / `help` |
 | `approval` | 查看和裁决 worker 的权限申请：`list` / `get` / `decide`（approved / rejected）/ `help` |
 | `task` | 任务面板：`create`（建任务，pending_approval 等审批）/ `list` / `get` / `updates` / `resume` / `note` / `cancel` / `status` / `help` |
 | `worker` | `list` 看已注册的 worker（id / 名字 / kind / 状态 / 最近心跳）/ `help` |
@@ -166,7 +168,7 @@ prompts/         默认提示词模板（真身在运行时目录）
 | `terminal` | 在 Docker 沙盒里跑命令：列目录、`rg` 搜内容、算数（碰不到宿主文件系统） |
 | `rb` | 只给运维和查询：`pool-*` / `plan-list` / `mem-search` / `img-*` / `web-*` / `skills`；业务写入会被挡住并指向对应工具 |
 
-业务数据（池/计划/记忆/图片/联网/技能）走宿主 REST API，文件和 shell 落在 `/work`。
+业务数据（池/计划/日程/记忆/图片/联网/技能）走宿主 REST API，文件和 shell 落在 `/work`。
 见 [docs/sandbox-api.md](docs/sandbox-api.md)。
 
 命令在 Docker 沙盒里跑（`/usr/local/bin/rb`）。

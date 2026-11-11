@@ -49,6 +49,7 @@ const MANAGE_HINTS: Record<string, string> = {
   "task-stats": "已完成任务 · 耗时 / token / 费用",
   users: "别名优先于通讯录名字",
   persona: "人设与提示词 · 保存后下一轮生效",
+  schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",
   settings: "单位：秒 · 保存后立即生效",
   skills: "只读 · 技能只做发现",
 };

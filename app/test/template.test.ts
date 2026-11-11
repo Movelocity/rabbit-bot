@@ -12,9 +12,9 @@ import { render, setTemplateDir, templateDir, listTemplates } from "../src/agent
 /** 真模板目录：别的用例会把它指到临时夹具上，这条要自己拨回来 */
 const REAL_DIR = templateDir();
 
-test("真实模板都在：主提示词 + 三份场景 + 三个附件", () => {
+test("真实模板都在：主提示词 + 四份场景 + 三个附件", () => {
   const names = listTemplates();
-  for (const n of ["system", "wake", "scene-message", "scene-tick", "handoff", "part-topics"]) {
+  for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-schedule", "handoff", "part-topics"]) {
     assert.ok(names.includes(n), `缺模板 ${n}.md（现有：${names.join(", ")}）`);
   }
   // 已删的四份（part-tide / part-proactive / part-plan-why / part-plan-nowhy）不该再回来：

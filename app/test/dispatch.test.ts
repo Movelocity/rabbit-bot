@@ -25,6 +25,12 @@ if (out) fs.writeFileSync(out, JSON.stringify({
   env: { RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN },
 }));
 console.log(JSON.stringify({ type: "step_start", sessionID: process.env.FAKE_EXEC_SESSION || "ses_fake_123" }));
+if (process.env.FAKE_EXEC_TOKENS) {
+  console.log(JSON.stringify({ type: "step_finish", timestamp: Date.now(), part: {
+    tokens: { input: 10, output: 5, reasoning: 0, total: 15, cache: { read: 2, write: 1 } },
+    cost: 0.001,
+  } }));
+}
 const sleep = Number(process.env.FAKE_EXEC_SLEEP || 30);
 setTimeout(() => process.exit(0), sleep);
 `, "utf8");
@@ -255,11 +261,13 @@ test("UFA task create：只登记 pending_approval，等 Web 审批，不产生 
   store.close();
 });
 
-test("stopTask：杀进程树、清 runner_pid、running 回到 pending", async () => {
+test("stopTask：杀进程树、清 runner_pid、running 回到 pending，并落耗时/token", async () => {
   const { store, task } = setup();
   writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
   process.env.FAKE_EXEC_OUT = recordPath();
   process.env.FAKE_EXEC_SLEEP = "10000";
+  process.env.FAKE_EXEC_TOKENS = "1";
+  fs.rmSync(path.join(root, "tasks", String(task.id)), { recursive: true, force: true });
   try {
     const started = await startTask(store, task, {
       apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
@@ -267,15 +275,19 @@ test("stopTask：杀进程树、清 runner_pid、running 回到 pending", async 
     assert.equal(typeof started.pid, "number");
     assert.equal(isRunnerAlive(started.pid), true);
 
-    const stopped = await stopTask(store, getTask(store, task.id)!, { graceMs: 2000 });
+    const stopped = await stopTask(store, getTask(store, task.id)!, { graceMs: 2000, dataDir: root });
     assert.equal(stopped.runner_pid, null);
     assert.equal(stopped.runner_started_at, null);
     assert.equal(stopped.status, "pending");
     assert.equal(isRunnerAlive(started.pid), false);
+    assert.ok(stopped.exec_usage_at, "关闭时要落 exec_usage_at");
+    assert.equal(stopped.exec_total_tokens, 15);
+    assert.ok(stopped.exec_duration_ms > 0, "要有实际运行耗时");
     const events = listTaskEvents(store, task.id, { limit: 1 });
     assert.match(events[0].text, /已停止执行/);
   } finally {
     delete process.env.FAKE_EXEC_SLEEP;
+    delete process.env.FAKE_EXEC_TOKENS;
   }
   store.close();
 });

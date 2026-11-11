@@ -10,7 +10,7 @@
  */
 import type { Clock } from "./clock.ts";
 import { makeWake, type RunQueue } from "./queue.ts";
-import type { Wake } from "../types.ts";
+import type { Schedule, Wake } from "../types.ts";
 
 export interface SchedulerDeps {
   clock: Clock;
@@ -21,7 +21,13 @@ export interface SchedulerDeps {
   /** 水位退潮到档的池（tick 用）：没有未读也可能因为这些池唤醒 agent 自己找话题 */
   proactivePools?: (now: number) => NonNullable<Wake["proactive"]>;
   /** 池的类型；不提供时一律按 group 处理（老测试/只读进程兼容） */
-  poolKind?: (poolId: string) => "private" | "group" | "task" | undefined;
+  poolKind?: (poolId: string) => "private" | "group" | "task" | "schedule" | undefined;
+  /** 到点的日程（日程 tick 用） */
+  dueSchedules?: (now: number) => Schedule[];
+  /** 真正触发一条日程：由 App 推进 next_at，并把事件写进日程池 */
+  fireSchedule?: (s: Schedule, now: number) => void;
+  /** 共用日程池的 pool_id：一批日程触发后合成一次唤醒 */
+  schedulePoolId?: string;
   log?: (msg: string) => void;
   warn?: (msg: string) => void;
 }
@@ -31,6 +37,8 @@ export interface SchedulerConfig {
   privateWakeMs?: number;
   /** 任务事件 tick 周期；缺省沿用 tickMs */
   taskTickMs?: number;
+  /** 日程轮询间隔，默认 30s；只影响发现到点的速度 */
+  scheduleTickMs?: number;
   /** 看门狗间隔，0/缺省 = 关闭 */
   watchdogMs?: number;
   /** 逾期多少毫秒算“丢了”，默认 2000 */
@@ -51,7 +59,7 @@ export interface SchedulerConfig {
 
 interface Debounce { timer: unknown; firstAt: number; dueAt: number; count: number; reason: string }
 
-export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; nextTaskAt?: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
+export interface SchedulerStats { lastTickAt: number | null; nextTickAt: number | null; nextTaskAt?: number | null; nextScheduleAt?: number | null; debouncing: { pool: string; dueAt: number; count: number }[]; recovered: number; pausesDetected: number }
 
 export class Scheduler {
   private debounces = new Map<string, Debounce>();
@@ -61,6 +69,8 @@ export class Scheduler {
   private taskDueAt: number | null = null;
   /** 上次任务事件 tick 真的唤醒了 UFA 的时刻；用来做 3 分钟节流 */
   private lastTaskWakeAt: number | null = null;
+  private scheduleTimer: unknown = null;
+  private scheduleDueAt: number | null = null;
   private lastTickAt: number | null = null;
   private lastActivity = -Infinity;
   private running = false;
@@ -75,6 +85,7 @@ export class Scheduler {
     this.running = true;
     this.scheduleTick();
     this.scheduleTaskTick();
+    this.scheduleScheduleTick();
     if (this.cfg.watchdogMs && this.cfg.watchdogMs > 0) this.scheduleWatchdog();
   }
   stop() {
@@ -85,6 +96,9 @@ export class Scheduler {
     if (this.taskTimer) this.d.clock.clearTimeout(this.taskTimer);
     this.taskTimer = null;
     this.taskDueAt = null;
+    if (this.scheduleTimer) this.d.clock.clearTimeout(this.scheduleTimer);
+    this.scheduleTimer = null;
+    this.scheduleDueAt = null;
     if (this.wdTimer) this.d.clock.clearTimeout(this.wdTimer);
     this.wdTimer = null;
     for (const db of this.debounces.values()) this.d.clock.clearTimeout(db.timer);
@@ -97,6 +111,7 @@ export class Scheduler {
     if (!this.running) return;
     this.scheduleTick();
     this.scheduleTaskTick();
+    this.scheduleScheduleTick();
   }
 
   currentTickMs(): number {
@@ -257,6 +272,63 @@ export class Scheduler {
     }
   }
 
+  // ---------- 日程 tick ----------
+  private scheduleIntervalMs(): number {
+    const ms = this.cfg.scheduleTickMs ?? 30_000;
+    return ms > 0 ? ms : 30_000;
+  }
+  /** Web/工具新建或取消日程后调用：马上重新看一眼，不用等下一轮轮询。 */
+  notifyScheduleChange(): void {
+    if (!this.running) return;
+    this.scheduleScheduleTick(0);
+  }
+
+  private scheduleScheduleTick(delayMs = this.scheduleIntervalMs()) {
+    if (this.scheduleTimer) this.d.clock.clearTimeout(this.scheduleTimer);
+    const ms = Math.max(0, delayMs);
+    this.scheduleDueAt = this.d.clock.now() + ms;
+    const handle = this.d.clock.setTimeout(() => {
+      if (this.scheduleTimer === handle) this.runScheduleTick("timer");
+    }, ms);
+    this.scheduleTimer = handle;
+  }
+
+  private runScheduleTick(via: "timer" | "watchdog") {
+    this.scheduleTimer = null;
+    let next = this.scheduleIntervalMs();
+    try {
+      if (via === "watchdog") {
+        this.d.log?.(`日程 tick 逾期 ${Math.round((this.d.clock.now() - (this.scheduleDueAt ?? 0)) / 1000)}s，看门狗补触发`);
+      }
+      next = this.tickSchedules(via);
+    } catch (e) {
+      this.d.warn?.(`日程 tick 出错：${(e as Error).message}`);
+    } finally {
+      if (this.running) this.scheduleScheduleTick(next);
+    }
+  }
+
+  /**
+   * 一次日程检查：把到点的日程一次性全部触发（事件写进共用日程池），再合成一次唤醒。
+   * 不限制「两次日程之间至少隔 1 分钟」，也不等 agent 忙完；
+   * 单条日程自己的周期仍由 cron 校验保证 ≥1 分钟。唤醒由运行队列串行处理。
+   */
+  private tickSchedules(via: "timer" | "watchdog"): number {
+    if (this.d.isPaused() || !this.d.dueSchedules) return this.scheduleIntervalMs();
+    const now = this.d.clock.now();
+    const due = this.d.dueSchedules(now);
+    if (!due.length) return this.scheduleIntervalMs();
+
+    for (const s of due) this.d.fireSchedule?.(s, now);
+    if (this.d.schedulePoolId) {
+      this.d.queue.enqueue(makeWake(
+        "schedule", [this.d.schedulePoolId], `日程到点 ${due.length} 条`, [], now,
+      ));
+    }
+    this.d.log?.(`日程触发 ${due.length} 条（${due.map((s) => `#${s.id}`).join(" ")}）${via === "watchdog" ? "（看门狗补触发）" : ""}`);
+    return this.scheduleIntervalMs();
+  }
+
   // ---------- 看门狗 ----------
   private scheduleWatchdog() {
     this.wdTimer = this.d.clock.setTimeout(() => {
@@ -289,6 +361,11 @@ export class Scheduler {
       if (this.taskTimer) c.clearTimeout(this.taskTimer);
       this.runTaskTick("watchdog");
     }
+    if (this.running && this.scheduleDueAt !== null && wall - this.scheduleDueAt > grace) {
+      this.recovered++;
+      if (this.scheduleTimer) c.clearTimeout(this.scheduleTimer);
+      this.runScheduleTick("watchdog");
+    }
     for (const [pool, db] of [...this.debounces]) {
       if (wall - db.dueAt > grace) { this.recovered++; this.fireDebounce(pool, "watchdog"); }
     }
@@ -296,7 +373,7 @@ export class Scheduler {
 
   stats(): SchedulerStats {
     return {
-      lastTickAt: this.lastTickAt, nextTickAt: this.tickDueAt, nextTaskAt: this.taskDueAt,
+      lastTickAt: this.lastTickAt, nextTickAt: this.tickDueAt, nextTaskAt: this.taskDueAt, nextScheduleAt: this.scheduleDueAt,
       debouncing: [...this.debounces].map(([pool, d]) => ({ pool, dueAt: d.dueAt, count: d.count })),
       recovered: this.recovered, pausesDetected: this.pausesDetected,
     };

@@ -19,7 +19,7 @@ mock 适配器(模拟) ──┘        │
                  Scheduler: tick(3min，活跃时缩短) / 去抖(私聊、群@) / 计划匹配(Asia/Shanghai)
                             ↓ enqueue（同类合并）
                  RunQueue: 单实例 FIFO
-                            ↓ handleWake（纯代码：暂停? 超每日上限? 有未读或到点计划? 否则不调 LLM）
+                            ↓ handleWake（纯代码：暂停? 超每日上限? 有未读或到点日程? 否则不调 LLM）
                  PiEngine: 一个长期 pi 会话（关闭自动压缩）+ 自定义工具 + pi-death-loop-guard
                             ↓ 工具调用 send(pool, content)
                  Hub.send: [emoji:中文id] 解析 → 适配器发送 → 等 ~1s 确认 → 收集期间新消息作为返回值
@@ -27,9 +27,10 @@ mock 适配器(模拟) ──┘        │
 
 | 文件 | 作用 |
 |---|---|
-| `src/core/db.ts` | SQLite：pools、messages、cursors、users/identities（跨平台 user_id）、plans/plan_fires、memories（来源池+可见范围）、knowledge（可复用业务知识）、handoffs、wake_log、usage_daily、kv（暂停开关） |
+| `src/core/db.ts` | SQLite：pools、messages、cursors、users/identities（跨平台 user_id）、schedules（日程；旧 plans 表已废弃）、memories（来源池+可见范围）、knowledge（可复用业务知识）、handoffs、wake_log、usage_daily、kv（暂停开关） |
 | `src/core/hub.ts` | 入池、未读收集与游标推进、send（表情解析/确认等待/收集新消息） |
-| `src/core/scheduler.ts` | 群聊 tick、任务事件 batch tick、活跃期短 tick、私聊/被@去抖（含最长等待） |
+| `src/core/scheduler.ts` | 群聊 tick、任务事件 batch tick、日程 tick、活跃期短 tick、私聊/被@去抖（含最长等待） |
+| `src/core/schedules.ts` | 日程：cron（每天/每周）或创建后 N 分钟一次；到点事件写进常驻 `schedule` 池并合成一次唤醒；单条日程周期 ≥1 分钟，同一轮到点的日程合并成一次 |
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
 | `src/core/reflection.ts` | 自省：没人说话时让模型想一下，输出 `urgency`（有多想说）+ 念头 |
 | `src/core/gate.ts` | 主动开口的六道门：低分 / 刚聊完 / 夜间 / 冷却 / 日上限 / 连说没人回 |
@@ -42,7 +43,7 @@ mock 适配器(模拟) ──┘        │
 | `src/ops/business-map.ts` | 业务地图：加载/校验 `runtime/business` 的对象、关系、动作、术语，供 `map` 工具、任务文档和管理台只读展示 |
 | `src/ops/knowledge.ts` | 知识库：可复用的业务知识，一篇一条，支持 add/get/search/update/archive |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
-| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`knowledge`（add/get/search/list/update/archive）、`plan`（md 看板：create/list/goal-check/progress/archive）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
+| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`knowledge`（add/get/search/list/update/archive）、`plan`（md 看板：create/list/goal-check/progress/archive）、`schedule`（cron / N 分钟后；create/list/cancel）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
 | `src/agent/faux.ts` | 桩 LLM（pi 自带 faux provider + 确定性脚本），用于模拟器/测试 |
 | `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`matrix.ts`；`mock.ts` |
@@ -71,12 +72,13 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `scheduler.privateWakeMs` | 5000 | 私聊消息后的唤醒延迟（被 @ 仍走 `debounceMs` 快速去抖） |
 | `scheduler.activeTickMs` / `activeWindowMs` | 60000 / 600000 | 活跃对话期间 tick 缩短，静默 10 分钟后恢复 |
 | `scheduler.debounceMs` / `debounceMaxWaitMs` | 5000 / 20000 | 群聊被 @ 时的去抖静默时长 / 最长等待 |
+| `scheduler.scheduleTickMs` | 30000 | 日程轮询间隔（只影响发现到点的速度，不追求百分百准时） |
+| `scheduler.longTaskWarnMs` | 600000 | running 任务超过 10 分钟在任务池写一次提醒（internal，不唤醒、不回复）；0 = 关闭 |
 | `send.confirmWaitMs` | 1000 | send 后等待时长 |
 | `send.confirmViaApi` | false | true 时用飞书“获取消息”接口确认消息存在 |
 | `loopGuard` | impl=pi-death-loop-guard, warn 5, block 10, abortAfterBlocks 1 | 连续 10 次一模一样 → 第 10 次被拦截并结束本轮 |
 | `handoff.contextTokenLimit` | 60000 | 上下文 token 达到即交接 |
 | `limits.dailyLlmCalls` / `dailyTokens` / `turnTimeoutMs` | 300 / 2000000 / 300000 | 每日上限（按 Asia/Shanghai 日期）与单轮超时 |
-| `plans.missedPolicy` / `missedGraceMs` | catchup / 1 天 | 停机错过的触发：补发一次或跳过 |
 | `taskApproval` | enabled=false, target=origin, platform=feishu, roomId="", ownerIds=[], timeoutMs=86400000 | 任务发布审批：target=origin 发到任务发起的聊天，target=room 发到固定审批房；主人贴 OK 才启动。关掉时回退 Web 任务页 |
 | `llm.provider` / `llm.model` / `thinkingLevel` | deepseek / deepseek-flash / off | 任何 pi 支持的 provider/model（`npm run ctl -- models` 查看） |
 | `emoji.table` | `./config/emoji-feishu.json` | 飞书内置表情映射表（中文id/别名 → emoji_type） |

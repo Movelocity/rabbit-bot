@@ -32,6 +32,7 @@ import {
 } from "../core/board.ts";
 import { formatBoard } from "../ops/board.ts";
 import { boardDir } from "../core/runtime.ts";
+import { createSchedule, formatSchedule, isScheduleStatus, type ScheduleInput } from "../core/schedules.ts";
 import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
 } from "../core/tasks.ts";
@@ -69,6 +70,8 @@ export interface ToolDeps {
   taskApproval?: Pick<TaskApprovalGate, "enabled" | "notify">;
   /** 审批裁决后置位 pending tick 时喊一声（UFA 工具用） */
   enqueue?: () => void;
+  /** 日程新建/取消后叫调度器马上重查 */
+  scheduleChanged?: () => void;
   /** 工具集归属：必填，避免漏传时回退到全量工具 */
   profile: "ufa" | "wa" | "review";
   /** read_file 的根目录覆盖；UFA 固定为 runtime，传了就不跟着 exec.dir 漂 */
@@ -631,6 +634,97 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
+   * 日程：到点唤醒自己，并把 content 原话带进提示词。
+   * 和 plan 分开：plan 是目标看板，不排时间；日程只管「什么时候叫你、叫你做什么」。
+   */
+  const SCHEDULE_HELP = [
+    "schedule 的用法（action 必填）：",
+    "  create  content title? cron? delay_minutes?            建日程；content 是到点要带给你自己的话",
+    "  list    status?                                      看日程，默认 active；status=all 看全部",
+    "  cancel  id                                           取消日程",
+    "  help                                                 看这份说明",
+    "",
+    "cron 是 5 段式（分 时 日 月 周，Asia/Shanghai），例如：0 9 * * * = 每天 9:00；0 9 * * 1 = 每周一 9:00。",
+    "也可以写 delay_minutes=30，表示创建后 30 分钟触发一次。",
+    "不会百分百准时：到点附近才唤醒；同一轮到点的多条日程会合并成一次唤醒。单条日程的周期不能低于 1 分钟。",
+  ].join("\n");
+
+  const schedule = defineTool({
+    name: "schedule",
+    label: "schedule",
+    executionMode: "sequential",
+    description:
+      "定时日程：到点唤醒自己，并把 content 原话带进提示词。action 决定做什么："
+      + "create（必填 content；给 cron 是重复日程，或给 delay_minutes=N 表示 N 分钟后一次；title 可选）/ "
+      + "list（默认 active，status=all 看全部）/ cancel（按 id 取消）/ help。"
+      + "cron 用 5 段式（分 时 日 月 周，Asia/Shanghai）；每天、每周都用 cron。"
+      + "到点事件会写进常驻 schedule 池；只读它，不要往 schedule 池发消息。"
+      + "他不要求到点提醒/启动，就别建日程。",
+    parameters: Type.Object({
+      action: Type.String({ description: "create / list / cancel / help" }),
+      id: Type.Optional(Type.Number({ description: "cancel 用：日程 id" })),
+      title: Type.Optional(Type.String({ description: "create 用：短标题，不填就用 content 截断" })),
+      content: Type.Optional(Type.String({ description: "create 用：到点要带给你自己的原话（提醒什么、做什么）" })),
+      cron: Type.Optional(Type.String({ description: "create 用：5 段式 cron，例如 0 9 * * *" })),
+      delay_minutes: Type.Optional(Type.Number({ description: "create 用：创建后多少分钟触发一次" })),
+      status: Type.Optional(Type.String({ description: "list 用：active / cancelled / done / all" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      const tz = d.cfg.timezone;
+      try {
+        switch (action) {
+          case "help":
+            return txt(SCHEDULE_HELP, { ok: true });
+          case "create": {
+            const input: ScheduleInput = {
+              title: p.title,
+              content: p.content,
+              cron: p.cron,
+              delay_minutes: p.delay_minutes,
+            };
+            if (!String(p.content ?? "").trim()) return txt("create 要 content：到点要带给你自己的话。", { ok: false });
+            if (!String(p.cron ?? "").trim() && p.delay_minutes === undefined) {
+              return txt("create 要给 cron（重复）或 delay_minutes（N 分钟后一次）。", { ok: false });
+            }
+            const created = createSchedule(d.store, input, d.now(), tz);
+            d.scheduleChanged?.();
+            const f = formatSchedule(created, tz);
+            return txt(`日程 #${f.id}「${f.title}」建好了，下次 ${f.next_at_local}。`, { ok: true, schedule: f });
+          }
+          case "list": {
+            const want = String(p.status ?? "active").trim().toLowerCase();
+            const status = want === "all" ? undefined : (isScheduleStatus(want) ? want : null);
+            if (status === null) return txt(`status 只能是 active / cancelled / done / all。`, { ok: false });
+            const list = d.store.listSchedules(status);
+            if (!list.length) return txt("没有日程。", { ok: true, count: 0 });
+            const text = list.map((s) => {
+              const f = formatSchedule(s, tz);
+              const when = s.kind === "cron" ? `cron ${s.cron}` : `创建后 ${s.delay_minutes} 分钟`;
+              return `#${s.id}「${s.title}」${s.status} · ${when} · 下次 ${f.next_at_local}`;
+            }).join("\n");
+            return txt(text, { ok: true, count: list.length, schedules: list.map((s) => formatSchedule(s, tz)) });
+          }
+          case "cancel": {
+            const id = Number(p.id);
+            if (!Number.isInteger(id) || id <= 0) return txt("cancel 要 id（日程编号）。", { ok: false });
+            const s = d.store.getSchedule(id);
+            if (!s) return txt(`没有日程 #${id}。`, { ok: false });
+            if (s.status === "cancelled") return txt(`日程 #${id} 已经取消过了。`, { ok: true });
+            const updated = d.store.setScheduleStatus(id, "cancelled", d.now());
+            d.scheduleChanged?.();
+            return txt(`已取消日程 #${id}「${s.title}」。`, { ok: true, schedule: updated ? formatSchedule(updated, tz) : null });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${SCHEDULE_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  /**
    * 审批：执行器的权限申请会落 approvals 表，UFA 在对话里查看并裁决。
    * Web 只读，不提供裁决入口；WA 不给这个工具（自己不能批自己）。
    */
@@ -893,7 +987,7 @@ export function createTools(d: ToolDeps) {
             if (p.id === undefined) return txt("cancel 要 id。", { ok: false });
             const task = getTask(d.store, p.id);
             if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
-            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task);
+            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const updated = cancelTask(d.store, p.id);
             const view = formatTask(updated);
             return txt(`#${updated.id} 已取消。`, { ok: true, task: view });
@@ -1278,7 +1372,7 @@ export function createTools(d: ToolDeps) {
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   // UFA 只读 + 任务面板：不写普通文件（交接走 tasks 表），但可以改自己的提示词（system.md 除外）；terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, knowledge, plan, approval, task, readFile, editPrompt, mapTool,
+    chat, memory, knowledge, plan, schedule, approval, task, readFile, editPrompt, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

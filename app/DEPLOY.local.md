@@ -109,9 +109,9 @@ node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # �
 ## 限额与调度
 
 - 每日：300 次 LLM 调用 / 2,000,000 tokens；单轮超时 300s（`config/default.json` 的 `limits`）。
-- 计划：`once`（ISO，Asia/Shanghai）/ `cron`（5 或 6 段）；精度受 `scheduler.tickMs = 180000`（3 分钟）限制。
-- 停机错过的触发：`missedPolicy = catchup`，24h 内补发一次；`plan_fires` 主键去重。
-- 到点不是发模板，而是入队一次 `wake("plan")`，由模型决定说什么。
+- 日程：`cron`（5 段，Asia/Shanghai；每天/每周都走它）或 `delay_minutes`（创建后 N 分钟一次）；由 `scheduler.scheduleTickMs = 30000` 轮询发现到点。
+- 到点事件写进所有日程共用的常驻 `schedule` 池；同一轮到点的多条日程合并成一次唤醒。单条日程自己的周期仍要求 ≥1 分钟。
+- 不再等 agent 忙完；到点就写池并入队，由运行队列串行处理。`schedule` 池只收事件，tick 正常能读，但不要往这个池发消息。
 
 ## 自驱机制（2026-10-22 加）
 

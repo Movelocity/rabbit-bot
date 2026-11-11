@@ -21,7 +21,9 @@
     "overdueGraceMs": 2000,
     "batchToTick": true,
     "directPrivate": true,
-    "runnerWatchMs": 30000
+    "runnerWatchMs": 30000,
+    "scheduleTickMs": 30000,
+    "longTaskWarnMs": 600000
   },
   "send": {
     "confirmWaitMs": 1000,
@@ -61,10 +63,6 @@
     "cacheReadRate": 0.1,
     "dailyCny": 10,
     "usdCny": 7.1
-  },
-  "plans": {
-    "missedPolicy": "catchup",
-    "missedGraceMs": 86400000
   },
   "llm": {
     "provider": "deepseek",

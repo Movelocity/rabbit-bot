@@ -12,6 +12,8 @@ export interface TaskRunUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  /** runner 里已记录的进程退出耗时之和（不含当前正在跑的这段） */
+  exitedMs: number;
 }
 
 export const EMPTY_TASK_USAGE: TaskRunUsage = {
@@ -24,6 +26,7 @@ export const EMPTY_TASK_USAGE: TaskRunUsage = {
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   costUsd: 0,
+  exitedMs: 0,
 };
 
 export function runnerLogPath(dataDir: string, taskId: number): string {
@@ -81,6 +84,7 @@ export function parseRunnerUsage(file: string): TaskRunUsage {
     usage.costUsd += Number(e.part?.cost) || 0;
   }
 
+  usage.exitedMs = exitedMs;
   usage.durationMs = exitedMs || (lastStep > firstStep ? lastStep - firstStep : 0);
   return usage;
 }

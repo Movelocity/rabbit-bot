@@ -32,7 +32,11 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
 }
 
 export function poolLabel(store: Store, p: Pool): string {
-  return `${store.poolAlias(p.pool_id)} ${p.platform}${p.kind === "private" ? "私聊" : "群聊"}「${p.title || "-"}」`;
+  const kind = p.kind === "private" ? "私聊"
+    : p.kind === "task" ? "任务"
+    : p.kind === "schedule" ? "日程"
+    : "群聊";
+  return `${store.poolAlias(p.pool_id)} ${p.platform}${kind}「${p.title || "-"}」`;
 }
 
 export function fmtMsg(store: Store, m: StoredMessage, withSeq = true): string {

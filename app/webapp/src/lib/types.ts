@@ -295,6 +295,25 @@ export interface SchedulerSettings {
   taskWakeMs: number;
 }
 
+export type ScheduleKind = "cron" | "delay";
+export type ScheduleStatus = "active" | "cancelled" | "done";
+
+export interface Schedule {
+  id: number;
+  title: string;
+  content: string;
+  kind: ScheduleKind;
+  cron: string | null;
+  delay_minutes: number | null;
+  status: ScheduleStatus;
+  next_at: number;
+  next_at_local: string;
+  last_fired_at: number | null;
+  last_fired_at_local: string | null;
+  created_at: number;
+  created_at_local: string;
+}
+
 export interface MemoryReviewSettings {
   enabled: boolean;
   everyTurns: number;
