@@ -194,7 +194,8 @@ host 模式下额外要求：`host.inheritEnv` 保持 `false`（默认值，别�
 - `core/approval.ts`（闸门）+ `hub.ts`（入站先过闸门、`sendSystem` 直发）+ `tools.ts`（terminal 执行前分类与等批）+ `config.approval`
 - 测试：`test/approval.test.ts` 10 条、`test/host-shell-gate.test.ts` 6 条，加上分类器 77 条，全套 **356/356**
 - **真机一轮**：小鱼在 host 模式调 `terminal`，闸门把 `mkdir -p probe_approval && ls` 发到「小鱼-审批房」，主人回 `n 1` → 返回「主人说不行」，命令**没有执行**；账本 `data/approval.jsonl` 记下 `decision=rejected, by=, latencyMs=324487`
-- 审批房：`!cMyStWU0xmnxP4a4rLU34v222jU88xP1DGAbigUx1Kw`（「小鱼-审批房」），`ownerIds` 只留主人
+- 审批聊天：`2026-11-11` 起**不再单开审批房**，直接用她与主人的私聊 `!AYRlhvxJa0xQ6LvcAunEA4m5ZAiWgjTRfb1gizhGPYI`（原「小鱼-审批房」`!cMyStWU0xmnxP4a4rLU34v222jU88xP1DGAbigUx1Kw` 停用），`ownerIds` 只留主人
+- 审批只认贴在提示那条上的 OK / No 表情，同一聊天里的正常消息照常进她的上下文，不会串
 
 ### 真机撞出来的两个坑（都已修）
 
