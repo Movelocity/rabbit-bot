@@ -51,9 +51,11 @@ requestApproval(req: { cmd: string; cwd: string; timeoutMs: number })
 - **发到哪**：`cfg.approval.roomId`（审批聊天，可以是独立审批房，也可以是私聊）。审批提示走系统消息、不进池，避免她把「主人批了一条 rm」当聊天素材；同一聊天里的正常消息照常入池
 - **消息形状**（≤400 字）：
   ```
-  【要动本机】#1234
-  cd ~/projects/rabbit-bot && npm run build
-  同意：y   拒绝：n   （600 秒内不回 = 拒绝）
+  【要动本机】#1234（为什么动）
+  命令：cd ~/projects/rabbit-bot && npm run build
+  同意：给这条消息贴 OK / 👍 表情
+  拒绝：贴 No / 👎 表情
+  （超时 10 分钟不回＝拒绝；这是系统审批消息，贴表情即可，不用在这里回复）
   ```
 - **怎么算同意**：adapter 在 `roomId` 收到来自 `cfg.approval.ownerIds` 的消息，正文匹配 `^(y|yes|同意|批准|可以)` / `^(n|no|拒绝|不行|不要)`；或对那条消息加 👍 / 👎 表情
 - **并发**：同一时刻只允许一条待审（串行，避免刷屏，也让「y」不会指错对象——每条带序号，回 `y 1234` 也认）
@@ -191,7 +193,7 @@ host 模式下额外要求：`host.inheritEnv` 保持 `false`（默认值，别�
 
 - `core/approval.ts`（闸门）+ `hub.ts`（入站先过闸门、`sendSystem` 直发）+ `tools.ts`（terminal 执行前分类与等批）+ `config.approval`
 - 测试：`test/approval.test.ts` 10 条、`test/host-shell-gate.test.ts` 6 条，加上分类器 77 条，全套 **356/356**
-- **真机一轮**：小鱼在 host 模式调 `terminal`，闸门把 `mkdir -p probe_approval && ls` 发到「小鱼-审批房」，主人回 `n 1` → 返回「主人说不行」，命令**没有执行**；账本 `data/approval.jsonl` 记下 `decision=rejected, by=@weikang, latencyMs=324487`
+- **真机一轮**：小鱼在 host 模式调 `terminal`，闸门把 `mkdir -p probe_approval && ls` 发到「小鱼-审批房」，主人回 `n 1` → 返回「主人说不行」，命令**没有执行**；账本 `data/approval.jsonl` 记下 `decision=rejected, by=, latencyMs=324487`
 - 审批房：`!cMyStWU0xmnxP4a4rLU34v222jU88xP1DGAbigUx1Kw`（「小鱼-审批房」），`ownerIds` 只留主人
 
 ### 真机撞出来的两个坑（都已修）
@@ -222,7 +224,7 @@ host 模式下额外要求：`host.inheritEnv` 保持 `false`（默认值，别�
 
 主人要求「审批完要简单反馈接受状态到群里」。两句话，都在审批房，不进她的上下文：
 
-- 裁决后：`#5 已批准（@weikang，6s），开始执行` / `#5 已拒绝，没有执行` / `#5 超时 600s，按拒绝处理，没有执行`
+- 裁决后：`#5 已批准（，6s），开始执行` / `#5 已拒绝，没有执行` / `#5 超时 600s，按拒绝处理，没有执行`
 - 执行完：`#5 执行完成（0.0s）` / `#5 执行失败：退出码 127（0.1s）`
 
 `approval.notify` 默认开（`default.json` 里 `true`），关掉就一句都不发。真机验证过一条完整的四行流水：
@@ -240,7 +242,7 @@ host 模式下额外要求：`host.inheritEnv` 保持 `false`（默认值，别�
 "approval": {
   "enabled": true,
   "roomId": "!<审批房 room id>",
-  "ownerIds": ["@weikang:matrix.hollway.top"],
+  "ownerIds": [":matrix.hollway.top"],
   "timeoutMs": 600000,
   "denyOnDisabled": true
 }

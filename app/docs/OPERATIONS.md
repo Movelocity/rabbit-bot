@@ -77,13 +77,13 @@ npm run typecheck
 
 ## 开机自启
 
-`~/Library/LaunchAgents/pm2.weikang.plist`（Label `com.PM2`，`RunAtLoad` + `LaunchOnlyOnce` + `KeepAlive`），开机时触发 `pm2 resurrect`，按 `~/.pm2/dump.pm2` 拉起进程列表。
+`~/Library/LaunchAgents/pm2.$(whoami).plist`（Label `com.PM2`，`RunAtLoad` + `LaunchOnlyOnce` + `KeepAlive`），开机时触发 `pm2 resurrect`，按 `~/.pm2/dump.pm2` 拉起进程列表。
 
 改过 pm2 进程列表之后要 `pm2 save`，否则下次启动还是旧的一份。
 
 加载/重载 plist 必须在**外部终端**做（Hermes 网关会拦 `launchctl bootstrap`）：
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pm2.weikang.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pm2.$(whoami).plist
 launchctl list | grep -i pm2     # 看到 com.PM2 就成了
 ```

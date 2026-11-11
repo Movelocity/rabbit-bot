@@ -4,13 +4,15 @@ import { UsersView } from "./manage/UsersView.tsx";
 import { PersonaView } from "./manage/PersonaView.tsx";
 import { SettingsView } from "./manage/SettingsView.tsx";
 import { UsageView } from "./manage/UsageView.tsx";
+import { TaskStatsView } from "./manage/TaskStatsView.tsx";
 import { SkillsView } from "./manage/SkillsView.tsx";
 
 const LABELS: Record<ManageView, string> = {
+  usage: "用量",
+  "task-stats": "任务统计",
   users: "用户",
   persona: "人格",
   settings: "调度",
-  usage: "用量",
   skills: "技能",
 };
 
@@ -42,10 +44,11 @@ export function ManagePage({
         ))}
       </aside>
       <div className="min-h-0 overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
+        {view === "usage" && <UsageView reloadSignal={reloadSignal} />}
+        {view === "task-stats" && <TaskStatsView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
         {view === "settings" && <SettingsView reloadSignal={reloadSignal} />}
-        {view === "usage" && <UsageView reloadSignal={reloadSignal} />}
         {view === "skills" && <SkillsView reloadSignal={reloadSignal} />}
       </div>
     </div>

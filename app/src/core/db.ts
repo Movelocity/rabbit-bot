@@ -149,6 +149,17 @@ CREATE TABLE IF NOT EXISTS tasks (
   runner_pid        INTEGER,
   runner_started_at INTEGER,
   doc_path          TEXT    NOT NULL DEFAULT '',
+  -- 执行耗费（2026-11-11）：进程退出时从 runner.jsonl 聚合 token / 费用 / 实际耗时
+  exec_usage_at          INTEGER,
+  exec_steps             INTEGER NOT NULL DEFAULT 0,
+  exec_duration_ms       INTEGER NOT NULL DEFAULT 0,
+  exec_total_tokens      INTEGER NOT NULL DEFAULT 0,
+  exec_input_tokens      INTEGER NOT NULL DEFAULT 0,
+  exec_output_tokens     INTEGER NOT NULL DEFAULT 0,
+  exec_reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+  exec_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  exec_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  exec_cost_usd          REAL    NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -254,6 +265,21 @@ export class Store {
       "runner_pid INTEGER",
       "runner_started_at INTEGER",
       "doc_path TEXT NOT NULL DEFAULT ''",
+    ]) {
+      try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
+    // 执行耗费（2026-11-11）：从 data/tasks/<id>/runner.jsonl 聚合；老库补列
+    for (const col of [
+      "exec_usage_at INTEGER",
+      "exec_steps INTEGER NOT NULL DEFAULT 0",
+      "exec_duration_ms INTEGER NOT NULL DEFAULT 0",
+      "exec_total_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_input_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_output_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_reasoning_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_cache_read_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_cache_write_tokens INTEGER NOT NULL DEFAULT 0",
+      "exec_cost_usd REAL NOT NULL DEFAULT 0",
     ]) {
       try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
     }

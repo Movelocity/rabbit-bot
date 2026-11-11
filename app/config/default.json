@@ -3,6 +3,9 @@
   "runtimeDir": "~/.config/rabbit-bot/runtime",
   "dataDir": "./data",
   "logDir": "./logs",
+  "paths": {
+    "desktopDir": "~/Desktop"
+  },
   "scheduler": {
     "tickMs": 180000,
     "taskTickMs": 180000,

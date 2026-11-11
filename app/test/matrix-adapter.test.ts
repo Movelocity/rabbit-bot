@@ -54,7 +54,7 @@ test("Matrix：text 消息翻译成私聊池消息，发送人取 displayname", 
               {
                 type: "m.room.message",
                 event_id: "$e1",
-                sender: "@weikang:mx.test",
+                sender: ":mx.test",
                 origin_server_ts: 1700000000000,
                 content: { msgtype: "m.text", body: "在吗" },
               },
@@ -136,7 +136,7 @@ test("Matrix：被邀请就自动进房，且同一个房间只 join 一次", as
   const invite = {
     type: "m.room.member",
     event_id: "$inv1",
-    sender: "@weikang:mx.test",
+    sender: ":mx.test",
     state_key: SELF,
     origin_server_ts: 1,
     content: { membership: "invite" },
@@ -155,7 +155,7 @@ test("Matrix：同一条事件重放两次只入池一次", async () => {
   );
   const got: any[] = [];
   (a as any).sink = (m: any) => got.push(m);
-  const ev = { type: "m.room.message", event_id: "$dup", sender: "@weikang:mx.test", origin_server_ts: 1, content: { msgtype: "m.text", body: "重复" } };
+  const ev = { type: "m.room.message", event_id: "$dup", sender: ":mx.test", origin_server_ts: 1, content: { msgtype: "m.text", body: "重复" } };
   const sync = { rooms: { join: { "!r:mx.test": { summary: { "m.joined_member_count": 2 }, timeline: { events: [ev] } } } } };
   await (a as any).handleSync(sync);
   await (a as any).handleSync(sync);
@@ -190,7 +190,7 @@ test("Matrix：图片消息下载落盘，长这样喂给模型", async () => {
           summary: { "m.joined_member_count": 2 },
           timeline: {
             events: [{
-              type: "m.room.message", event_id: "$img1", sender: "@weikang:mx.test", origin_server_ts: 10,
+              type: "m.room.message", event_id: "$img1", sender: ":mx.test", origin_server_ts: 10,
               content: { msgtype: "m.image", body: "猫.png", url: "mxc://mx.test/abc123", info: { mimetype: "image/png" } },
             }],
           },
@@ -228,7 +228,7 @@ test("Matrix：文件消息存进沙箱 files/，正文带上它的路径", asyn
           summary: { "m.joined_member_count": 2 },
           timeline: {
             events: [{
-              type: "m.room.message", event_id: "$file1", sender: "@weikang:mx.test", origin_server_ts: 11,
+              type: "m.room.message", event_id: "$file1", sender: ":mx.test", origin_server_ts: 11,
               content: { msgtype: "m.file", body: "报告.pdf", url: "mxc://mx.test/doc456", info: { mimetype: "application/pdf" } },
             }],
           },
@@ -270,7 +270,7 @@ test("Matrix：下载失败也不算崩，文字里标出来", async () => {
           summary: { "m.joined_member_count": 2 },
           timeline: {
             events: [{
-              type: "m.room.message", event_id: "$img2", sender: "@weikang:mx.test", origin_server_ts: 12,
+              type: "m.room.message", event_id: "$img2", sender: ":mx.test", origin_server_ts: 12,
               content: { msgtype: "m.image", body: "挂了.png", url: "mxc://mx.test/nope" },
             }],
           },
@@ -308,7 +308,7 @@ test("Matrix：m.reaction 翻译成 reaction 消息，带被贴的事件 id", as
               {
                 type: "m.reaction",
                 event_id: "$r1",
-                sender: "@weikang:mx.test",
+                sender: ":mx.test",
                 origin_server_ts: 1700000001000,
                 content: {
                   "m.relates_to": { rel_type: "m.annotation", event_id: "$prompt", key: "👍️" },

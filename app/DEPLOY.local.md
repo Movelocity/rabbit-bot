@@ -49,16 +49,16 @@ npm run build && pm2 restart rabbit-bot
 前端（`webapp/src/`）改动要先 `npm run web:build` 把产物写回 `web/`；只改后端不用动前端。
 自查一行：`grep -c chat_gap dist/agent/prompt.js`（有改动就该 >0）。
 
-**开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.weikang.plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是
+**开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.$(whoami).plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是
 
 ```bash
-sudo env PATH=$PATH /opt/homebrew/lib/node_modules/pm2/bin/pm2 startup launchd -u weikang --hp /Users/weikang
+sudo env PATH=$PATH pm2 startup launchd -u "$(whoami)" --hp "$HOME"
 ```
 
 它生成 plist 但**不会自动 bootstrap**（macOS 26 上 `launchctl load` 已移除），所以还要在外部终端跑一次：
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pm2.weikang.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pm2.$(whoami).plist
 ```
 
 跑完 `launchctl list | grep -i pm2` 能看到 `com.PM2`。之后因 `LaunchOnlyOnce` 它会退役，属正常；下次开机 launchd 会重新加载再跑一次 resurrect。改过 pm2 进程列表记得 `pm2 save`。

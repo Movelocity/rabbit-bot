@@ -237,6 +237,49 @@ export interface UsageStats {
   series: UsagePoint[];
 }
 
+export interface TaskStatsSummary {
+  tasks: number;
+  durationMs: number;
+  avgDurationMs: number;
+  steps: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+}
+
+export interface TaskStatsExecutor extends TaskStatsSummary {
+  executor: string;
+}
+
+export interface TaskStatsRow {
+  id: number;
+  name: string;
+  executor: string;
+  model: string;
+  end_at: number;
+  end_at_local: string;
+  duration_ms: number;
+  steps: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+}
+
+export interface TaskStats {
+  from: number;
+  to: number;
+  summary: TaskStatsSummary;
+  by_executor: TaskStatsExecutor[];
+  tasks: TaskStatsRow[];
+}
+
 export interface Skill {
   name: string;
   description: string;

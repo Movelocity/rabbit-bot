@@ -45,10 +45,11 @@ const TAB_HINTS: Record<string, string> = {
 };
 
 const MANAGE_HINTS: Record<string, string> = {
+  usage: "",
+  "task-stats": "已完成任务 · 耗时 / token / 费用",
   users: "别名优先于通讯录名字",
   persona: "保存到运行时 · 下一轮换新会话生效",
   settings: "单位：秒 · 保存后立即生效",
-  usage: "",
   skills: "只读 · 技能只做发现",
 };
 

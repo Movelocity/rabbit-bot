@@ -1,6 +1,6 @@
 # AstrBot Web 管理端调研 → rabbit-bot 池管理设计参考
 
-> 参考仓库：`/Users/viking/projects/pub-repos/AstrBot`（只读，未改动）。
+> 参考仓库：`~/projects/pub-repos/AstrBot`（只读，未改动）。
 > 目标：给 `app/web/` 原生控制台补「聊天池的新增/编辑/删除/管理」。
 > 所有路径均为绝对路径；AstrBot 侧结论都带文件与行号，rabbit-bot 侧建议都落到具体文件。
 
@@ -68,7 +68,7 @@ AstrBot 里有三套代表性实现，**池管理只需要抄第一套的骨架 
 
 ### 2.1 模式 A：单文件列表 + 共用对话框增改 + 删除确认（最值得抄）
 
-文件：`/Users/viking/projects/pub-repos/AstrBot/dashboard/src/views/knowledge-base/KBList.vue`（606 行，一个文件闭环）
+文件：`~/projects/pub-repos/AstrBot/dashboard/src/views/knowledge-base/KBList.vue`（606 行，一个文件闭环）
 
 **三态分支（模板最前面三个 `v-if`）**：
 - 加载：L3-6 `v-if="loading && kbList.length === 0"` → `v-progress-circular indeterminate`；
@@ -98,7 +98,7 @@ AstrBot 里有三套代表性实现，**池管理只需要抄第一套的骨架 
 
 ### 2.3 模式 C：级联清理式删除（删池最该抄这个）
 
-文件：`/Users/viking/projects/pub-repos/AstrBot/dashboard/src/components/platform/DeletePlatformDialog.vue`（190 行）
+文件：`~/projects/pub-repos/AstrBot/dashboard/src/components/platform/DeletePlatformDialog.vue`（190 行）
 
 - 受控对话框：`:model-value="!!platform"`（L3），父组件 `PlatformPage.vue` L181-184 传 `v-model:platform` + `@deleted`；
 - **删除时让用户勾选清理范围**：`defaultCleanup = ['custom_rules','preferences','routing','cron_jobs']`、`historyTargets = ['conversations','message_history','traces','stats']`（L113-126），每项 `v-checkbox` + tooltip 描述 + 历史项「全选/反选」（`allHistorySelected` computed L129-137）；

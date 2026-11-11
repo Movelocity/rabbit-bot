@@ -411,7 +411,7 @@ test("没人等着的时候报错：不发系统提示，避免打扰", async ()
   await t.done();
 });
 
-test("谈资：话题库路径进主提示词，条目一条都不进", async () => {
+test("谈资：工作场景不再翻话题库，条目也不进提示词", async () => {
   const t = await setup();
   const pool = t.app.store.listPools()[0]?.pool_id ?? null;
   // 库里有一条，但不该出现在提示词里——话题不再由服务端挑
@@ -423,11 +423,11 @@ test("谈资：话题库路径进主提示词，条目一条都不进", async ()
   t.dm("在吗");
   await t.settle(30_000);
   const msgPrompt = seen[seen.length - 1] ?? "";
-  // 路径和翻法住在 system.md（常驻，构造 engine 时传的），不在每轮的唤醒消息里
+  // 话题库已从工作场景提示词里移除：不翻谈资，只报正事
   const fs = await import("node:fs");
   const sys = fs.readFileSync(new URL("../prompts/system.md", import.meta.url), "utf8");
-  assert.match(sys, /\/work\/topics/, "system.md 要告诉她话题库在哪");
-  assert.match(sys, /part-topics\.md/, "翻法在 part-topics.md，主提示词要给指针");
+  assert.doesNotMatch(sys, /\/work\/topics/, "工作场景不再告诉她话题库在哪");
+  assert.doesNotMatch(sys, /part-topics\.md/, "不再给话题库指针");
   assert.match(sys, /scene-X\.md|scene-\{\{/, "主提示词要写清「读 scene-X.md」这条路由");
   assert.doesNotMatch(msgPrompt, /冰箱里的钱拿去充原神/, "话题条目不该被塞进提示词");
 

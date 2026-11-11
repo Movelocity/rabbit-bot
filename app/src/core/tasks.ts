@@ -52,6 +52,17 @@ export interface Task {
   runner_started_at: number | null;
   /** 任务文档路径（<work_dir>/.ufa/tasks/task-<id>.md） */
   doc_path: string;
+  /** 执行耗费：进程退出时从 runner.jsonl 聚合；老任务首次看看板时回填 */
+  exec_usage_at: number | null;
+  exec_steps: number;
+  exec_duration_ms: number;
+  exec_total_tokens: number;
+  exec_input_tokens: number;
+  exec_output_tokens: number;
+  exec_reasoning_tokens: number;
+  exec_cache_read_tokens: number;
+  exec_cache_write_tokens: number;
+  exec_cost_usd: number;
   created_at: number;
   updated_at: number;
 }
@@ -124,15 +135,14 @@ function row(id: number, store: Store): Task {
   return t;
 }
 
-/** 短任务名最长 24 个字符（含开头的 #）。 */
+/** 展示短名时的建议长度（含开头的 #）；任务名本身完整存，不在这里截。 */
 export const TASK_NAME_MAX = 24;
 
-/** 规整短任务名：trim、补 #、超长截断；空名直接报错。 */
+/** 规整任务名：trim、补 #；空名直接报错。标题要完整，不做截断。 */
 export function normalizeTaskName(name: unknown): string {
   const raw = String(name ?? "").trim();
   if (!raw) throw new Error("需要短任务名，格式 #xxx");
-  const full = raw.startsWith("#") ? raw : `#${raw}`;
-  return [...full].slice(0, TASK_NAME_MAX).join("");
+  return raw.startsWith("#") ? raw : `#${raw}`;
 }
 
 /** 展示用任务名：老任务没有 name 时回退成 #任务<id>，不报错。 */
@@ -207,12 +217,16 @@ export type TaskPatch = Partial<Pick<Task,
   "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files" | "context"
   | "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
   | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at" | "doc_path"
+  | "exec_usage_at" | "exec_steps" | "exec_duration_ms" | "exec_total_tokens" | "exec_input_tokens"
+  | "exec_output_tokens" | "exec_reasoning_tokens" | "exec_cache_read_tokens" | "exec_cache_write_tokens" | "exec_cost_usd"
 >>;
 
 const PATCH_KEYS = [
   "name", "goal", "deliverable", "constraints", "acceptance", "files", "context",
   "status", "stage", "worker_id", "claimed_at", "lease_until", "attempt", "note", "result", "artifact", "end_at",
   "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at", "doc_path",
+  "exec_usage_at", "exec_steps", "exec_duration_ms", "exec_total_tokens", "exec_input_tokens",
+  "exec_output_tokens", "exec_reasoning_tokens", "exec_cache_read_tokens", "exec_cache_write_tokens", "exec_cost_usd",
 ] as const;
 
 export function updateTask(store: Store, id: number, patch: TaskPatch): Task {

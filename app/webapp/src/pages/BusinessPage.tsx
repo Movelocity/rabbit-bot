@@ -1061,29 +1061,7 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
 
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      <StatusText text={status.text} error={status.error} />
-
-      <div className="my-3 flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="sm" disabled={linting} onClick={() => void runLint()}>
-          {linting ? "检查中…" : "检查异常"}
-        </Button>
-        {lint ? (
-          <span className="text-xs text-muted">
-            {`error ${lint.summary.error} · warn ${lint.summary.warn} · info ${lint.summary.info}`}
-          </span>
-        ) : null}
-      </div>
-      {lint ? (
-        <div className="mb-3 grid gap-2">
-          {lint.findings.length ? lint.findings.map((f, i) => (
-            <div key={`${f.code}-${i}`} className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-surface px-3 py-2 text-sm">
-              <Badge variant={f.level === "error" ? "closed" : f.level === "warn" ? "warn" : "info"}>{f.level}</Badge>
-              <span>{f.message}</span>
-              {f.ref ? <span className="font-mono text-xs text-muted">{f.ref}</span> : null}
-            </div>
-          )) : <p className="text-sm text-muted">没有发现异常。</p>}
-        </div>
-      ) : null}
+      {status.text ? <StatusText text={status.text} error={status.error} /> : null}
 
       {!data ? null : !data.exists ? (
         <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">
@@ -1265,6 +1243,30 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
           </section>
         </>
       )}
+
+      <div className="mt-6 border-t border-border pt-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="ghost" size="sm" disabled={linting} onClick={() => void runLint()}>
+            {linting ? "检查中…" : "检查异常"}
+          </Button>
+          {lint ? (
+            <span className="text-xs text-muted">
+              {`error ${lint.summary.error} · warn ${lint.summary.warn} · info ${lint.summary.info}`}
+            </span>
+          ) : null}
+        </div>
+        {lint ? (
+          <div className="mt-2 grid gap-2">
+            {lint.findings.length ? lint.findings.map((f, i) => (
+              <div key={`${f.code}-${i}`} className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-surface px-3 py-2 text-sm">
+                <Badge variant={f.level === "error" ? "closed" : f.level === "warn" ? "warn" : "info"}>{f.level}</Badge>
+                <span>{f.message}</span>
+                {f.ref ? <span className="font-mono text-xs text-muted">{f.ref}</span> : null}
+              </div>
+            )) : <p className="text-sm text-muted">没有发现异常。</p>}
+          </div>
+        ) : null}
+      </div>
 
       {data?.exists && detail && (
         <Drawer title={`${categoryLabel(detail.kind)}详情`} onClose={closeDetail}>

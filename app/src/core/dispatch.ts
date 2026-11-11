@@ -11,15 +11,18 @@
  * 任务文档里也只写变量名，不落明文 token。
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
 import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
+import { parseRunnerUsage, taskUsagePatch } from "./task-usage.ts";
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 
-export const MIMO_BIN = "/Users/viking/.mimocode/bin/mimo";
+// 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
+export const MIMO_BIN = process.env.MIMO_BIN || path.join(os.homedir(), ".mimocode/bin/mimo");
 export const DEFAULT_CAPTURE_MS = 3000;
 export const DEFAULT_DATA_DIR = path.join(APP_ROOT, "data");
 
@@ -413,6 +416,8 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
       fs.appendFileSync(logFile, `${JSON.stringify({
         type: "ufa-dispatch", note: "process exited", code, signal, ms, at: Date.now(),
       })}\n`);
+      // 进程退出后再算：这时 runner.jsonl 是完整的，token / 费用 / 耗时一次落库
+      updateTask(store, fresh.id, taskUsagePatch(parseRunnerUsage(logFile)));
     } catch (e) {
       process.stderr.write(`记录执行器退出失败：${(e as Error).message}\n`);
     }

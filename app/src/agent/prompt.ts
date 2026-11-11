@@ -1,4 +1,5 @@
 /** 提示词与消息格式化（尽量紧凑以省 token）。 */
+import os from "node:os";
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
@@ -14,6 +15,9 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
   // 模型把 key=value 当状态，把「你不要…」当建议——同一个要求，写成参数执行率明显更高。
   // 文案本身在 config/prompt/system.md，改它不用动这里。
+  // 路径不写死用户名：home 取当前进程的家目录，desktop_dir 由配置按 ~ 展开
+  const home = os.homedir();
+  const desktop_dir = cfg.paths?.desktopDir || `${home}/Desktop`;
   return render("system", {
     agent_name: cfg.agent.name,
     persona: loadPersona(cfg, personaPath(cfg)),
@@ -21,6 +25,8 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",
     business_block: store ? businessIndexLine(store) : businessIndexLineFromDir(businessDir(cfg)),
+    home,
+    desktop_dir,
   });
 }
 
@@ -97,9 +103,9 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   state.push(`- 今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`);
   state.push(`- 距上次对话：${lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）"}`);
   if (x.wake.proactive?.length) {
-    state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你，是你自己想说话。确实没话说就 chat（action=skip），别硬找）`);
+    state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你；只有正事才开口，没正事就 chat（action=skip），别硬找）`);
   }
-  if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来又什么都没说，这次别再挑`);
+  if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来没开口：说明确实没正事，继续保持沉默，别为了刷存在感硬找话说`);
 
   return render("wake", {
     handoff_block: x.handoff ? `【上一会话的交接文档】\n${x.handoff}\n【交接文档结束】\n\n` : "",

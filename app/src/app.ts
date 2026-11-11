@@ -649,7 +649,7 @@ export class App {
     const res = await this.engine.reflect(
       prompt,
       { tokensLeft, callsLeft: callsLeftOf(cfg, usage.llm_calls) },
-      `你正在独处。只做一件事：想清楚此刻心里在想什么、有多想开口。只输出 JSON，不要任何别的内容。`,
+      `你正在独处。只做一件事：判断手上有没有需要主动开口的工作事项、有多急。没有正事就不说。只输出 JSON，不要任何别的内容。`,
     );
     this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
 

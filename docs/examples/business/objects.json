@@ -15,15 +15,15 @@
       "aliases": ["兔子机器人", "这个 bot"],
       "description": "个人 IM 聊天与任务 agent",
       "key": { "kind": "name", "value": "rabbit-bot" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" }
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot" }
     },
     {
       "id": "repo:rabbit-bot",
       "type": "repo",
       "name": "rabbit-bot",
       "description": "rabbit-bot 主仓库",
-      "key": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" }
+      "key": { "kind": "path", "value": "/path/to/rabbit-bot" },
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot" }
     },
     {
       "id": "service:rabbit-bot-admin",
@@ -32,7 +32,7 @@
       "aliases": ["管理后台"],
       "description": "rabbit-bot 的 Web 管理页",
       "key": { "kind": "name", "value": "rabbit-bot-admin" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot/app" }
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot/app" }
     },
     {
       "id": "service:rabbit-bot-api",
@@ -41,7 +41,7 @@
       "aliases": ["API"],
       "description": "rabbit-bot 的本地 REST API",
       "key": { "kind": "name", "value": "rabbit-bot-api" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot/app/src" }
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot/app/src" }
     },
     {
       "id": "env:prod",

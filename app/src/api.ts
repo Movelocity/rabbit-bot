@@ -31,6 +31,7 @@ import {
   isApprovalStatus,
 } from "./core/approvals.ts";
 import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
+import { taskStats } from "./ops/task-stats.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
 import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
@@ -368,6 +369,13 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             });
             return reply(201, formatTask(started.task));
           }
+          if (parts.length === 3 && parts[2] === "stats" && method === "GET") {
+            const now = Date.now();
+            const from = qInt(url.searchParams.get("from")) ?? 0;
+            const to = qInt(url.searchParams.get("to")) ?? now;
+            if (!(to >= from)) throw new HttpError(400, "to 必须大于等于 from");
+            return reply(200, taskStats(d.store, d.cfg.dataDir, { from, to }));
+          }
           const id = Number(parts[2]);
           if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "任务 id 要是正整数");
           if (parts.length === 3 && method === "GET") {
@@ -586,6 +594,11 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 claimed_at: task.claimed_at,
                 lease_until: task.lease_until,
                 attempt: task.attempt,
+                exec_usage_at: task.exec_usage_at,
+                exec_steps: task.exec_steps,
+                exec_duration_ms: task.exec_duration_ms,
+                exec_total_tokens: task.exec_total_tokens,
+                exec_cost_usd: task.exec_cost_usd,
                 updated_at: task.updated_at,
               },
               recent_events: recent,

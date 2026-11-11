@@ -94,8 +94,8 @@
       "name": "rabbit-bot",
       "aliases": ["兔子机器人", "这个 bot"],
       "description": "个人 IM 聊天与任务 agent",
-      "key": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot" },
+      "key": { "kind": "path", "value": "/path/to/rabbit-bot" },
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot" },
       "tags": ["active"]
     },
     {
@@ -105,7 +105,7 @@
       "aliases": ["管理后台"],
       "description": "rabbit-bot 的 Web 管理页",
       "key": { "kind": "name", "value": "admin" },
-      "source": { "kind": "path", "value": "/Users/viking/projects/rabbit-bot/app" }
+      "source": { "kind": "path", "value": "/path/to/rabbit-bot/app" }
     }
   ]
 }

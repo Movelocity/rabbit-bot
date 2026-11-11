@@ -21,26 +21,23 @@ function mkStore() {
   return new Store(":memory:");
 }
 
-test("tick 剧本：路由指向 scene-tick，文案里许空手开口、不许发空话", () => {
+test("tick 剧本：路由指向 scene-tick，只报正事、不为存在感开口", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map() });
   assert.match(p, /【这一轮：tick】/, "第一行要给信号");
   assert.match(p, /read_file prompt\/scene-tick\.md/, "要指路，不然她不知道读哪份");
 
   const script = render("scene-tick", {});
-  // 默认动作是「说」，不是「想清楚再说」——旧文案到处都是免责句，把它养成了不敢开口
-  assert.match(script, /默认说点什么/, "醒过来默认开口");
-  assert.match(script, /不用先证明它值得说/);
-  assert.match(script, /别为了「不打扰他」而沉默/, "沉默不是稳，是错过");
+  assert.match(script, /先看手上有没有正事/, "醒过来先看工作，不是先找话说");
+  assert.match(script, /只有这几种情况开口/, "开口要有工作理由");
+  assert.match(script, /不为了「保持存在感」而开口/, "不许为存在感发言");
   assert.match(script, /action=skip|skip/, "仍要留闭嘴的口子");
-  assert.match(script, /话题库/);
-  // 旧契约是「说不出具体的事，就是没有」——把主动变成了举证责任，已废弃
-  assert.doesNotMatch(script, /说不出具体的事，就是没有/);
-  assert.doesNotMatch(script, /沉默不等于欠债/);
+  assert.doesNotMatch(script, /默认说点什么/, "旧文案的默认闲聊已废弃");
+  assert.doesNotMatch(script, /话题库/, "工作场景不再翻话题库");
   assert.doesNotMatch(script, /有人刚说了话/, "三类剧本不能串味");
 });
 
-test("message 剧本：路由指向 scene-message，先读懂再说", () => {
+test("message 剧本：路由指向 scene-message，先判断需求再回", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("message"), now: Date.now(), unread: [], context: new Map() });
   assert.match(p, /【这一轮：message】/);
@@ -48,11 +45,12 @@ test("message 剧本：路由指向 scene-message，先读懂再说", () => {
 
   const script = render("scene-message", {});
   assert.match(script, /有人刚说了话/);
-  assert.match(script, /默认动作是回/, "有人说话就回，不是可选");
-  assert.match(script, /往下延半步/, "要往下走，不能一问一答");
-  assert.match(script, /连发 2~3 条/);
+  assert.match(script, /先判断他要什么/, "先判断需求类型");
+  assert.match(script, /默认只回有信息的部分/, "不闲聊、不注水");
+  assert.match(script, /不连发/, "不连发");
+  assert.doesNotMatch(script, /连发 2~3 条/, "旧的连发闲聊已废弃");
+  assert.doesNotMatch(script, /往下延半步/, "不再要求为续聊而续聊");
   assert.doesNotMatch(script, /定时检查/);
-  assert.doesNotMatch(script, /沉默不等于欠债/);
 });
 
 test("状态行：第一次主动 + 今天已发 0 条", () => {

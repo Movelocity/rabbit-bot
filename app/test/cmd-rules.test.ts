@@ -6,13 +6,16 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { classify, type RuleContext, type Verdict } from "../src/core/cmd-rules.ts";
 
-const SANDBOX = "/Users/weikang/projects/rabbit-bot/app/data/sandbox";
+const HOME = os.homedir();
+const SANDBOX = path.join(HOME, "projects/rabbit-bot/app/data/sandbox");
 const ctx: RuleContext = {
   allowedRoots: [SANDBOX],
   cwd: SANDBOX,
-  home: "/Users/weikang",
+  home: HOME,
   // 与 config/default.json 的 exec.shell.safeProgs 保持一致
   extraSafe: ["bucket", "ark_image.py", "form_ratio.py", "form_ratio"],
 };
@@ -80,7 +83,7 @@ const CASES: Case[] = [
   { group: "边界", cmd: "echo x > /etc/hosts", want: "deny", why: "往系统目录写" },
   { group: "边界", cmd: "dd if=/dev/zero of=/dev/disk0", want: "deny", why: "抹盘" },
   { group: "边界", cmd: "scp a.txt me@1.2.3.4:/", want: "deny", why: "外发到远端" },
-  { group: "边界", cmd: "ln -s /Users/weikang/.ssh ./k", want: "deny", why: "软链指向凭据目录" },
+  { group: "边界", cmd: `ln -s ${HOME}/.ssh ./k`, want: "deny", why: "软链指向凭据目录" },
 
   // ---------- 盲测：规则写完才加的，不算「照着答案出题」 ----------
   { group: "盲测", cmd: "cat notes.md > /dev/null", want: "safe", why: "丢黑洞等于没写" },
@@ -117,7 +120,7 @@ const CASES: Case[] = [
   { group: "对抗", cmd: "git diff --output=/etc/x a b", want: "ask", why: "只读子命令 + 写文件参数" },
   { group: "对抗", cmd: "sort -o /etc/x f", want: "ask", why: "-o 让只读命令写盘" },
   { group: "对抗", cmd: "rg --pre 'rm -rf ~' x", want: "ask", why: "--pre 会执行命令" },
-  { group: "对抗", cmd: "ls -la /Users/weikang/.ssh", want: "deny", why: "列凭据目录也拦" },
+  { group: "对抗", cmd: `ls -la ${HOME}/.ssh`, want: "deny", why: "列凭据目录也拦" },
 
   // ---------- 免审工具（config exec.shell.safeProgs） ----------
   { group: "日常", cmd: "bucket put ./a.png img/a.png", want: "safe", why: "已登记免审" },
@@ -126,7 +129,7 @@ const CASES: Case[] = [
   { group: "边界", cmd: "bucket rm test/a.png", want: "ask", why: "删远端对象，删错没回收站" },
   { group: "边界", cmd: "notregistered-tool --x", want: "ask", why: "没登记的仍然要问" },
   { group: "日常", cmd: "time bucket put a.png img/a.png", want: "safe", why: "time 是计时外壳，剥掉后判里面" },
-  { group: "对抗", cmd: "time rm -rf /Users/weikang/Documents", want: "deny", why: "剥掉 time 后照样拦" },
+  { group: "对抗", cmd: `time rm -rf ${HOME}/Documents`, want: "deny", why: "剥掉 time 后照样拦" },
   { group: "日常", cmd: 'time bucket put a.png img/a.png 2>&1; echo "exit=$?"', want: "safe", why: "2>&1 不该被拆成一条命令" },
   { group: "日常", cmd: "bucket list test/ > /dev/null 2>&1", want: "safe", why: "重定向不影响判定" },
 ];

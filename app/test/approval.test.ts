@@ -11,7 +11,7 @@ import { takePendingTick } from "../src/core/tasks.ts";
 import type { InboundMessage } from "../src/types.ts";
 
 const ROOM = "!approval:matrix.test";
-const OWNER = "@weikang:matrix.test";
+const OWNER = ":matrix.test";
 
 function cfg(over: Partial<ApprovalConfig> = {}): ApprovalConfig {
   return { enabled: true, platform: "matrix", roomId: ROOM, ownerIds: [OWNER], timeoutMs: 3000, ...over };
@@ -66,8 +66,10 @@ test("同意：发出去、写账、resolve approved", async () => {
   await new Promise((r) => setTimeout(r, 10));           // 让消息发出去
   assert.equal(sent.filter((t) => t.includes("【要动本机】")).length, 1);
   assert.match(sent[0], /【要动本机】#1/);
-  assert.match(sent[0], /npm run build/);
-  assert.match(sent[0], /OK 表情/);
+  assert.match(sent[0], /命令：npm run build/);
+  assert.match(sent[0], /同意：给这条消息贴 OK \/ 👍 表情/);
+  assert.match(sent[0], /拒绝：贴 No \/ 👎 表情/);
+  assert.match(sent[0], /超时 3 秒/);
   assert.equal(g.tryHandle(react("OK")), true);
   const r = await p;
   assert.equal(r.decision, "approved");

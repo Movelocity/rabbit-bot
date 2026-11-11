@@ -126,10 +126,10 @@ export interface ReflectionPromptInput {
 }
 
 /** urgency 的锚点。不写这张表，模型会全给 0.5，门控就形同虚设 */
-export const URGENCY_ANCHORS = `0.0–0.2  没什么可说的，只是例行想了一下
-0.3–0.5  有点想搭话，但不说也行
-0.6–0.8  确实有件事想说，憋着难受
-0.9–1.0  必须现在说，再不说就错过时机了`;
+export const URGENCY_ANCHORS = `0.0–0.2  手上没有正事，也没有新结果
+0.3–0.5  有个待确认项或小进展，但不急，可以等下次一起说
+0.6–0.8  有可交付的结果、需要他决定的事，或任务有风险
+0.9–1.0  任务卡住/有风险/到点必须提醒，再不说会误事`;
 
 function fmtTime(ts: number, tz: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -166,13 +166,13 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
     parts.push("");
   }
 
-  parts.push(`你是${i.agentName}。此刻没人跟你说话，你在想什么？`);
-  parts.push("想清楚之后，只输出一个 JSON 对象，六个键，不要别的任何内容：");
+  parts.push(`你是${i.agentName}。此刻没人跟你说话。扫一眼手上的任务、计划和待确认项，判断有没有需要主动开口的正事。`);
+  parts.push("不要为了找话说而找话题；没有正事就不说。想清楚之后，只输出一个 JSON 对象，六个键，不要别的任何内容：");
   parts.push(`{
-  "thought": "你此刻的状态和在想的事，一到两句话：先说你此刻的心情、累不累，再说你在想什么。写具体的，别写空话",
-  "style_hint": "如果开口，用什么语气（比如：随口问一句，别像在检查）",
+  "thought": "你此刻手上正事的进展和判断，一到两句话。写具体的任务号、状态、卡点，别写心情和空话",
+  "style_hint": "如果开口，用什么语气。默认：同事同步，先结论后依据",
   "urgency": 0.0,
-  "topic_pick": "想聊的话题，没有就空字符串",
+  "topic_pick": "要提醒的事或待确认项，没有就空字符串",
   "topic_angle": "从哪个角度切入，没有就空字符串",
   "next_reflection_in": 1800
 }`);
@@ -181,7 +181,7 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
   parts.push(URGENCY_ANCHORS);
   parts.push("");
   parts.push("next_reflection_in 是「过多少秒之后你愿意再想一次」，自己定，300 到 10800 之间。");
-  parts.push("真的没什么想说的，就老实给个低于 0.3 的分——没有人必须一直有话。");
+  parts.push("没有正事就给低于 0.3 的分；别硬找话题，也别为了刷存在感开口。");
 
   return parts.join("\n");
 }

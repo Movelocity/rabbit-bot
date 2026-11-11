@@ -70,6 +70,14 @@ export function reactionDecision(key: string): Decision | null {
   return null;
 }
 
+/** 审批超时用的人话：天 / 小时 / 分钟 / 秒。 */
+export function humanTimeout(ms: number): string {
+  if (ms >= 86400_000) return `${Math.max(1, Math.round(ms / 86400_000))} 天`;
+  if (ms >= 3600_000) return `${Math.max(1, Math.round(ms / 3600_000))} 小时`;
+  if (ms >= 60_000) return `${Math.max(1, Math.round(ms / 60_000))} 分钟`;
+  return `${Math.max(1, Math.round(ms / 1000))} 秒`;
+}
+
 export class ApprovalGate {
   private seq = 0;
   private pending: Pending | null = null;
@@ -124,8 +132,11 @@ export class ApprovalGate {
     const oneLine = req.cmd.replace(/\s+/g, " ").slice(0, 400);
     const text = [
       `【要动本机】#${id}（${req.why}）`,
-      oneLine,
-      `同意贴 OK 表情 / 拒绝贴 No 表情（贴在 #${id} 这条消息上）　（${Math.round(timeoutMs / 1000)} 秒内不回＝拒绝）`,
+      `命令：${oneLine}`,
+      "",
+      "同意：给这条消息贴 OK / 👍 表情",
+      "拒绝：贴 No / 👎 表情",
+      `（超时 ${humanTimeout(timeoutMs)} 不回＝拒绝；这是系统审批消息，贴表情即可，不用在这里回复）`,
     ].join("\n");
 
     // 内存 Pending 同时落库：重启后 GET /v1/approvals 还能看到、还能裁决

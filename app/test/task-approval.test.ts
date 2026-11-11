@@ -1,7 +1,7 @@
 /** 任务发布审批：发到审批房、贴对表情才裁决、超时=拒绝、多任务不串批。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTask, getTask } from "../src/core/tasks.ts";
+import { createTask, getTask, updateTask } from "../src/core/tasks.ts";
 import { Store } from "../src/core/db.ts";
 import { TaskApprovalGate, formatTaskApprovalText, type TaskApprovalConfig } from "../src/core/task-approval.ts";
 import type { InboundMessage } from "../src/types.ts";
@@ -61,10 +61,11 @@ function react(key: string, to: string | null, over: Partial<InboundMessage> = {
   };
 }
 
-test("任务提示包含目标、目录和审批方法", () => {
+test("任务提示包含完整标题、目标和审批方法，不塞产出/约束/验收", () => {
   const store = new Store(":memory:");
   const task = createTask(store, {
     userId: "u1", poolId: "p1", name: "#修复登录", goal: "把登录页修好",
+    deliverable: "可登录", constraints: "不要改注册", acceptance: "能登进去",
     work_dir: "/tmp/project", executor: "opencode", status: "pending_approval",
   });
   const text = formatTaskApprovalText(task, 24 * 3600_000);
@@ -73,6 +74,22 @@ test("任务提示包含目标、目录和审批方法", () => {
   assert.match(text, /目录：\/tmp\/project/);
   assert.match(text, /OK \/ 👍 表情/);
   assert.match(text, /超时 1 天/);
+  assert.doesNotMatch(text, /产出|约束|验收/);
+  assert.doesNotMatch(text, /可登录|不要改注册|能登进去/);
+});
+
+test("标题完整保留，name 里重复的任务号只显示一次", () => {
+  const store = new Store(":memory:");
+  const task = createTask(store, {
+    userId: "u1", poolId: "p1", name: "#临时", goal: "查清楚",
+    work_dir: "/tmp", status: "pending_approval",
+  });
+  const fullName = `#${task.id} 排查 SKU THO010034-0 算价失败原因`;
+  const updated = updateTask(store, task.id, { name: fullName });
+  assert.equal(getTask(store, task.id)?.name, fullName);
+  const text = formatTaskApprovalText(updated, 3600_000);
+  const first = text.split("\n")[0];
+  assert.equal(first, `【任务待审批】#${task.id} 排查 SKU THO010034-0 算价失败原因`);
 });
 
 test("关掉时什么都不发，也不留待审", async () => {

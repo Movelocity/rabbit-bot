@@ -12,10 +12,11 @@ export const TABS = [
 export type Tab = (typeof TABS)[number];
 
 export const MANAGE_VIEWS = [
+  "usage",
+  "task-stats",
   "users",
   "persona",
   "settings",
-  "usage",
   "skills",
 ] as const;
 export type ManageView = (typeof MANAGE_VIEWS)[number];
@@ -25,6 +26,7 @@ const LEGACY_TAB_VIEW: Record<string, ManageView> = {
   persona: "persona",
   settings: "settings",
   usage: "usage",
+  "task-stats": "task-stats",
   skills: "skills",
 };
 
@@ -57,7 +59,7 @@ function parseUrl(search: string): ParsedUrl {
 
   const safeTab: Tab = isTab(tab) ? tab : "chat";
   const safeView: ManageView | null =
-    safeTab === "manage" ? (isManageView(view) ? view : "users") : null;
+    safeTab === "manage" ? (isManageView(view) ? view : "usage") : null;
   return { tab: safeTab, manageView: safeView };
 }
 
@@ -69,7 +71,7 @@ interface UrlState {
 export function useUrlState() {
   const [state, setState] = useState<UrlState>(() => {
     const parsed = parseUrl(window.location.search);
-    return { tab: parsed.tab, manageView: parsed.manageView ?? "users" };
+    return { tab: parsed.tab, manageView: parsed.manageView ?? "usage" };
   });
 
   const stateRef = useRef(state);

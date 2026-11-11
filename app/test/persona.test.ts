@@ -67,5 +67,18 @@ test("运行时目录空着 → 用仓库里的默认人设", () => {
   assert.match(personaPath(c), /config[\\/]persona\.md$/);
   const text = loadPersona(c);
   assert.match(text, /^# 小池/);
-  assert.ok(text.includes("工作汇报配方"), "默认人设要带说话规则，不是一句占位");
+  assert.ok(text.includes("工作汇报规范"), "默认人设要带说话规则，不是一句占位");
+});
+
+test("提示词、人设、默认配置不写死本机用户名", () => {
+  const prompts = path.resolve(import.meta.dirname, "../prompts");
+  const files = [
+    ...fs.readdirSync(prompts).filter((f) => f.endsWith(".md")).map((f) => path.join(prompts, f)),
+    path.resolve(import.meta.dirname, "../config/persona.md"),
+    path.resolve(import.meta.dirname, "../config/default.json"),
+  ];
+  for (const f of files) {
+    const text = fs.readFileSync(f, "utf8");
+    assert.doesNotMatch(text, /\/Users\/[A-Za-z0-9._-]+/, `${f} 写死了本机路径，应该用 ~ 或配置展开`);
+  }
 });

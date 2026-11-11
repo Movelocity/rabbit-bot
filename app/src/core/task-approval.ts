@@ -10,7 +10,7 @@
 import type { InboundMessage } from "../types.ts";
 import type { Logger } from "./logger.ts";
 import { taskDisplayName, type Task } from "./tasks.ts";
-import { reactionDecision } from "./approval.ts";
+import { humanTimeout, reactionDecision } from "./approval.ts";
 
 export interface TaskApprovalConfig {
   enabled: boolean;
@@ -60,10 +60,11 @@ function clip(s: string, n: number): string {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
-function humanTimeout(ms: number): string {
-  if (ms >= 86400_000) return `${Math.max(1, Math.round(ms / 86400_000))} 天`;
-  if (ms >= 3600_000) return `${Math.max(1, Math.round(ms / 3600_000))} 小时`;
-  return `${Math.max(1, Math.round(ms / 60_000))} 分钟`;
+/** 审批标题用完整任务名；模型偶尔把任务号写进 name，去掉避免出现两个 #id。 */
+function approvalTitle(task: Task): string {
+  const name = taskDisplayName(task);
+  const withoutId = name.replace(new RegExp(`^#\\s*${task.id}(?:\\s+|$)`), "").trim();
+  return withoutId || clip(task.goal, 120) || name;
 }
 
 /** 任务审批提示：只放主人做决定需要看的信息，太长就截。 */
@@ -73,11 +74,8 @@ export function formatTaskApprovalText(task: Task, timeoutMs: number): string {
     return t ? `${label}：${t}` : "";
   };
   return [
-    `【任务待审批】#${task.id} ${taskDisplayName(task)}`,
+    `【任务待审批】#${task.id} ${approvalTitle(task)}`,
     line("目标", task.goal),
-    line("产出", task.deliverable),
-    line("约束", task.constraints),
-    line("验收", task.acceptance),
     `目录：${clip(task.work_dir, 300)}`,
     `执行器：${task.executor || "opencode"}${task.model ? ` · 模型 ${clip(task.model, 80)}` : ""}`,
     "",

@@ -1,6 +1,6 @@
 # 调研：agentdock 的 worker 注册制 → rabbit-bot UFA-WA 接入设计
 
-> 参考仓库：`/Users/viking/projects/sw-proj/agentdock`（只读，未修改）。配套：`docs/ARCH-UFA-WA.md`（行为约定）、`docs/SPEC-UFA-WA.md`（tasks 表与 API 已定）。
+> 参考仓库：`~/projects/sw-proj/agentdock`（只读，未修改）。配套：`docs/ARCH-UFA-WA.md`（行为约定）、`docs/SPEC-UFA-WA.md`（tasks 表与 API 已定）。
 > **2026-02 修订（范围收窄）**：worker 端只做「领任务 + 运行快照」；砍掉能力矩阵、版本/并发声明、详细上下线、逐条工具事件上报；权限申请必须持久化并上呈用户；任务完成给 UFA 一个**可合并的 pending tick**；Web 是纯只读看板，审批动作只走 UFA/飞书。行号以调研当日为准。
 
 ---

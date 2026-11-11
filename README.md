@@ -38,6 +38,7 @@ mock 适配器(模拟) ──┘        │
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
 | `src/core/tool-call.ts` | 工具调用的判定（`didSend` / `didSkip` / `didPlanAdd` / `didPlanDone`）：二级入口看名字不够，还要看 action |
 | `src/core/approval.ts` / `task-approval.ts` | 宿主机命令审批 / 任务发布审批：审批提示走系统消息、超时按拒绝；只有被闸门认领的裁决动作不进池，同一聊天里的正常文字照常入池（审批房可能就是私聊） |
+| `src/core/task-usage.ts` / `src/ops/task-stats.ts` | 从 `data/tasks/<id>/runner.jsonl` 聚合任务执行耗时、token 与费用；进程退出时落库，管理台任务统计看板读取 |
 | `src/ops/business-map.ts` | 业务地图：加载/校验 `runtime/business` 的对象、关系、动作、术语，供 `map` 工具、任务文档和管理台只读展示 |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
 | `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（md 看板：create/list/goal-check/progress/archive）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
@@ -86,7 +87,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 
 任务事件（进度、开始、退出、note、完成、失败、阻塞）都不逐条唤醒 UFA；它们先写进任务池，由下一次任务事件 tick 批量带走。审批仍走立即唤醒。
 
-**任务发布不用开 Web**：`taskApproval` 开启后，UFA 建的任务会以一条带目标 / 产出 / 约束 / 验收 / 目录的提示发到任务发起时的聊天（`target=origin`，默认推荐），也可以发到固定审批房（`target=room`）；主人给那条消息贴 OK 表情就启动执行器，贴 No 或超时按拒绝。提示走系统消息、不建池，表情裁决也不入 Agent 的会话上下文；原聊天里的文字聊天照常，所以不会干扰正常对话。固定审批房可以和宿主机命令审批共用（`approval.roomId`）。
+**任务发布不用开 Web**：`taskApproval` 开启后，UFA 建的任务会以一条带完整标题 / 目标 / 目录的提示发到任务发起时的聊天（`target=origin`，默认推荐），也可以发到固定审批房（`target=room`）；主人给那条消息贴 OK 表情就启动执行器，贴 No 或超时按拒绝。提示走系统消息、不建池，表情裁决也不入 Agent 的会话上下文；原聊天里的文字聊天照常，所以不会干扰正常对话。固定审批房可以和宿主机命令审批共用（`approval.roomId`）。
 
 **默认人设**是 `app/config/persona.md`（`agent.name=小池`）：一份完整的 UFA 说话规则，讲事实、讲卡点、不端汇报腔。运行时目录有 `persona.md` 就用运行时那份，没有就用仓库默认；想从最小模板自己写，再用 `app/config/persona.example.md`。
 

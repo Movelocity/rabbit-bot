@@ -21,6 +21,11 @@ export interface Config {
   runtimeDir: string;
   dataDir: string;
   logDir: string;
+  /**
+   * 跨设备路径：只写 `~` 或相对路径，加载时展开。
+   * 仓库和配置里都不写死用户名，换一台 Mac 不用改。
+   */
+  paths?: { desktopDir?: string };
   scheduler: { tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
   send: {
     confirmWaitMs: number; confirmViaApi: boolean;
@@ -225,6 +230,8 @@ export function loadConfig(overrides?: unknown): Config {
   cfg.runtimeDir = path.resolve(expandHome(process.env.RABBIT_BOT_RUNTIME || cfg.runtimeDir));
   cfg.dataDir = path.resolve(APP_ROOT, cfg.dataDir);
   cfg.logDir = path.resolve(APP_ROOT, cfg.logDir);
+  // 桌面等个人路径只存 `~/...`，这里展开成当前机器的绝对路径
+  cfg.paths = { ...cfg.paths, desktopDir: resolvePath(String(cfg.paths?.desktopDir ?? "~/Desktop")) };
   // 沙盒根默认就是运行时目录：和 ~/.config/rabbit-bot/runtime 是同一个地方，
   // 宿主侧看到她写的东西，容器里就是 /work。exec.dir 留空 = 跟随 runtimeDir。
   cfg.exec.dir = String(cfg.exec.dir ?? "").trim() ? resolvePath(String(cfg.exec.dir)) : cfg.runtimeDir;

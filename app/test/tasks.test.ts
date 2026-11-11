@@ -83,7 +83,7 @@ test("任务：dueBefore 只按 start_at 过滤，limit 生效", () => {
   s.close();
 });
 
-test("任务名：自动补 #、空白拒绝、超长截断", () => {
+test("任务名：自动补 #、空白拒绝、完整保留", () => {
   const s = new Store(":memory:");
 
   assert.equal(normalizeTaskName("发票修复"), "#发票修复");
@@ -92,9 +92,9 @@ test("任务名：自动补 #、空白拒绝、超长截断", () => {
   assert.throws(() => normalizeTaskName("   "), /短任务名/);
   assert.throws(() => createTask(s, { userId: "u1", poolId: "p1", name: "   ", goal: "x" }), /短任务名/);
 
-  const long = "一".repeat(TASK_NAME_MAX + 8);
-  assert.equal(normalizeTaskName(long).length, TASK_NAME_MAX);
-  assert.equal(normalizeTaskName(long).startsWith("#"), true);
+  const long = `#${"一".repeat(TASK_NAME_MAX + 8)}`;
+  assert.equal(normalizeTaskName(long), long);
+  assert.equal(normalizeTaskName(long).length, TASK_NAME_MAX + 9);
 
   const noHash = createTask(s, { userId: "u1", poolId: "p1", name: "发票修复", goal: "修复发票" });
   assert.equal(noHash.name, "#发票修复");

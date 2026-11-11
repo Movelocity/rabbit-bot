@@ -91,6 +91,7 @@ test("静态页 200：管理台可打开，审批仍提示去飞书", async () =
 test("任务 / 快照 / 审批：带 token 200，无 token 401", async () => {
   const routes = [
     "/v1/tasks",
+    "/v1/tasks/stats",
     `/v1/tasks/${taskId}/snapshot`,
     "/v1/approvals?status=pending",
   ];
