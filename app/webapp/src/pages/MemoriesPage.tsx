@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
 import { formatTs, friendlyError } from "../lib/format.ts";
-import type { Memory } from "../lib/types.ts";
+import type { Memory, MemoryList } from "../lib/types.ts";
 import {
   Badge,
   Button,
@@ -12,23 +12,45 @@ import {
   Empty,
   Field,
   Input,
+  Select,
   StatusText,
   Textarea,
 } from "../components/ui.tsx";
 
-export function MemoriesPage({
-  currentPool,
-  detectedUser,
-  reloadSignal,
-}: {
-  currentPool: string | null;
-  detectedUser: string;
-  reloadSignal: number;
-}) {
+const KIND_OPTIONS = [
+  { value: "", label: "全部" },
+  { value: "fact", label: "fact" },
+  { value: "plan", label: "plan" },
+  { value: "alias", label: "alias" },
+  { value: "topic", label: "topic" },
+];
+
+const SCOPE_OPTIONS = [
+  { value: "", label: "全部" },
+  { value: "all", label: "all" },
+  { value: "pool", label: "pool" },
+  { value: "private", label: "private" },
+  { value: "group", label: "group" },
+];
+
+const STATUS_OPTIONS = [
+  { value: "", label: "全部" },
+  { value: "valid", label: "有效" },
+  { value: "expired", label: "已失效" },
+];
+
+export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
-  const [user, setUser] = useState(detectedUser);
   const [rows, setRows] = useState<Memory[]>([]);
+  const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [user, setUser] = useState("");
+  const [kind, setKind] = useState("");
+  const [scope, setScope] = useState("");
+  const [validity, setValidity] = useState("");
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -36,34 +58,33 @@ export function MemoriesPage({
   const [localTick, setLocalTick] = useState(0);
 
   useEffect(() => {
-    setUser(detectedUser);
-  }, [detectedUser]);
-
-  useEffect(() => {
-    if (!currentPool) {
-      setRows([]);
-      setStatus({ text: "先在「会话」页选一个池。" });
-      return;
-    }
-    const u = user.trim();
-    if (!u) {
-      setRows([]);
-      setStatus({ text: "这个池还没有识别到用户；可以手动填 user id 再查询。" });
-      return;
-    }
     let cancelled = false;
     setStatus({ text: "加载中…" });
     const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams({
+        global: "1",
+        limit: String(pageSize),
+        offset: String((page - 1) * pageSize),
+      });
+      if (user.trim()) params.set("user", user.trim());
+      if (kind) params.set("kind", kind);
+      if (scope) params.set("scope", scope);
+      if (validity) params.set("status", validity);
+      if (q.trim()) params.set("q", q.trim());
       try {
-        const data = await request<Memory[]>(
-          `/v1/memories?user=${encodeURIComponent(u)}&pool=${encodeURIComponent(currentPool)}&all=1&limit=200`,
-        );
+        const data = await request<MemoryList>(`/v1/memories?${params.toString()}`);
         if (cancelled) return;
-        setRows(data);
-        setStatus({ text: data.length ? "" : "没有可见的记忆。" });
+        if (!data.rows.length && data.total > 0 && page > 1) {
+          setPage(Math.max(1, Math.ceil(data.total / pageSize)));
+          return;
+        }
+        setRows(data.rows);
+        setTotal(data.total);
+        setStatus({ text: data.rows.length ? "" : "没有匹配的记忆。" });
       } catch (e) {
         if (cancelled) return;
         setRows([]);
+        setTotal(0);
         setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       }
     }, 250);
@@ -71,9 +92,16 @@ export function MemoriesPage({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [user, currentPool, reloadSignal, localTick, request]);
+  }, [user, kind, scope, validity, q, page, pageSize, reloadSignal, localTick, request]);
 
   const reload = useCallback(() => setLocalTick((n) => n + 1), []);
+
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pages);
+  const start = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const end = Math.min(total, currentPage * pageSize);
+
+  const resetPage = () => setPage(1);
 
   const startEdit = (m: Memory) => {
     setEditingId(m.id);
@@ -82,15 +110,20 @@ export function MemoriesPage({
 
   const save = async (m: Memory) => {
     const content = editContent.trim();
+    const owner = m.user_id || user.trim();
     if (!content) {
       setStatus({ text: "正文不能为空；不想留了就删除。", error: true });
+      return;
+    }
+    if (!owner) {
+      setStatus({ text: "这条记忆缺少 user id，无法保存。", error: true });
       return;
     }
     setSaving(true);
     try {
       await request(`/v1/memories/${m.id}`, {
         method: "PUT",
-        body: { user: user.trim(), content },
+        body: { user: owner, content },
       });
       setEditingId(null);
       setStatus({ text: "" });
@@ -103,10 +136,15 @@ export function MemoriesPage({
   };
 
   const remove = async (m: Memory) => {
+    const owner = m.user_id || user.trim();
+    if (!owner) {
+      setStatus({ text: "这条记忆缺少 user id，无法删除。", error: true });
+      return;
+    }
     if (!window.confirm(`删除记忆 #${m.id}？\n\n${m.content}`)) return;
     setDeletingId(m.id);
     try {
-      await request(`/v1/memories/${m.id}?user=${encodeURIComponent(user.trim())}`, {
+      await request(`/v1/memories/${m.id}?user=${encodeURIComponent(owner)}`, {
         method: "DELETE",
       });
       setStatus({ text: "" });
@@ -120,20 +158,66 @@ export function MemoriesPage({
 
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      <div className="my-3 grid grid-cols-[minmax(120px,220px)_minmax(180px,300px)] gap-3 max-[820px]:grid-cols-1">
-        <Field label="当前池">
-          <Input readOnly placeholder="先在会话页选一个池" value={currentPool || ""} />
-        </Field>
-        <Field label="用户 user id">
+      <div className="my-3 flex flex-wrap items-end gap-3">
+        <Field label="用户" compact>
           <Input
             type="text"
-            placeholder="当前池暂无已识别用户"
+            placeholder="全部用户"
             value={user}
-            onChange={(e) => setUser(e.target.value)}
+            onChange={(e) => {
+              setUser(e.target.value);
+              resetPage();
+            }}
+          />
+        </Field>
+        <Field label="kind" compact>
+          <Select
+            value={kind}
+            onValueChange={(value) => {
+              setKind(value);
+              resetPage();
+            }}
+            options={KIND_OPTIONS}
+            ariaLabel="记忆 kind"
+          />
+        </Field>
+        <Field label="scope" compact>
+          <Select
+            value={scope}
+            onValueChange={(value) => {
+              setScope(value);
+              resetPage();
+            }}
+            options={SCOPE_OPTIONS}
+            ariaLabel="记忆 scope"
+          />
+        </Field>
+        <Field label="状态" compact>
+          <Select
+            value={validity}
+            onValueChange={(value) => {
+              setValidity(value);
+              resetPage();
+            }}
+            options={STATUS_OPTIONS}
+            ariaLabel="记忆状态"
+          />
+        </Field>
+        <Field label="搜索" grow>
+          <Input
+            type="search"
+            placeholder="正文关键词"
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              resetPage();
+            }}
           />
         </Field>
       </div>
+
       <StatusText text={status.text} error={status.error} />
+
       <div className="grid gap-2.5">
         {!rows.length ? (
           <Empty>{status.text ? "" : "没有可见的记忆。"}</Empty>
@@ -157,9 +241,12 @@ export function MemoriesPage({
                 <span>#{m.id}</span>
                 <Badge>{m.kind || "fact"}</Badge>
                 <Badge>scope {m.scope}</Badge>
+                {m.user_id && <span className="font-mono">{m.user_id}</span>}
+                {m.source_pool && <span>池 {m.source_pool}</span>}
                 <span>
                   有效 {formatTs(m.from)} → {m.to ? formatTs(m.to) : "至今"}
                 </span>
+                {m.created_at ? <span>创建 {formatTs(m.created_at)}</span> : null}
                 {m.replaced_by && <span>被 #{m.replaced_by} 顶替</span>}
               </CardMeta>
               <div className="mt-2.5 flex gap-2">
@@ -192,6 +279,44 @@ export function MemoriesPage({
           ))
         )}
       </div>
+
+      {total > 0 && (
+        <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={currentPage <= 1}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            上一页
+          </Button>
+          <span>
+            {start}–{end} / 共 {total} 条 · 第 {currentPage} / {pages} 页
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={currentPage >= pages}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            下一页
+          </Button>
+          <span className="flex-1" />
+          <Select
+            className="!w-auto py-1.5"
+            ariaLabel="每页条数"
+            value={String(pageSize)}
+            onValueChange={(value) => {
+              setPageSize(Number(value) || 20);
+              setPage(1);
+            }}
+            options={[10, 20, 50, 100].map((n) => ({
+              value: String(n),
+              label: `${n} 条/页`,
+            }))}
+          />
+        </div>
+      )}
     </div>
   );
 }

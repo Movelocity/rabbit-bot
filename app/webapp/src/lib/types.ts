@@ -129,6 +129,16 @@ export interface Memory {
   from: number;
   to: number | null;
   replaced_by: number | null;
+  user_id?: string;
+  source_pool?: string;
+  created_at?: number;
+}
+
+export interface MemoryList {
+  total: number;
+  limit: number;
+  offset: number;
+  rows: Memory[];
 }
 
 export interface UserIdentity {

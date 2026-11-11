@@ -11,7 +11,7 @@ import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError, kindLabel } from "../lib/format.ts";
 import type { Pool, PoolMessage, PoolMessages } from "../lib/types.ts";
-import { Button, Empty } from "../components/ui.tsx";
+import { Button, Empty, Segmented } from "../components/ui.tsx";
 
 function mergeMessages(prev: PoolMessage[], incoming: PoolMessage[]): PoolMessage[] {
   const map = new Map(prev.map((m) => [m.seq, m]));
@@ -22,12 +22,10 @@ function mergeMessages(prev: PoolMessage[], incoming: PoolMessage[]): PoolMessag
 export function ChatPage({
   currentPool,
   onCurrentPoolChange,
-  onDetectedUserChange,
   reloadSignal,
 }: {
   currentPool: string | null;
   onCurrentPoolChange: (alias: string | null) => void;
-  onDetectedUserChange: (userId: string) => void;
   reloadSignal: number;
 }) {
   const request = useApi();
@@ -38,7 +36,7 @@ export function ChatPage({
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [reading, setReading] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [view, setView] = useState<"active" | "archived">("active");
   const [archiving, setArchiving] = useState(false);
 
   const messagesBox = useRef<HTMLDivElement>(null);
@@ -62,18 +60,16 @@ export function ChatPage({
   const loadPools = useCallback(
     async (silent = false) => {
       try {
-        const rows = await request<Pool[]>(`/v1/pools${showArchived ? "?archived=1" : ""}`);
-        setPools(rows);
-        if (currentRef.current && !rows.some((p) => p.alias === currentRef.current)) {
-          onCurrentPoolChange(null);
-        } else if (!currentRef.current && rows.length) {
-          onCurrentPoolChange(rows[0].alias);
-        }
+        const rows = await request<Pool[]>(`/v1/pools${view === "archived" ? "?archived=1" : ""}`);
+        const visible = view === "archived" ? rows.filter((p) => p.archived) : rows.filter((p) => !p.archived);
+        setPools(visible);
+        if (visible.some((p) => p.alias === currentRef.current)) return;
+        onCurrentPoolChange(visible[0]?.alias ?? null);
       } catch (e) {
         if (!silent) setStatus({ text: `读取会话池失败：${friendlyError(e)}`, error: true });
       }
     },
-    [request, onCurrentPoolChange, showArchived],
+    [request, onCurrentPoolChange, view],
   );
 
   const loadLatest = useCallback(
@@ -176,11 +172,6 @@ export function ChatPage({
     else box.scrollTop = prevMetrics.current.top + (box.scrollHeight - prevMetrics.current.height);
   }, [messages]);
 
-  useEffect(() => {
-    const last = [...messages].reverse().find((m) => !m.from_self && m.user_id);
-    if (last) onDetectedUserChange(last.user_id);
-  }, [messages, onDetectedUserChange]);
-
   usePolling(async () => {
     await loadPools(true);
     if (currentRef.current) await loadLatest(true);
@@ -218,20 +209,21 @@ export function ChatPage({
           reading && "max-[820px]:hidden",
         )}
       >
-        <div className="flex items-center justify-between px-5 pb-3 pt-[18px] text-[13px] text-muted">
+        <div className="flex items-center justify-between gap-2 px-5 pb-3 pt-[18px] text-[13px] text-muted">
           <span>会话池</span>
-          <button
-            type="button"
-            className={cx("rounded px-1.5 py-0.5 text-[11px] transition hover:text-text", showArchived && "text-text")}
-            title={showArchived ? "隐藏已归档" : "显示已归档"}
-            onClick={() => setShowArchived((v) => !v)}
-          >
-            {showArchived ? "隐藏归档" : "显示归档"}
-          </button>
+          <Segmented
+            value={view}
+            options={[
+              { value: "active", label: "活跃" },
+              { value: "archived", label: "已归档" },
+            ]}
+            onChange={setView}
+            label="会话池视图"
+          />
         </div>
         <div className="overflow-y-auto px-2.5 pb-4">
           {!pools.length ? (
-            <Empty>还没有会话池。</Empty>
+            <Empty>{view === "archived" ? "还没有已归档的会话。" : "还没有会话池。"}</Empty>
           ) : (
             pools.map((p) => (
               <button
@@ -242,7 +234,6 @@ export function ChatPage({
                 className={cx(
                   "mb-1 block w-full rounded-md border-0 px-3 py-3.5 text-left transition hover:bg-surface2",
                   p.alias === currentPool ? "bg-surface2" : "bg-transparent",
-                  p.archived && "opacity-55",
                 )}
                 onClick={() => {
                   setReading(true);
@@ -257,7 +248,7 @@ export function ChatPage({
                     {p.title || "（无标题）"}
                   </span>
                   <span className="flex-none text-[11px] text-muted">
-                    {p.archived ? "已归档 · " : ""}{kindLabel(p.kind)}
+                    {kindLabel(p.kind)}
                   </span>
                 </div>
                 <div className="mt-1.5 flex items-baseline gap-2 text-xs text-muted [font-variant-numeric:tabular-nums]">

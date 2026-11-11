@@ -109,6 +109,53 @@ export function searchMemories(store: Store, input: SearchMemoryInput) {
 }
 
 /**
+ * 管理台全局列表：不按当前池的可见范围收窄，所有人、所有来源池的记录一起翻。
+ * 新的在前；筛选包括用户、kind、scope、有效状态、正文关键词。
+ */
+export function listMemoriesGlobal(store: Store, input: {
+  user?: string;
+  kind?: string;
+  scope?: string;
+  status?: "valid" | "expired";
+  q?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = clampInt(input.limit, 1, 200, 20);
+  const rawOffset = Number(input.offset ?? 0);
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+  const kind = String(input.kind ?? "").trim() || undefined;
+  const scope = String(input.scope ?? "").trim() || undefined;
+  const { rows, total } = store.queryMemories({
+    userId: String(input.user ?? "").trim() || undefined,
+    kind,
+    scope,
+    status: input.status,
+    q: String(input.q ?? "").trim() || undefined,
+    limit,
+    offset,
+  });
+  return {
+    total,
+    limit,
+    offset,
+    rows: rows.map((m) => ({
+      id: m.id,
+      user_id: m.user_id,
+      kind: m.kind,
+      scope: m.scope,
+      content: m.content,
+      source_pool_id: m.source_pool_id,
+      source_pool: store.poolAlias(m.source_pool_id),
+      created_at: m.created_at,
+      from: m.valid_from ?? m.created_at,
+      to: m.valid_to ?? null,
+      replaced_by: m.superseded_by ?? null,
+    })),
+  };
+}
+
+/**
  * 检索前置：先把他这次说的话里出现的别名翻出来。
  * 每轮唤醒都跑一次（纯本地字符串匹配，不调模型、不花钱）。
  */

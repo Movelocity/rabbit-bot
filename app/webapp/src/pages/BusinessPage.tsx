@@ -3,6 +3,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   MiniMap,
@@ -12,6 +13,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
@@ -36,11 +38,10 @@ import {
   Badge,
   Button,
   Empty,
-  Field,
   Input,
-  Segmented,
   StatusText,
 } from "../components/ui.tsx";
+import { Drawer } from "../components/Drawer.tsx";
 import { DetailRows, type DetailRow } from "../components/DetailRows.tsx";
 
 const CATEGORIES: { id: BusinessCategory; label: string }[] = [
@@ -63,6 +64,59 @@ const TYPE_COLORS = [
   "#b45309",
   "#0f766e",
 ];
+
+const STAT_CARDS: { id: BusinessCategory; label: string; hint: string; color: string }[] = [
+  { id: "objects", label: "对象", hint: "实例", color: "#2563eb" },
+  { id: "relations", label: "关系", hint: "定义", color: "#0891b2" },
+  { id: "actions", label: "动作", hint: "可执行", color: "#16a34a" },
+  { id: "terms", label: "术语", hint: "说法", color: "#db2777" },
+  { id: "types", label: "类型", hint: "对象类", color: "#f59e0b" },
+];
+
+function StatIcon({ kind }: { kind: BusinessCategory }) {
+  const icons: Record<BusinessCategory, ReactNode> = {
+    objects: (
+      <>
+        <path d="m12 3.5 7.5 4v9L12 20.5l-7.5-4v-9l7.5-4Z" />
+        <path d="m4.5 7.5 7.5 4 7.5-4M12 11.5v9" />
+      </>
+    ),
+    relations: (
+      <>
+        <path d="m9.5 14.5 5-5" />
+        <path d="m11 6.5 1.5-1.5a3.5 3.5 0 0 1 5 5L16 11.5" />
+        <path d="m13 17.5-1.5 1.5a3.5 3.5 0 0 1-5-5L8 12.5" />
+      </>
+    ),
+    actions: <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" />,
+    terms: (
+      <>
+        <path d="M3.5 11.5v-7a1 1 0 0 1 1-1h7l9 9-8 8-9-9Z" />
+        <circle cx="8" cy="8" r="1.4" />
+      </>
+    ),
+    types: (
+      <>
+        <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+        <path d="m3 12 9 5 9-5M3 16l9 5 9-5" />
+      </>
+    ),
+  };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="h-[18px] w-[18px]"
+    >
+      {icons[kind]}
+    </svg>
+  );
+}
 
 interface BusinessItem {
   kind: BusinessCategory;
@@ -135,6 +189,18 @@ function businessItemsFor(
     }));
 }
 
+function categoryCount(data: BusinessData, id: BusinessCategory): number {
+  if (id === "objects") return data.objects.length;
+  if (id === "relations") return data.relations.length;
+  if (id === "actions") return data.actions.length;
+  if (id === "terms") return data.terms.length;
+  return data.types.length;
+}
+
+function categoryLabel(id: BusinessCategory): string {
+  return CATEGORIES.find((c) => c.id === id)?.label ?? id;
+}
+
 function BusinessLink({ children, onClick }: { children: ReactNode; onClick: () => void }) {
   return (
     <button
@@ -187,7 +253,7 @@ function BusinessDetail({
   onFocus?: (id: string) => void;
 }) {
   if (!data || !data.exists) {
-    return <p className="mx-auto my-8 max-w-[320px] text-center text-[13px] text-muted">还没有业务地图。</p>;
+    return <p className="mx-auto my-8 max-w-[320px] text-center text-[13px] text-muted">还没有知识数据。</p>;
   }
   if (!selection) {
     return (
@@ -469,8 +535,8 @@ function layoutGraph(
   const links = edges
     .map((e) => ({ a: byId.get(e.from), b: byId.get(e.to) }))
     .filter((l): l is { a: GraphNode; b: GraphNode } => !!l.a && !!l.b && l.a !== l.b);
-  const ideal = 200;
-  const minGap = 150;
+  const ideal = 220;
+  const minGap = 170;
   const separate = (strength: number) => {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
@@ -570,56 +636,113 @@ function layoutGraph(
   }
 }
 
+const NODE_SIZE = 96;
+const NODE_RADIUS = NODE_SIZE / 2;
+const ARROW_GAP = 12;
+
 function BusinessNodeView({ data }: NodeProps<BusinessFlowNode>) {
   return (
     <div
       title={`${data.label}（${data.typeLabel}）`}
       className={cx(
-        "relative flex h-full w-full min-w-0 items-center justify-center gap-1.5 rounded-full border bg-surface px-2.5 text-[11px] shadow-[var(--rb-shadow)] transition",
+        "relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 text-center text-white shadow-[var(--rb-shadow)] transition",
         data.hot
-          ? "border-accent ring-2 ring-accent/30"
+          ? "border-accent ring-4 ring-accent/30"
           : data.near
-            ? "border-accent/45"
-            : "border-border",
-        data.dim ? "opacity-20" : "opacity-100",
+            ? "border-white/70"
+            : "border-transparent",
+        data.dim ? "opacity-25" : "opacity-100",
       )}
+      style={{ backgroundColor: data.color }}
     >
-      <Handle type="target" position={Position.Left} className="rb-flow-handle" />
-      <span
-        className="h-2 w-2 shrink-0 rounded-full"
-        style={{ backgroundColor: data.color }}
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="rb-flow-handle"
+        style={{ left: "50%", top: "50%" }}
       />
-      <span className="min-w-0 truncate text-text">{data.label}</span>
-      <Handle type="source" position={Position.Right} className="rb-flow-handle" />
+      <span className="line-clamp-2 px-2 text-[12px] font-semibold leading-[1.25] wrap-anywhere">
+        {data.label}
+      </span>
+      <Handle
+        type="source"
+        position={Position.Top}
+        className="rb-flow-handle"
+        style={{ left: "50%", top: "50%" }}
+      />
     </div>
   );
 }
 
 const NODE_TYPES = { business: BusinessNodeView };
 
+function BusinessEdgeView({
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  style,
+  label,
+  markerEnd,
+}: EdgeProps) {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return null;
+  const ux = dx / dist;
+  const uy = dy / dist;
+  const shrink = Math.min(NODE_RADIUS + ARROW_GAP, dist * 0.8);
+  const endX = targetX - ux * shrink;
+  const endY = targetY - uy * shrink;
+  const midX = (sourceX + endX) / 2;
+  const midY = (sourceY + endY) / 2;
+  return (
+    <>
+      <path
+        d={`M ${sourceX},${sourceY} L ${endX},${endY}`}
+        fill="none"
+        style={style}
+        markerEnd={markerEnd}
+      />
+      {label && (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${midX}px, ${midY}px)`,
+              pointerEvents: "none",
+            }}
+            className="rounded-[4px] border border-border/60 bg-surface/90 px-1 py-px text-[11px] leading-tight text-muted shadow-sm"
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
+const EDGE_TYPES = { business: BusinessEdgeView };
+
 function BusinessGraphInner({
   data,
+  typeColors,
   selection,
   query,
   focusRequest,
   onSelect,
+  onClearSelection,
 }: {
   data: BusinessData;
+  typeColors: Map<string, string>;
   selection: BusinessSelection | null;
   query: string;
   focusRequest: GraphFocusRequest | null;
   onSelect: (kind: BusinessCategory, id: string) => void;
+  onClearSelection: () => void;
 }) {
   const { fitView, setCenter } = useReactFlow();
   const selectedId = selection?.kind === "objects" ? selection.id : null;
-
-  const colorByType = useMemo(() => {
-    const map = new Map<string, string>();
-    data.types.forEach((type, index) => {
-      map.set(type.id, TYPE_COLORS[index % TYPE_COLORS.length]);
-    });
-    return map;
-  }, [data.types]);
 
   const graph = useMemo(() => {
     const objects = data.objects.slice(0, 160);
@@ -646,7 +769,7 @@ function BusinessGraphInner({
     (id: string, zoom: number, duration: number) => {
       const node = graph.nodeById.get(id);
       if (!node) return;
-      void setCenter(node.x + 70, node.y + 15, { zoom, duration });
+      void setCenter(node.x + NODE_RADIUS, node.y + NODE_RADIUS, { zoom, duration });
     },
     [graph, setCenter],
   );
@@ -667,19 +790,19 @@ function BusinessGraphInner({
         id: node.id,
         type: "business",
         position: { x: node.x, y: node.y },
-        width: 140,
-        height: 30,
+        width: NODE_SIZE,
+        height: NODE_SIZE,
         ariaLabel: `${node.name}（${businessTypeName(data, node.type)}）`,
         data: {
           label: node.name,
           typeLabel: businessTypeName(data, node.type),
-          color: colorByType.get(node.type) ?? TYPE_COLORS[0],
+          color: typeColors.get(node.type) ?? TYPE_COLORS[0],
           dim: !!query && !node.search.includes(query) && selectedId !== node.id,
           hot: selectedId === node.id,
           near: neighbors.has(node.id),
         },
       })),
-    [graph, data, colorByType, query, selectedId, neighbors],
+    [graph, data, typeColors, query, selectedId, neighbors],
   );
 
   const edges = useMemo<Edge[]>(
@@ -692,27 +815,25 @@ function BusinessGraphInner({
           !!query &&
           !hot &&
           !(source?.search.includes(query) || target?.search.includes(query));
-        const color = hot ? "var(--rb-accent)" : "var(--rb-muted)";
+        const color = hot
+          ? "var(--rb-accent)"
+          : "color-mix(in srgb, var(--rb-muted) 45%, transparent)";
         return {
           id: `${edge.from}->${edge.to}:${index}`,
           source: edge.from,
           target: edge.to,
-          type: "straight",
+          type: "business",
           selectable: false,
           focusable: false,
           interactionWidth: 0,
-          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color },
           style: {
-            stroke: hot ? "var(--rb-accent)" : "var(--rb-border)",
+            stroke: color,
             strokeWidth: hot ? 2 : 1.2,
             opacity: dim ? 0.12 : 1,
           },
           label:
             graph.edges.length <= 28 ? edge.relation_name || edge.relation : undefined,
-          labelStyle: { fill: "var(--rb-muted)", fontSize: 9 },
-          labelBgStyle: { fill: "var(--rb-surface)", fillOpacity: 0.85 },
-          labelBgPadding: [3, 1],
-          labelBgBorderRadius: 4,
         };
       }),
     [graph, selectedId, query],
@@ -723,7 +844,7 @@ function BusinessGraphInner({
       if (selectedId && graph.nodeById.has(selectedId)) {
         centerOn(selectedId, 0.9, 0);
       } else {
-        void fitView({ padding: 0.16, duration: 0, maxZoom: 1.15 });
+        void fitView({ padding: 0.16, duration: 0, minZoom: 0.8, maxZoom: 1.15 });
       }
     }, 60);
     return () => window.clearTimeout(timer);
@@ -741,19 +862,18 @@ function BusinessGraphInner({
     return <Empty>没有可画的对象。</Empty>;
   }
 
-  const truncated = data.edges_truncated || graph.objects.length < data.objects.length;
   const focusSelected = () => {
     if (!selectedId) return;
     centerOn(selectedId, 1.15, 450);
   };
 
   return (
-    <>
-      <div className="rb-flow h-[clamp(440px,62vh,720px)] overflow-hidden rounded-[14px] border border-border bg-surface shadow-[var(--rb-shadow)]">
-        <ReactFlow
+    <div className="rb-flow h-[clamp(460px,64vh,760px)] overflow-hidden bg-surface min-[1100px]:h-full">
+      <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           minZoom={0.12}
           maxZoom={2.4}
           nodesDraggable={false}
@@ -763,18 +883,19 @@ function BusinessGraphInner({
           onInit={(instance) => {
             if (selectedId && graph.nodeById.has(selectedId)) {
               const node = graph.nodeById.get(selectedId)!;
-              void instance.setCenter(node.x + 70, node.y + 15, {
+              void instance.setCenter(node.x + NODE_RADIUS, node.y + NODE_RADIUS, {
                 zoom: 0.9,
                 duration: 0,
               });
             } else {
-              void instance.fitView({ padding: 0.16, maxZoom: 1.15 });
+              void instance.fitView({ padding: 0.16, minZoom: 0.8, maxZoom: 1.15 });
             }
           }}
           onNodeClick={(_, node) => onSelect("objects", node.id)}
           onNodeDoubleClick={(_, node) => {
             centerOn(node.id, 1.15, 450);
           }}
+          onPaneClick={onClearSelection}
           proOptions={{ hideAttribution: true }}
           className="bg-surface"
         >
@@ -794,7 +915,7 @@ function BusinessGraphInner({
             <button
               type="button"
               className="rounded-full border border-border bg-surface/95 px-2.5 py-1 text-[11px] text-muted shadow-[var(--rb-shadow)] backdrop-blur transition hover:text-text"
-              onClick={() => void fitView({ padding: 0.16, duration: 450, maxZoom: 1.15 })}
+              onClick={() => void fitView({ padding: 0.16, duration: 450, minZoom: 0.8, maxZoom: 1.15 })}
             >
               适应画布
             </button>
@@ -808,20 +929,18 @@ function BusinessGraphInner({
             </button>
           </Panel>
         </ReactFlow>
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        {`${graph.objects.length} 个对象 · ${graph.edges.length} 条边${truncated ? "（已截断）" : ""} · 滚轮缩放 / 拖拽平移 / 双击节点聚焦；颜色按对象类型区分。`}
-      </p>
-    </>
+    </div>
   );
 }
 
 function BusinessGraph(props: {
   data: BusinessData;
+  typeColors: Map<string, string>;
   selection: BusinessSelection | null;
   query: string;
   focusRequest: GraphFocusRequest | null;
   onSelect: (kind: BusinessCategory, id: string) => void;
+  onClearSelection: () => void;
 }) {
   return (
     <ReactFlowProvider>
@@ -835,9 +954,9 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   const [data, setData] = useState<BusinessData | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<"list" | "graph">("list");
   const [category, setCategory] = useState<BusinessCategory>("objects");
-  const [selection, setSelection] = useState<BusinessSelection | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<BusinessSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<GraphFocusRequest | null>(null);
 
   const load = useCallback(async () => {
@@ -845,10 +964,11 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
     try {
       const result = await request<BusinessData>("/v1/business");
       setData(result);
-      setStatus({ text: result.exists ? "" : "还没有业务地图。" });
+      setStatus({ text: result.exists ? "" : "还没有知识数据。" });
     } catch (e) {
       setData(null);
-      setSelection(null);
+      setSelectedId(null);
+      setDetail(null);
       setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
     }
   }, [request]);
@@ -863,167 +983,262 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   }, [reloadSignal, load]);
 
   const query = search.trim().toLowerCase();
-  const items = useMemo(
-    () => (data ? businessItemsFor(data, category, query) : []),
-    [data, category, query],
+
+  const typeColors = useMemo(() => {
+    const map = new Map<string, string>();
+    data?.types.forEach((type, index) => {
+      map.set(type.id, TYPE_COLORS[index % TYPE_COLORS.length]);
+    });
+    return map;
+  }, [data]);
+
+  const relatedIds = useMemo(() => {
+    if (!data || !selectedId) return null;
+    const ids = new Set<string>([selectedId]);
+    for (const edge of data.edges) {
+      if (edge.from === selectedId) ids.add(edge.to);
+      if (edge.to === selectedId) ids.add(edge.from);
+    }
+    return ids;
+  }, [data, selectedId]);
+
+  const items = useMemo(() => {
+    if (!data) return [];
+    const base = businessItemsFor(data, category, query);
+    if (!relatedIds) return base;
+    return base
+      .filter((item) => item.kind === "objects" && relatedIds.has(item.id))
+      .sort((a, b) => {
+        if (a.id === selectedId) return -1;
+        if (b.id === selectedId) return 1;
+        return a.title.localeCompare(b.title, "zh-Hans-CN");
+      });
+  }, [data, category, query, relatedIds, selectedId]);
+
+  const selectedObject = useMemo(
+    () => (data && selectedId ? data.objects.find((o) => o.id === selectedId) : undefined),
+    [data, selectedId],
   );
 
-  useEffect(() => {
-    if (!data || !data.exists) {
-      setSelection(null);
-      return;
-    }
-    setSelection((prev) =>
-      prev && items.some((i) => i.kind === prev.kind && i.id === prev.id)
-        ? prev
-        : items[0]
-          ? { kind: items[0].kind, id: items[0].id }
-          : null,
-    );
-  }, [data, items]);
+  const closeDetail = useCallback(() => setDetail(null), []);
 
-  const selectItem = (kind: BusinessCategory, id: string) => {
-    setCategory(kind);
-    setSelection({ kind, id });
+  const openDetail = useCallback((kind: BusinessCategory, id: string) => {
+    setDetail({ kind, id });
+  }, []);
+
+  const selectNode = useCallback((id: string) => {
+    setCategory("objects");
+    setSelectedId((prev) => (prev === id ? null : id));
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedId(null), []);
+
+  const chooseCategory = (id: BusinessCategory) => {
+    setSelectedId(null);
+    setCategory(id);
   };
 
   const focusInGraph = useCallback((id: string) => {
-    setCategory("objects");
-    setSelection({ kind: "objects", id });
-    setView("graph");
+    setDetail(null);
     setFocusRequest({ id, nonce: Date.now() });
   }, []);
 
+  const graphTruncated = !!data && (data.edges_truncated || data.objects.length > 160);
+
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      <div className="my-3 flex flex-wrap items-end gap-3">
-        <Field label="搜索" compact>
-          <Input
-            type="search"
-            placeholder="对象 / 关系 / 术语"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </Field>
-        {view === "list" && data?.exists && (
-          <nav className="flex flex-wrap gap-1.5" aria-label="业务知识分类">
-            {CATEGORIES.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={cx(
-                  "rounded-full border px-2.5 py-1 text-xs transition",
-                  category === c.id
-                    ? "border-accent bg-accent-soft text-accent"
-                    : "border-border bg-surface text-muted hover:text-text",
-                )}
-                onClick={() => setCategory(c.id)}
-              >
-                {c.label}{" "}
-                {data[
-                  c.id === "objects"
-                    ? "objects"
-                    : c.id === "relations"
-                      ? "relations"
-                      : c.id === "actions"
-                        ? "actions"
-                        : c.id === "terms"
-                          ? "terms"
-                          : "types"
-                ].length}
-              </button>
-            ))}
-          </nav>
-        )}
-        <div className="ml-auto flex flex-wrap items-center gap-3">
-          {data && (
-            <span className="pb-1.5 text-xs text-muted tabular-nums">
-              {`${data.edge_total || data.edges.length} 条边 · 只读`}
-            </span>
-          )}
-          <Segmented
-            label="业务知识视图"
-            value={view}
-            onChange={setView}
-            options={[
-              { value: "list", label: "列表" },
-              { value: "graph", label: "关系图" },
-            ]}
-          />
-        </div>
-      </div>
-
       <StatusText text={status.text} error={status.error} />
 
       {!data ? null : !data.exists ? (
-        <p className="mx-auto my-10 max-w-[360px] text-center text-[13px] text-muted">
-          {`还没有业务地图。在 ${data.dir || "runtime/business"} 下放 objects.json / relations.json 后再刷新。`}
-        </p>
-      ) : view === "list" ? (
-        <div className="grid items-start gap-4 max-[1100px]:grid-cols-1 grid-cols-[minmax(240px,370px)_minmax(0,1fr)]">
-          <aside className="min-w-0">
-            <div className="grid max-h-[min(62vh,640px)] gap-1.5 overflow-auto pr-1 max-[1100px]:max-h-none">
-              {!items.length ? (
-                <Empty>
-                  {query ? `没有匹配「${query}」的条目。` : "这一分类还没有条目。"}
-                </Empty>
-              ) : (
-                items.map((item) => {
-                  const active =
-                    selection?.kind === item.kind && selection?.id === item.id;
-                  return (
-                    <button
-                      key={`${item.kind}:${item.id}`}
-                      type="button"
-                      className={cx(
-                        "w-full rounded-[10px] border px-2.5 py-2 text-left transition",
-                        active
-                          ? "border-accent bg-accent-soft"
-                          : "border-border bg-surface hover:border-accent/45",
-                      )}
-                      onClick={() => selectItem(item.kind, item.id)}
-                    >
-                      <div className="text-[13px] font-semibold wrap-anywhere">{item.title}</div>
-                      {item.subtitle && (
-                        <div className="mt-0.5 text-[11px] text-muted wrap-anywhere">
-                          {item.subtitle}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </aside>
-          <div className="min-w-0 rounded-[14px] border border-border bg-surface p-4 shadow-[var(--rb-shadow)]">
-            <BusinessDetail
-              data={data}
-              selection={selection}
-              onSelect={selectItem}
-              onFocus={focusInGraph}
-            />
-          </div>
+        <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">
+          <p className="m-0 max-w-[380px] text-[13px] leading-relaxed text-muted">
+            {`还没有知识数据。在 ${data.dir || "runtime/business"} 下放 objects.json / relations.json 后再刷新。`}
+          </p>
         </div>
       ) : (
-        <div className="grid items-start gap-4 max-[1100px]:grid-cols-1 grid-cols-[minmax(0,1fr)_minmax(260px,380px)]">
-          <div className="min-w-0">
-            <BusinessGraph
-              data={data}
-              selection={selection}
-              query={query}
-              focusRequest={focusRequest}
-              onSelect={selectItem}
-            />
+        <>
+          <div className="grid grid-cols-2 gap-3 min-[720px]:grid-cols-3 min-[1100px]:grid-cols-5">
+            {STAT_CARDS.map((card) => {
+              const active = category === card.id;
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  className={cx(
+                    "group rounded-[14px] border bg-surface p-3.5 text-left shadow-[var(--rb-shadow)] transition hover:-translate-y-0.5 hover:border-accent/45",
+                    active ? "border-accent ring-1 ring-accent/20" : "border-border",
+                  )}
+                  onClick={() => chooseCategory(card.id)}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="grid h-9 w-9 flex-none place-items-center rounded-[9px] text-white"
+                      style={{ backgroundColor: card.color }}
+                    >
+                      <StatIcon kind={card.id} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-[11px] font-medium tracking-wide text-muted">
+                        {card.label}
+                      </div>
+                      <div className="text-[22px] font-semibold leading-tight tabular-nums">
+                        {categoryCount(data, card.id)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-border pt-2 text-[11px] text-muted transition group-hover:text-accent">
+                    <span>{card.hint}</span>
+                    <span aria-hidden="true">→</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
-          <aside className="min-w-0 rounded-[14px] border border-border bg-surface p-4 shadow-[var(--rb-shadow)]">
-            <BusinessDetail
-              data={data}
-              selection={selection}
-              onSelect={selectItem}
-              onFocus={focusInGraph}
-            />
-          </aside>
-        </div>
+
+          <section className="mt-4 overflow-hidden rounded-[14px] border border-border bg-surface shadow-[var(--rb-shadow)]">
+            <div className="grid items-stretch min-[1100px]:h-[clamp(520px,70vh,820px)] min-[1100px]:grid-cols-[minmax(0,1fr)_320px]">
+              <aside className="order-1 flex max-h-[70vh] min-h-0 flex-col border-b border-border min-[1100px]:order-2 min-[1100px]:max-h-none min-[1100px]:border-b-0 min-[1100px]:border-l">
+                <div className="flex-none border-b border-border p-2.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h3 className="m-0 text-xs font-semibold">条目</h3>
+                    <span className="text-[11px] text-muted tabular-nums">{items.length}</span>
+                  </div>
+                  {selectedId && selectedObject && (
+                    <div className="mt-1.5 flex items-center gap-1.5 rounded-[7px] bg-accent-soft px-1.5 py-1 text-[11px] text-accent">
+                      <span className="min-w-0 flex-1 truncate">
+                        {`与「${selectedObject.name || selectedObject.id}」相关`}
+                      </span>
+                      <button
+                        type="button"
+                        className="flex-none underline-offset-2 hover:underline"
+                        onClick={clearSelection}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {CATEGORIES.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={cx(
+                          "rounded-full border px-2 py-0.5 text-[11px] transition",
+                          category === c.id
+                            ? "border-accent bg-accent-soft text-accent"
+                            : "border-border bg-surface text-muted hover:text-text",
+                        )}
+                        onClick={() => chooseCategory(c.id)}
+                      >
+                        {c.label} {categoryCount(data, c.id)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2">
+                    <Input
+                      type="search"
+                      placeholder="搜索对象 / 关系 / 术语 / 类型"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+                  {!items.length ? (
+                    <Empty>
+                      {query
+                        ? `没有匹配「${search.trim()}」的条目。`
+                        : selectedId
+                          ? "没有找到相关实体。"
+                          : "这一分类还没有条目。"}
+                    </Empty>
+                  ) : (
+                    <div className="grid gap-1.5">
+                      {items.map((item) => {
+                        const active =
+                          (item.kind === "objects" && selectedId === item.id) ||
+                          (detail?.kind === item.kind && detail?.id === item.id);
+                        const objectType =
+                          item.kind === "objects"
+                            ? data.objects.find((o) => o.id === item.id)?.type
+                            : undefined;
+                        const dot =
+                          (objectType && typeColors.get(objectType)) ||
+                          STAT_CARDS.find((c) => c.id === item.kind)?.color ||
+                          TYPE_COLORS[0];
+                        return (
+                          <button
+                            key={`${item.kind}:${item.id}`}
+                            type="button"
+                            className={cx(
+                              "w-full rounded-[10px] border px-2.5 py-2 text-left transition",
+                              active
+                                ? "border-accent bg-accent-soft"
+                                : "border-border bg-surface hover:border-accent/45 hover:bg-surface2",
+                            )}
+                            onClick={() => openDetail(item.kind, item.id)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="h-2 w-2 flex-none rounded-full"
+                                style={{ backgroundColor: dot }}
+                              />
+                              <span className="min-w-0 flex-1 text-[13px] font-semibold wrap-anywhere">
+                                {item.title}
+                              </span>
+                            </div>
+                            {item.subtitle && (
+                              <div className="mt-0.5 pl-4 text-[11px] text-muted wrap-anywhere">
+                                {item.subtitle}
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </aside>
+
+              <div className="order-2 flex min-w-0 flex-col min-[1100px]:order-1">
+                <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+                  <div className="min-w-0">
+                    <h2 className="m-0 text-sm font-semibold">知识图谱</h2>
+                    <p className="m-0 mt-0.5 text-xs text-muted">
+                      {`节点 = 对象，连线 = 关系，颜色 = 类型 · 点击节点高亮往来关系、右侧列出相关实体${graphTruncated ? " · 边已截断" : ""}`}
+                    </p>
+                  </div>
+                  <span className="text-xs text-muted tabular-nums">
+                    {`${data.objects.length} 个对象 · ${data.edge_total || data.edges.length} 条边 · 只读`}
+                  </span>
+                </header>
+                <div className="min-h-0 flex-1">
+                  <BusinessGraph
+                    data={data}
+                    typeColors={typeColors}
+                    selection={selectedId ? { kind: "objects", id: selectedId } : null}
+                    query={query}
+                    focusRequest={focusRequest}
+                    onSelect={(_kind, id) => selectNode(id)}
+                    onClearSelection={clearSelection}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+        </>
+      )}
+
+      {data?.exists && detail && (
+        <Drawer title={`${categoryLabel(detail.kind)}详情`} onClose={closeDetail}>
+          <BusinessDetail
+            data={data}
+            selection={detail}
+            onSelect={openDetail}
+            onFocus={focusInGraph}
+          />
+        </Drawer>
       )}
     </div>
   );

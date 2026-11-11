@@ -814,6 +814,36 @@ export class Store {
     return this.db.prepare(`${base}${valid} ORDER BY id DESC LIMIT ?`).all(...args) as any[];
   }
 
+  /**
+   * 全局翻记忆：不按池的可见范围过滤，给管理台列全部人、全部池记下的条目。
+   * 新的在前（created_at DESC，同一毫秒再按 id 兜底），offset 分页。
+   */
+  queryMemories(opts: {
+    userId?: string; kind?: string; scope?: string; status?: "valid" | "expired"; q?: string;
+    limit: number; offset: number;
+  }): { rows: any[]; total: number } {
+    const where: string[] = [];
+    const args: any[] = [];
+    if (opts.userId) { where.push("user_id=?"); args.push(opts.userId); }
+    if (opts.kind) { where.push("kind=?"); args.push(opts.kind); }
+    if (opts.scope) { where.push("scope=?"); args.push(opts.scope); }
+    if (opts.status === "valid") where.push("valid_to IS NULL");
+    else if (opts.status === "expired") where.push("valid_to IS NOT NULL");
+    if (opts.q) {
+      where.push("content LIKE ? ESCAPE '\\'");
+      args.push(`%${opts.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    }
+    const clause = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+    const total = Number(
+      (this.db.prepare(`SELECT COUNT(*) AS n FROM memories${clause}`).get(...args) as any)?.n ?? 0,
+    );
+    const rows = this.db.prepare(
+      `SELECT id,user_id,kind,content,source_pool_id,source_kind,scope,created_at,valid_from,valid_to,superseded_by
+       FROM memories${clause} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+    ).all(...args, opts.limit, opts.offset) as any[];
+    return { rows, total };
+  }
+
   // ---------- 交接 / 日志 / 用量 ----------
   addHandoff(content: string, tokens: number | null, file: string | null) {
     return Number(this.db.prepare("INSERT INTO handoffs(created_at,tokens,content,file) VALUES(?,?,?,?)").run(Date.now(), tokens, content, file).lastInsertRowid);

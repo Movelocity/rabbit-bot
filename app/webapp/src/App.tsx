@@ -32,7 +32,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "approvals", label: "权限" },
   { tab: "plans", label: "计划" },
   { tab: "memories", label: "记忆" },
-  { tab: "business", label: "业务知识" },
+  { tab: "business", label: "知识" },
   { tab: "manage", label: "管理" },
 ];
 
@@ -41,7 +41,7 @@ const TAB_HINTS: Record<string, string> = {
   approvals: "只读 · 审批请在飞书里完成",
   plans: "只读 · 新增/完成走 IM",
   memories: "可直接改正文或删除 · 新增/过期走 IM",
-  business: "只读 · runtime/business",
+  business: "只读 · 对象 / 关系 / 动作",
 };
 
 const MANAGE_HINTS: Record<string, string> = {
@@ -60,7 +60,6 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [health, setHealth] = useState<Health>("checking");
   const [currentPool, setCurrentPool] = useState<string | null>(null);
-  const [detectedUser, setDetectedUser] = useState("");
   const [reloadSignal, setReloadSignal] = useState(0);
   const { tab, manageView, setTab, setManageView } = useUrlState();
 
@@ -106,7 +105,6 @@ export default function App() {
     setAuth("login");
     setLoginError("token 不对或已失效，请重新输入");
     setCurrentPool(null);
-    setDetectedUser("");
   }, []);
 
   const handleLogin = useCallback(async (raw: string) => {
@@ -138,7 +136,6 @@ export default function App() {
     setAuth("login");
     setLoginError("");
     setCurrentPool(null);
-    setDetectedUser("");
   }, []);
 
   if (auth === "checking") {
@@ -230,20 +227,13 @@ export default function App() {
             <ChatPage
               currentPool={currentPool}
               onCurrentPoolChange={setCurrentPool}
-              onDetectedUserChange={setDetectedUser}
               reloadSignal={reloadSignal}
             />
           )}
           {tab === "tasks" && <TasksPage reloadSignal={reloadSignal} />}
           {tab === "approvals" && <ApprovalsPage reloadSignal={reloadSignal} />}
           {tab === "plans" && <PlansPage reloadSignal={reloadSignal} />}
-          {tab === "memories" && (
-            <MemoriesPage
-              currentPool={currentPool}
-              detectedUser={detectedUser}
-              reloadSignal={reloadSignal}
-            />
-          )}
+          {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
           {tab === "business" && <BusinessPage reloadSignal={reloadSignal} />}
           {tab === "manage" && (
             <ManagePage

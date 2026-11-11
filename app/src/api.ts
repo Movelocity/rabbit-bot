@@ -28,7 +28,7 @@ import {
 } from "./core/approvals.ts";
 import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
-import { addMemory, closeMemory, deleteMemory, searchMemories, updateMemory } from "./ops/memories.ts";
+import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, updateMemory } from "./ops/memories.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
@@ -671,9 +671,24 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
         }
         case "memories": {
           if (parts.length === 2 && method === "GET") {
+            const user = url.searchParams.get("user") ?? undefined;
+            const global = url.searchParams.get("global");
+            // 带 global=1（或干脆不给 user）走管理台全局列表；给 user 仍按原来「该用户在当前池可见」查。
+            if (!user || global === "1" || global === "true") {
+              const status = url.searchParams.get("status");
+              return reply(200, listMemoriesGlobal(d.store, {
+                user,
+                kind: url.searchParams.get("kind") ?? undefined,
+                scope: url.searchParams.get("scope") ?? undefined,
+                status: status === "valid" || status === "expired" ? status : undefined,
+                q: url.searchParams.get("q") ?? undefined,
+                limit: qInt(url.searchParams.get("limit")),
+                offset: qInt(url.searchParams.get("offset")),
+              }));
+            }
             const all = url.searchParams.get("all");
             return reply(200, searchMemories(d.store, {
-              user: url.searchParams.get("user") ?? undefined,
+              user,
               pool: url.searchParams.get("pool") ?? undefined,
               limit: qInt(url.searchParams.get("limit")),
               at: url.searchParams.get("at") ?? undefined,
@@ -701,7 +716,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               id: parts[2],
             }));
           }
-          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、POST /v1/memories、PATCH /v1/memories/:id（关闭）、PUT /v1/memories/:id（改正文）、DELETE /v1/memories/:id?user=");
+          throw new HttpError(404, "用法：GET /v1/memories?user=&pool=[&at=ISO][&all=1]、GET /v1/memories?global=1[&user=&kind=&scope=&status=&q=&limit=&offset=]、POST /v1/memories、PATCH /v1/memories/:id（关闭）、PUT /v1/memories/:id（改正文）、DELETE /v1/memories/:id?user=");
         }
         case "images": {
           if (parts.length === 2 && method === "GET") {

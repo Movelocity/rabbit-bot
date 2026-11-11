@@ -212,6 +212,35 @@ test("记忆：PUT 改正文，DELETE 删除", async () => {
   assert.equal(after.body.data.length, 0);
 });
 
+test("记忆：全局列表按创建倒序、支持过滤分页", async () => {
+  const user = "u-global";
+  const first = await call("/v1/memories", {
+    method: "POST",
+    body: JSON.stringify({ user, content: "第一件事", pool: "p1" }),
+  });
+  const second = await call("/v1/memories", {
+    method: "POST",
+    body: JSON.stringify({ user, content: "第二件事", pool: "p1" }),
+  });
+  assert.equal(second.status, 201);
+
+  const list = await call(`/v1/memories?global=1&user=${user}`);
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  assert.equal(list.body.data.total, 2);
+  assert.equal(list.body.data.rows[0].id, second.body.data.id);
+  assert.equal(list.body.data.rows[0].content, "第二件事");
+  assert.equal(list.body.data.rows[0].user_id, user);
+
+  const page = await call(`/v1/memories?global=1&user=${user}&limit=1&offset=1`);
+  assert.equal(page.body.data.total, 2);
+  assert.equal(page.body.data.rows.length, 1);
+  assert.equal(page.body.data.rows[0].id, first.body.data.id);
+
+  const kw = await call(`/v1/memories?global=1&user=${user}&q=${encodeURIComponent("第二")}`);
+  assert.equal(kw.body.data.total, 1);
+  assert.equal(kw.body.data.rows[0].content, "第二件事");
+});
+
 test("人设与系统提示词：读默认、写运行时、读回", async () => {
   const persona = await call("/v1/persona");
   assert.equal(persona.status, 200);
