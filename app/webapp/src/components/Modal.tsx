@@ -1,15 +1,19 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { cx } from "../lib/cx.ts";
 import { Button } from "./ui.tsx";
 
 export function Modal({
   title,
   onClose,
   children,
+  backdropBlur = true,
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
+  /** 背景要不要毛玻璃；默认要，编辑类弹窗可以关掉 */
+  backdropBlur?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -30,7 +34,7 @@ export function Modal({
       aria-modal="true"
     >
       <div
-        className="absolute inset-0 bg-slate-900/55 backdrop-blur-[2px]"
+        className={cx("absolute inset-0 bg-slate-900/55", backdropBlur && "backdrop-blur-[2px]")}
         onClick={onClose}
       />
       <div className="relative max-h-[90vh] w-full max-w-[940px] overflow-auto rounded-2xl border border-border bg-surface p-5 shadow-[var(--rb-shadow)] max-sm:max-h-[94vh] max-sm:rounded-xl max-sm:p-3.5">

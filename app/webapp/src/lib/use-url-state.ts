@@ -14,8 +14,8 @@ export type Tab = (typeof TABS)[number];
 export const MANAGE_VIEWS = [
   "usage",
   "task-stats",
-  "users",
   "persona",
+  "users",
   "settings",
   "skills",
 ] as const;

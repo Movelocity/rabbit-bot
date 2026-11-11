@@ -219,6 +219,49 @@ export function isRunnerAlive(pid: number | null | undefined): boolean {
   }
 }
 
+export interface DeadRunnerSweepResult {
+  /** 这轮扫了多少条 running 任务 */
+  checked: number;
+  /** 确认进程已退出、已清理的任务 id */
+  dead: number[];
+}
+
+/**
+ * 周期性批量巡检：所有 running 且带 runner_pid 的任务，一次全扫。
+ *
+ * `launch` 里的 exit 回调只在 rabbit-bot 进程还活着、且还持有 child 句柄时才会触发；
+ * 进程重启、句柄丢失、或退出信号没被收到时，任务会永远停在 running。
+ * 这里按 pid 探活兜底：死掉的就清 runner 状态，并在任务池里发一条调度器消息，
+ * 让 UFA 通过任务事件醒来处理（重试 / 换执行器 / 标记失败）。
+ *
+ * 用 `UPDATE ... WHERE runner_pid=?` 原子认领，避免和 exit 回调重复处理同一条任务。
+ */
+export function sweepDeadRunners(store: Store, opts: { dataDir?: string; now?: number } = {}): DeadRunnerSweepResult {
+  const running = store.db.prepare(
+    "SELECT * FROM tasks WHERE status='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
+  ).all() as Task[];
+  const dead: number[] = [];
+  const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
+  for (const task of running) {
+    const pid = task.runner_pid;
+    if (pid === null || isRunnerAlive(pid)) continue;
+    const now = opts.now ?? Date.now();
+    const claimed = store.db.prepare(
+      "UPDATE tasks SET runner_pid=NULL, runner_started_at=NULL, stage='exited', updated_at=? WHERE id=? AND status='running' AND runner_pid=?",
+    ).run(now, task.id, pid);
+    if (Number(claimed.changes) === 0) continue; // exit 回调/别的进程已经处理
+    dead.push(task.id);
+    appendTaskEvent(store, task.id, {
+      text: `执行器进程已退出：巡检发现进程不存在（pid=${pid}，session=${task.session_id || "（未捕获）"}）`,
+      sender: "dispatcher",
+      senderName: "调度器",
+    });
+    // 进程已经没了，runner.jsonl 是完整的：顺手把用量落库
+    updateTask(store, task.id, taskUsagePatch(parseRunnerUsage(path.join(dataDir, "tasks", String(task.id), "runner.jsonl"))));
+  }
+  return { checked: running.length, dead };
+}
+
 function killTree(pid: number, signal: NodeJS.Signals): void {
   // detached 子进程是进程组组长：先杀整组，失败再退回到单 pid
   try {

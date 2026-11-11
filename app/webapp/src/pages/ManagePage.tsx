@@ -10,8 +10,8 @@ import { SkillsView } from "./manage/SkillsView.tsx";
 const LABELS: Record<ManageView, string> = {
   usage: "用量",
   "task-stats": "任务统计",
+  persona: "提示词编辑",
   users: "用户",
-  persona: "人格",
   settings: "调度",
   skills: "技能",
 };

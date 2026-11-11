@@ -20,7 +20,8 @@
     "watchdogMs": 5000,
     "overdueGraceMs": 2000,
     "batchToTick": true,
-    "directPrivate": true
+    "directPrivate": true,
+    "runnerWatchMs": 30000
   },
   "send": {
     "confirmWaitMs": 1000,

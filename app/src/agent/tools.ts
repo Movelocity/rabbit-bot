@@ -14,6 +14,7 @@ import { resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
 import { businessDir, sharedDir } from "../core/runtime.ts";
+import { listPrompts, readPrompt, writePrompt } from "../ops/runtime-files.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -942,7 +943,7 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      `读工作区里的文件（只读；相对路径）。${topicsNote}提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。`
+      `读工作区里的文件（只读；相对路径）。${topicsNote}提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。要改 prompt/ 下的提示词用 edit_prompt（system.md 除外）。`
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
       path: Type.String({ description: `相对路径，例如 ${examples.readPath}` }),
@@ -982,6 +983,60 @@ export function createTools(d: ToolDeps) {
         return txt(`写了 ${r.path}（${r.bytes} 字节）。`, { ok: true, path: r.path });
       } catch (e) {
         return txt(`没写成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  // 自编辑提示词：prompt/*.md 可以改，system.md 是总纲，留给主人。
+  const editPrompt = defineTool({
+    name: "edit_prompt",
+    label: "edit_prompt",
+    executionMode: "sequential",
+    description:
+      "改你自己的提示词（prompt/<name>.md），改完下一轮生效。system.md 是总纲，不能自改，只能让主人在管理台改。"
+      + "action=list 看有哪些；read 读当前版本；replace 用 old→new 改一段（old 必须唯一命中）；write 整份覆盖。",
+    parameters: Type.Object({
+      action: Type.String({ description: "list / read / replace / write" }),
+      name: Type.Optional(Type.String({ description: "提示词名，不带 .md，例如 scene-message" })),
+      old: Type.Optional(Type.String({ description: "replace 用：要被替换的原文（必须唯一命中）" })),
+      new: Type.Optional(Type.String({ description: "replace 用：替换后的文本" })),
+      content: Type.Optional(Type.String({ description: "write 用：整份新内容" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim();
+      if (action === "list") {
+        const rows = listPrompts(d.cfg);
+        return txt(rows.map((r) => `${r.name}（${r.source}）`).join("\n"), { ok: true });
+      }
+      const name = String(p.name ?? "").trim().replace(/^prompt\//, "").replace(/\.md$/, "");
+      if (!name) return txt("要给提示词名，例如 scene-message", { ok: false });
+      if (name === "system") {
+        return txt("system.md 是总纲，不能自改；把要改的句子告诉主人，让他在管理台改。", { ok: false });
+      }
+      try {
+        if (action === "read") {
+          const r = readPrompt(d.cfg, name);
+          return txt(r.content.trim() || "（文件是空的）", { ok: true, path: r.path, name });
+        }
+        if (action === "replace") {
+          const oldText = String(p.old ?? "");
+          const newText = String(p.new ?? "");
+          if (!oldText.trim()) return txt("replace 要给 old", { ok: false });
+          const cur = readPrompt(d.cfg, name).content;
+          const hits = cur.split(oldText).length - 1;
+          if (hits === 0) return txt(`没找到这段原文：${oldText.slice(0, 80)}`, { ok: false });
+          if (hits > 1) return txt(`这段原文出现 ${hits} 次，不唯一；把上下文带长一点`, { ok: false });
+          const saved = writePrompt(d.cfg, name, cur.replace(oldText, newText));
+          return txt(`改了 prompt/${name}.md，下一轮生效。`, { ok: true, path: saved.path, name });
+        }
+        if (action === "write") {
+          if (typeof p.content !== "string") return txt("write 要给 content", { ok: false });
+          const saved = writePrompt(d.cfg, name, p.content);
+          return txt(`写了 prompt/${name}.md（${p.content.length} 字），下一轮生效。`, { ok: true, path: saved.path, name });
+        }
+        return txt("action 只能是 list / read / replace / write", { ok: false });
+      } catch (e) {
+        return txt(`没改成：${(e as Error).message}`, { ok: false });
       }
     },
   });
@@ -1221,9 +1276,9 @@ export function createTools(d: ToolDeps) {
   // 沙盒本身就是边界，不用审批；宿主机裸跑才必须审批。
   const ufaHasTerminal = d.cfg.exec.shell.mode === "docker"
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
-  // UFA 只读 + 任务面板：不写文件（交接走 tasks 表），terminal 按 host+审批开关。
+  // UFA 只读 + 任务面板：不写普通文件（交接走 tasks 表），但可以改自己的提示词（system.md 除外）；terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, knowledge, plan, approval, task, readFile, mapTool,
+    chat, memory, knowledge, plan, approval, task, readFile, editPrompt, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

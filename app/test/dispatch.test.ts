@@ -9,7 +9,7 @@ import { createTools } from "../src/agent/tools.ts";
 import { createTask, getTask, updateTask } from "../src/core/tasks.ts";
 import { listTaskEvents } from "../src/core/task-events.ts";
 import {
-  isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc,
+  isRunnerAlive, resumeTask, startTask, stopTask, sweepDeadRunners, writeTaskDoc,
 } from "../src/core/dispatch.ts";
 
 const root = path.join(APP_ROOT, ".scratch", "dispatch-test");
@@ -277,5 +277,39 @@ test("stopTask：杀进程树、清 runner_pid、running 回到 pending", async 
   } finally {
     delete process.env.FAKE_EXEC_SLEEP;
   }
+  store.close();
+});
+
+test("sweepDeadRunners：进程没了就清 runner 状态并在任务池发调度器消息", () => {
+  const { store, task } = setup();
+  updateTask(store, task.id, {
+    status: "running", stage: "working", runner_pid: 999999, runner_started_at: Date.now(),
+  });
+  const r = sweepDeadRunners(store, { dataDir: root });
+  assert.equal(r.checked, 1);
+  assert.deepEqual(r.dead, [task.id]);
+  const fresh = getTask(store, task.id)!;
+  assert.equal(fresh.runner_pid, null);
+  assert.equal(fresh.runner_started_at, null);
+  assert.equal(fresh.stage, "exited");
+  const ev = listTaskEvents(store, task.id).find((e) => /执行器进程已退出/.test(e.text));
+  assert.ok(ev, "任务池里没有退出消息");
+  assert.match(ev.text, /巡检发现进程不存在/);
+  assert.match(ev.text, /pid=999999/);
+  assert.equal(ev.sender, "调度器");
+  store.close();
+});
+
+test("sweepDeadRunners：进程还活着不动，重复扫也不会重复写消息", () => {
+  const { store, task } = setup();
+  updateTask(store, task.id, { status: "running", runner_pid: process.pid, runner_started_at: Date.now() });
+  assert.deepEqual(sweepDeadRunners(store).dead, []);
+  assert.equal(getTask(store, task.id)!.runner_pid, process.pid);
+
+  updateTask(store, task.id, { runner_pid: 999999 });
+  assert.deepEqual(sweepDeadRunners(store).dead, [task.id]);
+  const before = listTaskEvents(store, task.id).length;
+  assert.deepEqual(sweepDeadRunners(store).dead, []);
+  assert.equal(listTaskEvents(store, task.id).length, before);
   store.close();
 });

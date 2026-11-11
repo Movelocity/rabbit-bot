@@ -15,7 +15,7 @@ import {
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
 import { setTaskEventNotifier } from "./core/task-events.ts";
-import { isRunnerAlive, startTask, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
+import { isRunnerAlive, startTask, sweepDeadRunners, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { realClock, type Clock } from "./core/clock.ts";
@@ -231,6 +231,7 @@ export class App {
     this.scheduler.start();
     this.startReflectionLoop();
     this.startApprovalSweep();
+    this.startRunnerWatch();
     this.recoverPendingTaskApprovals();
     this.log.info(`rabbit-bot 已启动 tick=${this.o.cfg.scheduler.tickMs}ms taskTick=${this.o.cfg.scheduler.taskTickMs}ms privateWake=${this.o.cfg.scheduler.privateWakeMs}ms debounce=${this.o.cfg.scheduler.debounceMs}ms 消息tick批=${this.o.cfg.scheduler.batchToTick ? "on" : "off"} 缓存折算=${this.o.cfg.limits.cacheReadRate} 换会话=${this.o.cfg.handoff.sessionTokenLimit}tok 日额度=${this.o.cfg.limits.dailyTokens}tok 日花费上限=¥${this.o.cfg.limits.dailyCny ?? 0} 汇率=${this.o.cfg.limits.usdCny ?? 7.1} paused=${this.store.isPaused()}`);
   }
@@ -239,6 +240,7 @@ export class App {
     this.scheduler.stop();
     if (this.reflectionTimer) { clearInterval(this.reflectionTimer as any); this.reflectionTimer = null; }
     if (this.approvalSweepTimer) { clearInterval(this.approvalSweepTimer as any); this.approvalSweepTimer = null; }
+    if (this.runnerWatchTimer) { clearInterval(this.runnerWatchTimer as any); this.runnerWatchTimer = null; }
     await this.queue.idle();
     await this.hub.stopAdapters();
     await this.engine.dispose();
@@ -347,6 +349,34 @@ export class App {
       if (n > 0) this.log.info(`审批超时 ${n} 条，已按拒绝处理`);
     } catch (e) {
       this.log.warn(`审批超时清扫失败：${(e as Error).message}`);
+    }
+  }
+
+  // ---------- 执行器进程存活巡检 ----------
+
+  private runnerWatchTimer: unknown = null;
+
+  /**
+   * 周期性批量探活：启动时先扫一遍（补上一次进程重启留下的孤儿 running 任务），
+   * 之后按 scheduler.runnerWatchMs（默认 30s）扫。
+   */
+  private startRunnerWatch(): void {
+    const every = this.o.cfg.scheduler.runnerWatchMs ?? 30_000;
+    if (!(every > 0)) return;
+    this.sweepRunners();
+    const t = setInterval(() => this.sweepRunners(), every);
+    (t as any).unref?.();
+    this.runnerWatchTimer = t;
+  }
+
+  private sweepRunners(): void {
+    try {
+      const r = sweepDeadRunners(this.store, { dataDir: this.o.cfg.dataDir });
+      if (r.dead.length) {
+        this.log.info(`执行器存活巡检：${r.dead.length}/${r.checked} 个进程已退出，任务池已收到调度器消息（${r.dead.map((id) => `#${id}`).join(" ")}）`);
+      }
+    } catch (e) {
+      this.log.warn(`执行器存活巡检失败：${(e as Error).message}`);
     }
   }
 

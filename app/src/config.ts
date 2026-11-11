@@ -32,7 +32,7 @@ export interface Config {
    * 仓库和配置里都不写死用户名，换一台 Mac 不用改。
    */
   paths?: { desktopDir?: string };
-  scheduler: { tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean };
+  scheduler: { tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number; batchToTick?: boolean; runnerWatchMs?: number };
   send: {
     confirmWaitMs: number; confirmViaApi: boolean;
     /** 分条投递的间隔（按上一条长度缩放，见 core/pacing.ts）。关掉=所有句子立刻连发 */
@@ -262,6 +262,10 @@ export function validateConfig(cfg: Config): void {
   pos(cfg.scheduler.taskTickMs, "scheduler.taskTickMs");
   pos(cfg.scheduler.privateWakeMs, "scheduler.privateWakeMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");
+  const runnerWatchMs = cfg.scheduler.runnerWatchMs;
+  if (runnerWatchMs !== undefined && !(Number.isFinite(runnerWatchMs) && runnerWatchMs >= 0)) {
+    throw new Error("config: scheduler.runnerWatchMs 必须是非负数（0 = 关闭巡检）");
+  }
   // 缓存折算汇率：0~1 之间（1 = 不打折）
   const rate = cfg.limits.cacheReadRate;
   if (typeof rate !== "number" || !(rate >= 0 && rate <= 1)) {
