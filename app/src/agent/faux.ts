@@ -60,13 +60,8 @@ function respond(context: any): any {
       return fauxAssistantMessage(calls);
     }
     const calls: any[] = [];
-    // 计划现在长这样（在「## 状态」块里）：- 到点计划：#12「一分钟后提醒」（池 p1）
-    for (const m of t.matchAll(/^- 到点计划：#(\d+)「(.+?)」.*?（池 (p\d+)）/gm)) {
-      calls.push(fauxToolCall("chat", { action: "send", pool: m[3], content: `⏰ 提醒：${m[2]}` }));
-    }
     const unread = t.split("未读消息：\n")[1] ?? "";
     const parsed = parseMessages(unread);
-    const nowStr = /现在 (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/.exec(t)?.[1];
     for (const p of parsed) {
       if (p.text.includes("/loop")) return fauxAssistantMessage(fauxToolCall("chat", { action: "view", path: "loop-not-a-real-image.png" }));
     }
@@ -74,10 +69,13 @@ function respond(context: any): any {
     for (const p of parsed) if (p.kind === "私聊" || p.mention) replyTo.set(p.pool, p);
     for (const [pool, p] of replyTo) {
       calls.push(fauxToolCall("chat", { action: "send", pool, content: `收到：${p.text}` }));
-      if (p.text.includes("/plan") && nowStr) {
-        const d = new Date(Date.parse(nowStr.replace(" ", "T") + ":00+08:00") + 60_000);
-        const when = new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 16);
-        calls.push(fauxToolCall("plan", { action: "add", title: "一分钟后提醒", when }));
+      if (p.text.includes("/plan")) {
+        calls.push(fauxToolCall("plan", {
+          action: "create",
+          title: "喝水提醒",
+          background: "他说要记得喝水、喜欢喝茶。",
+          goals: ["一分钟后提醒他喝水", "记住他喜欢喝茶"],
+        }));
       }
       if (p.text.includes("记住")) calls.push(fauxToolCall("memory", { action: "add", content: p.text }));
     }

@@ -24,7 +24,12 @@ import {
 } from "../core/approvals.ts";
 import { addMemory, closeMemory, searchMemories, traceMemory, updateMemory } from "../ops/memories.ts";
 import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
-import { addPlan, updatePlan } from "../ops/plans.ts";
+import {
+  addGoals, addProgress, archiveBoard, checkGoal, createBoard, getBoard, listBoards, updateBoard,
+  BOARD_STATUSES, type BoardStatus,
+} from "../core/board.ts";
+import { formatBoard } from "../ops/board.ts";
+import { boardDir } from "../core/runtime.ts";
 import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
 } from "../core/tasks.ts";
@@ -392,65 +397,125 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
-   * 计划：一个工具，action 分四件事（add / done / list / help）。
-   * 口头的承诺不落库等于没答应——他说「到点提醒我」、或者你答应了到点说一声，就是 add。
+   * 计划看板：一条计划一个 md，md 是唯一真相。
+   * 不排时间、不到点唤醒——这里只管目标、背景和进展。
    */
   const PLAN_HELP = [
-    "plan 的用法（action 必填）：",
-    "  add    title when? content? why?   加一条到点提醒（when 给 ISO；重复就给 cron「分 时 日 月 周」）",
-    "  done   id status?                 标完成（默认 done，作废用 status=cancelled）",
-    "  list   status?                    看计划，默认 pending",
-    "  help                              看这份说明",
+    "plan 的用法（action 必填，id 是 list/show 里的 slug）：",
+    "  create    title background? goals?      新建一条计划；goals 是目标清单（数组或换行分隔）",
+    "  list      status?                      看计划，默认 active；status=all 看全部未归档",
+    "  show      id                           看一条（背景、目标、进展）",
+    "  goal-add  id goal|goals                加目标",
+    "  goal-check id goal done?               勾选目标（goal 给序号 1、2…或文字；done=false 取消勾选）",
+    "  progress  id note                      追加一条进展",
+    "  status    id status                    active / done；archive 单独归档",
+    "  archive   id                           归档（移到 board/archive/，不再出现在默认列表）",
+    "  help                                   看这份说明",
+    "",
+    "他说「要做某件事」「先列个计划」，就 create 并把背景写清楚；中途有新进展用 progress，完成一项就 goal-check。",
+    "同一个项目/事情尽量用同一条计划，别每聊一次就新建一条。",
   ].join("\n");
+
+  const goalList = (p: any): string[] => {
+    if (Array.isArray(p.goals)) return p.goals.map((x: unknown) => String(x).trim()).filter(Boolean);
+    if (typeof p.goals === "string") return p.goals.split(/\n|;|；/).map((x: string) => x.trim()).filter(Boolean);
+    if (typeof p.goal === "string" && p.goal.trim()) return [p.goal.trim()];
+    return [];
+  };
 
   const plan = defineTool({
     name: "plan",
     label: "plan",
     executionMode: "sequential",
     description:
-      "到点提醒的计划。action 决定做什么：add（加一条）/ done（标完成或作废）/ list（看有哪些）/ help。"
-      + "他说「几点提醒我」、或者你答应了到点说一声，就 add——口头的承诺不落库等于没答应。"
-      + "他说某件事办完了，先 done 标完成，再 memory add 记一条带日期的事实。",
+      "计划看板（md 文件，不排时间、不到点唤醒）。action 决定做什么："
+      + "create（新建，必填 title，background 写清为什么/范围/约束，goals 是目标清单）/ "
+      + "list（看计划，默认 active）/ show（看一条）/ goal-add（加目标）/ "
+      + "goal-check（勾选已完成的目标，或 done=false 取消）/ progress（追加进展）/ "
+      + "status（active / done）/ archive（归档）/ help。"
+      + "他说要做某件事、先列个计划，就 create；中途有进展用 progress，完成一项就 goal-check。"
+      + "同一件事用同一条计划，别重复新建。",
     parameters: Type.Object({
-      action: Type.String({ description: "add / done / list / help" }),
-      id: Type.Optional(Type.Number({ description: "done 用：计划 id（plan action=list 里那个）" })),
-      title: Type.Optional(Type.String({ description: "add 用：提醒什么，一句话" })),
-      when: Type.Optional(Type.String({ description: "add 用：ISO 时间，或 cron「分 时 日 月 周」" })),
-      content: Type.Optional(Type.String({ description: "add 用：到点要说的话或细节" })),
-      why: Type.Optional(Type.String({ description: "add 用：为什么记这条" })),
-      status: Type.Optional(Type.String({ description: "done 用：done（默认）/ cancelled；list 用：按状态筛" })),
+      action: Type.String({ description: "create / list / show / goal-add / goal-check / progress / status / archive / help" }),
+      id: Type.Optional(Type.String({ description: "show、goal-add、goal-check、progress、status、archive 用：计划的 slug" })),
+      title: Type.Optional(Type.String({ description: "create 用：计划标题，一句话" })),
+      background: Type.Optional(Type.String({ description: "create 用：背景——为什么做、范围、约束、相关链接" })),
+      goals: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "create / goal-add 用：目标清单" })),
+      goal: Type.Optional(Type.String({ description: "goal-add / goal-check 用：单条目标；goal-check 也可给序号" })),
+      done: Type.Optional(Type.Boolean({ description: "goal-check 用：true 勾选（默认）/ false 取消" })),
+      note: Type.Optional(Type.String({ description: "progress 用：这次进展" })),
+      status: Type.Optional(Type.String({ description: "status / list 用：active / done / archived / all" })),
     }),
     async execute(_id, p) {
       const action = String(p.action ?? "").trim().toLowerCase();
+      const dir = boardDir(d.cfg);
       try {
         switch (action) {
           case "help":
             return txt(PLAN_HELP, { ok: true });
-          case "add": {
-            if (!p.title) return txt("add 要 title（提醒什么）。", { ok: false });
-            const isCron = !!p.when && p.when.trim().split(/\s+/).length >= 5;
-            // 同一条没停之前别再排一遍：重复的计划会在同一分钟唤醒她两次，
-            // 而她看到的只是「计划到点了」，不会知道是自己排了两遍。
-            const dup = d.store.listPlans("pending").find((x: any) =>
-              String(x.title).trim() === p.title!.trim() && String(x.schedule ?? "") === String(p.when ?? ""));
-            if (dup) {
-              return txt(`已经有一条一样的了（#${dup.id} ${dup.title}，${dup.schedule_kind === "cron" ? `cron ${dup.schedule}` : dup.schedule}），没重复加。要改就先把那条 done 掉。`, { ok: true, plan: dup, duplicate: true });
+          case "create": {
+            if (!p.title?.trim()) return txt("create 要 title（计划标题）。", { ok: false });
+            const existing = listBoards(dir).find((b) => b.title.trim() === p.title!.trim());
+            if (existing) {
+              return txt(`已经有一条同名计划「${existing.title}」（${existing.slug}），先更新那条，别重复建。`, { ok: true, id: existing.slug, duplicate: true });
             }
-            const r = addPlan(d.store, d.cfg.timezone, {
-              title: p.title, content: p.content, why: p.why, pool: poolOf(),
-              kind: isCron ? "cron" : "once", when: p.when,
+            const b = createBoard(dir, {
+              title: p.title,
+              background: p.background,
+              goals: goalList(p),
+              pool: d.primaryPool?.() ?? null,
             }, d.now());
-            return txt(`记下了，到点会提醒（#${(r as any).id ?? "?"}）。`, { ok: true, plan: r });
-          }
-          case "done": {
-            if (p.id === undefined) return txt("done 要 id。", { ok: false });
-            const r = updatePlan(d.store, p.id, p.status ?? "done");
-            return txt(`#${p.id} 标成 ${p.status ?? "done"} 了。`, { ok: true, plan: r });
+            return txt(`建好了「${b.title}」（id=${b.slug}），目标 ${b.goals.length} 条。`, { ok: true, plan: formatBoard(b) });
           }
           case "list": {
-            const list = d.store.listPlans((p.status as any) ?? "pending");
-            if (!list.length) return txt(`没有 ${p.status ?? "pending"} 的计划。`, { ok: true, count: 0 });
-            return txt(list.map((x: any) => `#${x.id} ${x.title}${x.status ? `（${x.status}）` : ""}`).join("\n"), { ok: true, count: list.length });
+            const want = String(p.status ?? "active").trim().toLowerCase();
+            const status = want === "all" ? "all" : (BOARD_STATUSES.includes(want as BoardStatus) ? want as BoardStatus : "active");
+            const list = listBoards(dir, status);
+            if (!list.length) return txt(`没有 ${status === "all" ? "" : `${status} `}计划。`, { ok: true, count: 0 });
+            const text = list.map((b) => {
+              const done = b.goals.filter((g) => g.done).length;
+              return `${b.slug}  ${b.title}（${b.status}，目标 ${done}/${b.goals.length}，进展 ${b.progress.length}）`;
+            }).join("\n");
+            return txt(text, { ok: true, count: list.length, plans: list.map(formatBoard) });
+          }
+          case "show": {
+            if (!p.id?.trim()) return txt("show 要 id。", { ok: false });
+            const b = getBoard(dir, p.id.trim());
+            if (!b) return txt(`没有计划 ${p.id}。`, { ok: false });
+            return txt(JSON.stringify(formatBoard(b), null, 2), { ok: true, plan: formatBoard(b) });
+          }
+          case "goal-add": {
+            if (!p.id?.trim()) return txt("goal-add 要 id。", { ok: false });
+            const goals = goalList(p);
+            if (!goals.length) return txt("goal-add 要 goal 或 goals。", { ok: false });
+            const b = addGoals(dir, p.id.trim(), goals, d.now());
+            return txt(`加好了，现在 ${b.goals.length} 条目标（${b.goals.filter((g) => g.done).length} 条已完成）。`, { ok: true, plan: formatBoard(b) });
+          }
+          case "goal-check": {
+            if (!p.id?.trim()) return txt("goal-check 要 id。", { ok: false });
+            if (p.goal === undefined || !String(p.goal).trim()) return txt("goal-check 要 goal（序号或文字）。", { ok: false });
+            const b = checkGoal(dir, p.id.trim(), String(p.goal).trim(), p.done !== false, d.now());
+            return txt(`已${p.done === false ? "取消勾选" : "勾选"}。目标 ${b.goals.filter((g) => g.done).length}/${b.goals.length} 完成。`, { ok: true, plan: formatBoard(b) });
+          }
+          case "progress": {
+            if (!p.id?.trim()) return txt("progress 要 id。", { ok: false });
+            if (!p.note?.trim()) return txt("progress 要 note（这次进展）。", { ok: false });
+            const b = addProgress(dir, p.id.trim(), p.note, d.now());
+            return txt(`进展记下了（共 ${b.progress.length} 条）。`, { ok: true, plan: formatBoard(b) });
+          }
+          case "status": {
+            if (!p.id?.trim()) return txt("status 要 id。", { ok: false });
+            const want = String(p.status ?? "").trim().toLowerCase();
+            if (!BOARD_STATUSES.includes(want as BoardStatus) || want === "archived") {
+              return txt(`status 只能是 active / done；要归档用 action=archive。`, { ok: false });
+            }
+            const b = updateBoard(dir, p.id.trim(), { status: want as BoardStatus }, d.now());
+            return txt(`「${b.title}」标成 ${b.status} 了。`, { ok: true, plan: formatBoard(b) });
+          }
+          case "archive": {
+            if (!p.id?.trim()) return txt("archive 要 id。", { ok: false });
+            const b = archiveBoard(dir, p.id.trim(), d.now());
+            return txt(`已归档「${b.title}」。`, { ok: true, plan: formatBoard(b) });
           }
           default:
             return txt(`没有 action=「${p.action}」这个动作。\n${PLAN_HELP}`, { ok: false });

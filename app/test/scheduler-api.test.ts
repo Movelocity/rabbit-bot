@@ -178,7 +178,6 @@ test("POST /v1/tasks/:id/status：blocked 写任务事件但不立即 enqueue，
     queue: { enqueue: (w) => { wakes.push(w); return "queued" as const; } },
     isPaused: () => false,
     poolsWithUnread: () => store.poolsWithUnread(),
-    duePlans: () => [],
     poolKind: (id) => store.getPool(id)?.kind,
   });
   scheduler.start();

@@ -158,7 +158,7 @@ prompts/         默认提示词模板（真身在运行时目录）
 |---|---|
 | `chat` | `send` 发消息（唯一对外出口）/ `skip` 这轮不回 / `view` 读图进上下文 / `list` 有哪些池 / `search` 翻原话 |
 | `memory` | `recent` / `search` / `add` / `expire`（不再成立，关掉）/ `update`（就地订正）/ `help` |
-| `plan` | `add` / `done` / `list` / `help` |
+| `plan` | 计划看板（md）：`create` / `list` / `show` / `goal-add` / `goal-check` / `progress` / `status` / `archive` / `help` |
 | `approval` | 查看和裁决 worker 的权限申请：`list` / `get` / `decide`（approved / rejected）/ `help` |
 | `task` | 任务面板：`create`（建任务，pending_approval 等审批）/ `list` / `get` / `updates` / `resume` / `note` / `cancel` / `status` / `help` |
 | `worker` | `list` 看已注册的 worker（id / 名字 / kind / 状态 / 最近心跳）/ `help` |

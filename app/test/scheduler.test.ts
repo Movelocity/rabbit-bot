@@ -12,10 +12,10 @@ function setup(
 ) {
   const clock = new FakeClock();
   const wakes: Wake[] = [];
-  const state = { paused: false, unread: [] as string[], plans: [] as Wake["planFires"] };
+  const state = { paused: false, unread: [] as string[] };
   const s = new Scheduler({ ...cfg, ...over }, {
     clock, queue: { enqueue: (w: Wake) => { wakes.push(w); return "queued" as const; } },
-    isPaused: () => state.paused, poolsWithUnread: () => state.unread, duePlans: () => { const p = state.plans; state.plans = []; return p; },
+    isPaused: () => state.paused, poolsWithUnread: () => state.unread,
     poolKind: extra.poolKind,
   });
   return { clock, wakes, state, s };
@@ -92,17 +92,14 @@ test("tick 跳过正在去抖的池", () => {
   assert.deepEqual([...wakes[0].pools], ["g2"]);
 });
 
-test("计划到点走队列；暂停时不唤醒", () => {
+test("暂停时不唤醒", () => {
   const { s, wakes, state, clock } = setup();
-  state.plans = [{ planId: 7, fireTs: 1 }];
-  s.tick();
-  assert.equal(wakes[0].type, "plan");
   state.paused = true;
   state.unread = ["p1"];
   assert.equal(s.tick(), false);
   s.onMessage("p1", true, "x");
   clock.advance(60_000);
-  assert.equal(wakes.length, 1);
+  assert.equal(wakes.length, 0);
 });
 
 test("batchToTick：消息不单独唤醒，只把 tick 提前（等 tick 一次读走）", () => {

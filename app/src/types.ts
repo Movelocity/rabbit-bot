@@ -86,4 +86,33 @@ export interface Plan {
 
 export type AnchorKind = "L0" | "L1" | "L2";
 
+/** 计划看板（md 文件）：一条计划一张卡，最新实现，和旧 plans 表无关。 */
+export type BoardStatus = "active" | "done" | "archived";
+export interface BoardGoal {
+  text: string;
+  done: boolean;
+}
+export interface BoardProgress {
+  at: number | null;
+  at_local: string | null;
+  text: string;
+}
+export interface Board {
+  slug: string;
+  title: string;
+  status: BoardStatus;
+  pool: string | null;
+  tags: string[];
+  background: string;
+  goals: BoardGoal[];
+  goals_total: number;
+  goals_done: number;
+  progress: BoardProgress[];
+  created_at: number | null;
+  created_at_local: string | null;
+  updated_at: number | null;
+  updated_at_local: string | null;
+  path: string;
+}
+
 export type MemoryScope = "pool" | "private" | "group" | "all";

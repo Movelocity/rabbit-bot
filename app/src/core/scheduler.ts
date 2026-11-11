@@ -18,8 +18,6 @@ export interface SchedulerDeps {
   isPaused: () => boolean;
   /** 有未读的池（tick 用） */
   poolsWithUnread: () => string[];
-  /** 当前到期的计划触发（tick 用），由 PlanEngine 提供 */
-  duePlans: (now: number) => Wake["planFires"];
   /** 水位退潮到档的池（tick 用）：没有未读也可能因为这些池唤醒 agent 自己找话题 */
   proactivePools?: (now: number) => NonNullable<Wake["proactive"]>;
   /** 池的类型；不提供时一律按 group 处理（老测试/只读进程兼容） */
@@ -180,11 +178,6 @@ export class Scheduler {
     if (this.d.isPaused()) return false;
     const now = this.d.clock.now();
     let enqueued = false;
-    const fires = this.d.duePlans(now);
-    if (fires.length) {
-      this.d.queue.enqueue(makeWake("plan", [], `计划到点 #${fires.map((f) => f.planId).join(",#")}`, fires, now));
-      enqueued = true;
-    }
     // 自省 + 门控都过了：即使没有未读也要给 agent 一次「要不要自己开口」的机会
     const pro = this.d.proactivePools?.(now) ?? [];
     if (pro.length) {

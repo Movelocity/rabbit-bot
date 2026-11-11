@@ -16,6 +16,8 @@ import { App } from "./app.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { createFauxModel } from "./agent/faux.ts";
 import { Logger } from "./core/logger.ts";
+import { listBoards } from "./core/board.ts";
+import { boardDir } from "./core/runtime.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const demo = process.argv.includes("--demo");
@@ -66,14 +68,11 @@ async function main() {
     say("@", "grp-1", "帮我看下这个 [普通方括号] [emoji:666]", "carol");
     await sleep(3000); await app.queue.idle();
 
-    console.log("\n=== 3. 写计划（LLM 工具 plan action=add）+ 程序侧计划到点唤醒 ===");
+    console.log("\n=== 3. 写计划看板（LLM 工具 plan action=create，落到 board/*.md）===");
     say("p", "dm-alice", "/plan 一分钟后提醒我喝水，记住我喜欢喝茶");
     await sleep(3000); await app.queue.idle();
-    const pool = app.store.resolvePool("p1")!;
-    const when = new Date(Date.now() + 2000).toISOString();
-    const pl = app.store.insertPlan({ title: "喝水时间到", content: "", pool_id: pool.pool_id, schedule_kind: "once", schedule: when, expires_at: null });
-    console.log(`  (程序插入一次性计划#${pl.id}，2 秒后到点；tick 时命中)`);
-    await sleep(7000); await app.queue.idle();
+    const boards = listBoards(boardDir(cfg), "all");
+    console.log(`  (看板：${boards.map((b) => `${b.slug} ${b.title} 目标 ${b.goals.filter((g) => g.done).length}/${b.goals.length}`).join("；") || "-"})`);
 
     console.log("\n=== 4. 防死循环：桩模型用相同参数反复调用 read_pool ===");
     say("p", "dm-alice", "/loop");
@@ -89,7 +88,7 @@ async function main() {
 
     const hs = app.store.listHandoffs();
     console.log(`\n=== 汇总 ===\n交接文档存档 ${hs.length} 份：${hs.map((h: any) => h.file).join(", ") || "-"}`);
-    console.log(`计划：${JSON.stringify(app.store.listPlans().map((p) => ({ id: p.id, title: p.title, status: p.status })))}`);
+    console.log(`看板：${JSON.stringify(listBoards(boardDir(cfg), "all").map((b) => ({ id: b.slug, title: b.title, status: b.status })))}`);
     console.log(`用量：${JSON.stringify(app.store.getUsage(new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(new Date())))}`);
     console.log(`唤醒日志：${path.join(cfg.logDir, "wakes.jsonl")}`);
     await app.stop();

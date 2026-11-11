@@ -15,7 +15,11 @@ import { APP_ROOT, type Config } from "./config.ts";
 import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { archivePool, listPools, readPool, searchPool } from "./ops/pools.ts";
-import { addPlan, listPlans, updatePlan } from "./ops/plans.ts";
+import {
+  addGoals, addProgress, archiveBoard, checkGoal, createBoard, getBoard, listBoards, updateBoard,
+  BOARD_STATUSES, type BoardStatus,
+} from "./core/board.ts";
+import { formatBoard } from "./ops/board.ts";
 import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, updateTask, type Task } from "./core/tasks.ts";
 import {
   WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
@@ -36,7 +40,7 @@ import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.
 import { listSkills } from "./ops/skills.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
-import { businessDir, sharedDir } from "./core/runtime.ts";
+import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
@@ -273,17 +277,51 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           throw new HttpError(404, "用法：GET /v1/users、PATCH /v1/users/:user_id {alias}");
         }
         case "plans": {
-          if (parts.length === 2 && method === "GET") return reply(200, listPlans(d.store, url.searchParams.get("status") ?? "pending"));
+          const dir = boardDir(d.cfg);
+          if (parts.length === 2 && method === "GET") {
+            const want = String(url.searchParams.get("status") ?? "all").trim().toLowerCase();
+            const status = want === "all" ? "all" : (BOARD_STATUSES.includes(want as BoardStatus) ? want as BoardStatus : "all");
+            return reply(200, listBoards(dir, status).map(formatBoard));
+          }
           if (parts.length === 2 && method === "POST") {
-            return reply(201, addPlan(d.store, d.cfg.timezone, {
-              title: body.title, content: body.content, kind: body.kind, when: body.when,
-              pool: body.pool, anchor: body.anchor, why: body.why, expires: body.expires,
-            }, typeof body.now === "number" ? body.now : undefined));
+            const b = createBoard(dir, {
+              title: body.title,
+              background: body.background,
+              goals: Array.isArray(body.goals) ? body.goals : undefined,
+              pool: typeof body.pool === "string" ? body.pool : null,
+              tags: Array.isArray(body.tags) ? body.tags : undefined,
+            }, Date.now());
+            return reply(201, formatBoard(b));
+          }
+          if (parts.length === 3 && method === "GET") {
+            const b = getBoard(dir, decodeURIComponent(parts[2]));
+            if (!b) throw new HttpError(404, `没有计划 ${parts[2]}`);
+            return reply(200, formatBoard(b));
           }
           if (parts.length === 3 && method === "PATCH") {
-            return reply(200, updatePlan(d.store, Number(parts[2]), String(body.status ?? "")));
+            const slug = decodeURIComponent(parts[2]);
+            const want = body.status === undefined ? undefined : String(body.status).trim().toLowerCase();
+            if (want !== undefined && !BOARD_STATUSES.includes(want as BoardStatus)) {
+              throw new HttpError(400, `status 只能是 ${BOARD_STATUSES.join(" / ")}`);
+            }
+            if (want === "archived") return reply(200, formatBoard(archiveBoard(dir, slug)));
+            let b = getBoard(dir, slug);
+            if (!b) throw new HttpError(404, `没有计划 ${slug}`);
+            if (body.background !== undefined || want !== undefined || Array.isArray(body.tags)) {
+              b = updateBoard(dir, slug, { background: body.background, status: want as BoardStatus | undefined, tags: Array.isArray(body.tags) ? body.tags : undefined });
+            }
+            if (Array.isArray(body.goal_add)) b = addGoals(dir, slug, body.goal_add.map((x: unknown) => String(x)));
+            if (body.goal_check && typeof body.goal_check === "object") {
+              const g = body.goal_check as { goal?: string | number; done?: boolean };
+              b = checkGoal(dir, slug, g.goal ?? "", g.done !== false);
+            }
+            if (typeof body.progress === "string" && body.progress.trim()) b = addProgress(dir, slug, body.progress);
+            return reply(200, formatBoard(b));
           }
-          throw new HttpError(404, "用法：GET /v1/plans、POST /v1/plans、PATCH /v1/plans/:id");
+          if (parts.length === 3 && method === "DELETE") {
+            return reply(200, formatBoard(archiveBoard(dir, decodeURIComponent(parts[2]))));
+          }
+          throw new HttpError(404, "用法：GET/POST /v1/plans、GET/PATCH/DELETE /v1/plans/:id");
         }
         case "tasks": {
           if (parts.length === 2 && method === "GET") {

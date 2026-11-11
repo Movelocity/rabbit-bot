@@ -2,7 +2,7 @@
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
-import type { Plan, Pool, StoredMessage, Wake } from "../types.ts";
+import type { Pool, StoredMessage, Wake } from "../types.ts";
 import { localDay } from "../core/tide.ts";
 import { isOwnerId } from "../core/owners.ts";
 import { loadPersona, personaPath } from "./persona.ts";
@@ -55,7 +55,6 @@ export interface WakePromptInput {
   unread: StoredMessage[];
   /** 首次在本会话出现的池：附近期上下文 */
   context: Map<string, StoredMessage[]>;
-  plans: Plan[];
   handoff?: string | null;
   /** 可聊的谈资（只在主动 tick 时给，有人说话时不需要） */
   topics?: { id: number; kind: string; content: string; source?: string }[];
@@ -89,7 +88,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   const last = store.lastTideFired(primaryPool);
   const day = localDay(x.now, "Asia/Shanghai");
   const firedL2 = store.countTideFired(day, primaryPool, "L2");
-  const plan0 = x.plans[0];
 
   // 状态不写成模板片段，直接拼成几行数据：文案（怎么读这些数）在 scene-*.md 里
   const state: string[] = ["## 状态"];
@@ -102,14 +100,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你，是你自己想说话。确实没话说就 chat（action=skip），别硬找）`);
   }
   if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来又什么都没说，这次别再挑`);
-  if (plan0) {
-    state.push(
-      `- 到点计划：#${plan0.id}「${plan0.title}」${plan0.content ? `：${plan0.content}` : ""}${
-        plan0.pool_id ? `（池 ${store.poolAlias(plan0.pool_id)}）` : ""
-      }`,
-    );
-    state.push(`  当初排它的理由：${plan0.why || "（当时没写——想清楚这次为什么要说，说不出来就作废）"}`);
-  }
 
   return render("wake", {
     handoff_block: x.handoff ? `【上一会话的交接文档】\n${x.handoff}\n【交接文档结束】\n\n` : "",

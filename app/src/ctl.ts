@@ -5,6 +5,8 @@ import path from "node:path";
 import { loadConfig } from "./config.ts";
 import { Store } from "./core/db.ts";
 import { dayKey, fmtLocal } from "./core/time.ts";
+import { listBoards } from "./core/board.ts";
+import { boardDir } from "./core/runtime.ts";
 
 async function main() {
   const [cmd = "status", ...args] = process.argv.slice(2);
@@ -34,7 +36,7 @@ async function main() {
     }
     case "status": {
       const day = dayKey(Date.now());
-      out({ paused: store.isPaused(), today: day, usage: store.getUsage(day), limits: cfg.limits, pools: store.listPools().length, unreadPools: store.poolsWithUnread(), pendingPlans: store.listPlans("pending").length, handoffs: store.listHandoffs().length });
+      out({ paused: store.isPaused(), today: day, usage: store.getUsage(day), limits: cfg.limits, pools: store.listPools().length, unreadPools: store.poolsWithUnread(), activePlans: listBoards(boardDir(cfg), "active").length, handoffs: store.listHandoffs().length });
       break;
     }
     case "usage": {
@@ -64,7 +66,7 @@ async function main() {
       out(`已${cmd === "archive" ? "归档" : "解档"} ${ref}${cmd === "archive" ? "（历史仍可用 pools archived 查看）" : ""}`);
       break;
     }
-    case "plans": out(store.listPlans()); break;
+    case "plans": out(listBoards(boardDir(cfg), args[0] === "all" ? "all" : "active").map((b) => ({ id: b.slug, title: b.title, status: b.status, goals: `${b.goals.filter((g) => g.done).length}/${b.goals.length}`, progress: b.progress.length }))); break;
     case "handoffs": out(store.listHandoffs()); break;
     case "identities": out(store.listIdentities()); break;
     case "link": {

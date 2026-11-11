@@ -25,12 +25,4 @@ export function didSkip(c: ToolCallShape): boolean {
   return isChatCall(c, "skip") && !c.isError;
 }
 
-/** 她这一轮给自己排了下次计划 */
-export function didPlanAdd(c: ToolCallShape): boolean {
-  return c.name === "plan" && toolAction(c) === "add" && !c.isError;
-}
 
-/** 她把一件事标完成了 */
-export function didPlanDone(c: ToolCallShape): boolean {
-  return c.name === "plan" && toolAction(c) === "done" && !c.isError;
-}

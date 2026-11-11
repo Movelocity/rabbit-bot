@@ -107,16 +107,33 @@ export interface Approval {
   decided_at_local: string | null;
 }
 
-export interface Plan {
-  id: number;
+export interface BoardGoal {
+  text: string;
+  done: boolean;
+}
+
+export interface BoardProgress {
+  at: number | null;
+  at_local: string | null;
+  text: string;
+}
+
+export interface Board {
+  slug: string;
   title: string;
   status: string;
-  kind: string;
-  schedule: string | null;
-  anchor: string | null;
   pool: string | null;
-  next_fire_local: string | null;
-  why: string | null;
+  tags: string[];
+  background: string;
+  goals: BoardGoal[];
+  goals_total: number;
+  goals_done: number;
+  progress: BoardProgress[];
+  created_at: number | null;
+  created_at_local: string | null;
+  updated_at: number | null;
+  updated_at_local: string | null;
+  path: string;
 }
 
 export type MemoryScope = "pool" | "private" | "group" | "all";

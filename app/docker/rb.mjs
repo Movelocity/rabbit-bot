@@ -115,9 +115,11 @@ const HELP = `用法：rb <命令> [参数…]
   pool-search <关键词> --pool <池> [--limit 20] [--only-other|--only-self]
   pool-archive <池>                     # 归档：默认列表/唤醒里消失，历史仍可读
   pool-unarchive <池>
-  plan-list [--status pending|done|cancelled]
-  plan-add --title T [--kind once|cron|none] [--when V] [--pool P] [--anchor L0|L1|L2] [--why W] [--expires ISO]
-  plan-update <id> --status pending|done|cancelled
+  plan-list [--status all|active|done]
+  plan-add --title T [--background B] [--goal G] [--goals "A,B"] [--pool P]
+  plan-update <id> [--status active|done] [--progress NOTE]
+  plan-check <id> <目标序号或文字> [--undone]
+  plan-archive <id>
   mem-add --user U --content C --pool P [--kind fact|plan|alias] [--scope pool|private|group|all]
           [--from ISO] [--until ISO] [--supersede <旧记忆id>]
   mem-search --user U --pool P [--limit 20] [--at ISO] [--all]
@@ -159,25 +161,29 @@ async function main() {
       return api("POST", `/v1/pools/${encodeURIComponent(ref)}/archive`, { body: { archived: cmd === "pool-archive" } });
     }
     case "plan-list":
-      return api("GET", "/v1/plans", { query: { status: str(flags, "status") ?? "pending" } });
-    case "plan-add":
+      return api("GET", "/v1/plans", { query: { status: str(flags, "status") ?? "all" } });
+    case "plan-add": {
+      const raw = [str(flags, "goal"), str(flags, "goals")].filter(Boolean).join(",");
+      const goals = raw.split(/[,，\n]/).map((x) => x.trim()).filter(Boolean);
       return api("POST", "/v1/plans", {
         body: {
           title: str(flags, "title"),
-          content: str(flags, "content"),
-          kind: str(flags, "kind") ?? "none",
-          when: str(flags, "when"),
+          background: str(flags, "background"),
+          goals,
           pool: str(flags, "pool"),
-          anchor: str(flags, "anchor"),
-          why: str(flags, "why"),
-          expires: str(flags, "expires"),
-          now: NOW,
         },
       });
+    }
     case "plan-update":
       return api("PATCH", `/v1/plans/${encodeURIComponent(pos[1] ?? str(flags, "id") ?? "")}`, {
-        body: { status: str(flags, "status") },
+        body: { status: str(flags, "status"), progress: str(flags, "progress") },
       });
+    case "plan-check":
+      return api("PATCH", `/v1/plans/${encodeURIComponent(pos[1] ?? str(flags, "id") ?? "")}`, {
+        body: { goal_check: { goal: pos[2] ?? str(flags, "goal") ?? "", done: !flags["undone"] } },
+      });
+    case "plan-archive":
+      return api("DELETE", `/v1/plans/${encodeURIComponent(pos[1] ?? str(flags, "id") ?? "")}`);
     case "mem-add":
       return api("POST", "/v1/memories", {
         body: {

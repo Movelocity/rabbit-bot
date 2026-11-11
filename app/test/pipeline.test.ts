@@ -11,7 +11,6 @@ import { MockAdapter } from "../src/adapters/mock.ts";
 import { createFauxModel } from "../src/agent/faux.ts";
 import { FakeClock } from "../src/core/clock.ts";
 import { Logger } from "../src/core/logger.ts";
-import { addPlan } from "../src/ops/plans.ts";
 import { addMemory } from "../src/ops/memories.ts";
 import { createTask, markPendingTick, updateTask } from "../src/core/tasks.ts";
 import { appendTaskEvent } from "../src/core/task-events.ts";
@@ -35,7 +34,7 @@ async function setup(over: any = {}) {
   }
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
-  // rb 工具在线上走容器里的客户端；这里注入进程内实现（plan-add / mem-add），
+  // rb 工具在线上走容器里的客户端；这里注入进程内实现（mem-add），
   // 只测调度和 agent 流程，HTTP 传输由 test/rb-client.test.ts 单独锁。
   let appRef: App | undefined;
   const rbExec = async (argv: string[]): Promise<{ ok: boolean; code: number; output: string }> => {
@@ -49,13 +48,6 @@ async function setup(over: any = {}) {
       if (v !== undefined && !v.startsWith("--")) { flags[k] = v; i++; } else flags[k] = "";
     }
     try {
-      if (pos[0] === "plan-add") {
-        const data = addPlan(appRef!.store, cfg.timezone, {
-          title: flags.title, content: flags.content, kind: flags.kind as any, when: flags.when,
-          pool: flags.pool, anchor: (flags.anchor as any) ?? null, why: flags.why ?? null, expires: flags.expires,
-        }, clock.now());
-        return { ok: true, code: 0, output: JSON.stringify({ ok: true, data }) };
-      }
       if (pos[0] === "mem-add") {
         const data = addMemory(appRef!.store, { user: flags.user, content: flags.content, pool: flags.pool, kind: flags.kind, scope: flags.scope as any, from: flags.from, until: flags.until, supersede: flags.supersede });
         return { ok: true, code: 0, output: JSON.stringify({ ok: true, data }) };
@@ -183,34 +175,6 @@ test("暂停开关：暂停时不唤醒，恢复后 tick 处理积压", async ()
   await t.settle(180_000);
   assert.equal(t.wakes.length, 1);
   assert.deepEqual(t.mock.sent.map((s) => s.content), ["收到：暂停中"]);
-  await t.done();
-});
-
-test("计划：Agent 用 plan 工具写计划 → 到点 tick 命中 → 走队列唤醒并提醒", async () => {
-  // 这条测的是「计划链路」，不是时机
-  const t = await setup();
-  t.dm("/plan 提醒我");
-  await t.settle(30_000);
-  const plans = t.app.store.listPlans();
-  assert.equal(plans.length, 1);
-  assert.equal(plans[0].schedule_kind, "once");
-  await t.settle(120_000);
-  const pw = t.wakes.find((w) => w.type === "plan");
-  assert.ok(pw, "应有计划唤醒");
-  assert.ok(t.mock.sent.some((s) => s.content.startsWith("⏰ 提醒")));
-  assert.equal(t.app.store.getPlan(plans[0].id)!.status, "done");
-  await t.done();
-});
-
-test("L2 计划到点就弹：提醒是她答应的，不再被聊天时机挡下", async () => {
-  // 旧的「水位」会把刚聊完的 L2 计划拦下来，理由是「刚说过话别再打扰」。
-  // 但计划是用户自己要的提醒，到点不弹才是 bug。时间敏感的计划不该排在时机后面。
-  const t = await setup();
-  t.dm("/plan 提醒我");
-  await t.settle(30_000);
-  await t.settle(120_000);
-  assert.equal(t.wakes.some((w) => w.type === "plan"), true, "计划到点就该弹");
-  assert.ok(t.mock.sent.some((s) => s.content.startsWith("⏰ 提醒")));
   await t.done();
 });
 

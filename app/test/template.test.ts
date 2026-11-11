@@ -14,7 +14,7 @@ const REAL_DIR = templateDir();
 
 test("真实模板都在：主提示词 + 三份场景 + 三个附件", () => {
   const names = listTemplates();
-  for (const n of ["system", "wake", "scene-message", "scene-tick", "scene-plan", "handoff", "part-topics"]) {
+  for (const n of ["system", "wake", "scene-message", "scene-tick", "handoff", "part-topics"]) {
     assert.ok(names.includes(n), `缺模板 ${n}.md（现有：${names.join(", ")}）`);
   }
   // 已删的四份（part-tide / part-proactive / part-plan-why / part-plan-nowhy）不该再回来：

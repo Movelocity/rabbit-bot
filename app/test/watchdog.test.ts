@@ -13,11 +13,14 @@ function setup(over: Record<string, unknown> = {}) {
   const clock = new FakeClock();
   const wakes: Wake[] = [];
   const logs: string[] = [];
-  const state = { unread: [] as string[], planThrows: 0 };
+  const state = { unread: [] as string[], unreadThrows: 0 };
   const s = new Scheduler({ ...base, watchdogMs: 5_000, overdueGraceMs: 2_000, ...over } as any, {
     clock, queue: { enqueue: (w: Wake) => { wakes.push(w); return "queued" as const; } },
-    isPaused: () => false, poolsWithUnread: () => state.unread,
-    duePlans: () => { if (state.planThrows > 0) { state.planThrows--; throw new Error("db busy"); } return []; },
+    isPaused: () => false,
+    poolsWithUnread: () => {
+      if (state.unreadThrows > 0) { state.unreadThrows--; throw new Error("db busy"); }
+      return state.unread;
+    },
     log: (m) => logs.push(m), warn: (m) => logs.push("WARN " + m),
   });
   s.start();
@@ -55,7 +58,7 @@ test("VM 冻结：逾期的 tick 也补触发，且之后 tick 链继续", () =>
 test("tick 抛错不会让 tick 链断掉", () => {
   const { clock, wakes, state } = setup({ watchdogMs: 0 });
   state.unread = ["g1"];
-  state.planThrows = 1;
+  state.unreadThrows = 1;
   clock.advance(180_000); // 第一次 tick 抛错
   assert.equal(wakes.length, 0);
   clock.advance(180_000);

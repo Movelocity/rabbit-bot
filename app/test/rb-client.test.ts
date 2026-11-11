@@ -22,6 +22,7 @@ fs.mkdirSync(sandbox, { recursive: true });
 const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
+  runtimeDir: path.join(dir, "runtime"),
   exec: { dir: sandbox },
   api: { enabled: true, port: 0, host: "127.0.0.1" },
 });
@@ -72,16 +73,19 @@ test("pool-search：命中，关键词太短退出码 1", async () => {
   assert.match(bad.body.error, /至少两个字/);
 });
 
-test("plan-add → plan-list → plan-update", async () => {
-  const add = await rb("plan-add", "--title", "问他结果", "--kind", "once", "--when", "2027-01-01T10:00", "--pool", "p1");
+test("plan-add → plan-list → plan-check → plan-archive", async () => {
+  const add = await rb("plan-add", "--title", "问他结果", "--background", "他周三出结果", "--goals", "问他,记结果");
   assert.equal(add.code, 0, JSON.stringify(add.body));
-  const id = add.body.data.id;
+  const slug = add.body.data.slug;
 
-  const list = await rb("plan-list");
-  assert.ok(list.body.data.some((p: any) => p.id === id));
+  const list = await rb("plan-list", "--status", "all");
+  assert.ok(list.body.data.some((p: any) => p.slug === slug));
 
-  const done = await rb("plan-update", String(id), "--status", "done");
-  assert.equal(done.body.data.status, "done");
+  const check = await rb("plan-check", slug, "1");
+  assert.equal(check.body.data.goals[0].done, true);
+
+  const archived = await rb("plan-archive", slug);
+  assert.equal(archived.body.data.status, "archived");
 });
 
 test("mem-add → mem-search", async () => {

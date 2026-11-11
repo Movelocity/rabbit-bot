@@ -1,6 +1,4 @@
 /** 记忆与计划：二级入口工具（memory / plan），以及 rb 只留运维。 */
-/** 一次性计划的时间必须是将来：写死日期，跑到那天之后测试就会红 */
-const hourLater = () => new Date(Date.now() + 3600_000).toISOString();
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,11 +8,12 @@ import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { searchMemories } from "../src/ops/memories.ts";
-import { addPlan } from "../src/ops/plans.ts";
 import { createApproval, getApproval } from "../src/core/approvals.ts";
+import { getBoard, listBoards } from "../src/core/board.ts";
+import { boardDir } from "../src/core/runtime.ts";
 
 function setup(opts: { withUser?: boolean } = {}) {
-  const cfg = loadConfig();
+  const cfg = loadConfig({ runtimeDir: fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-bt-")) });
   const store = new Store(":memory:");
   if (opts.withUser !== false) {
     store.insertMessage({
@@ -33,7 +32,7 @@ function setup(opts: { withUser?: boolean } = {}) {
     rbExec: async (argv: string[]) => { calls.push(argv); return { ok: true, code: 0, output: "{}" }; },
   }) as any[];
   const get = (n: string) => tools.find((t) => t.name === n)!;
-  return { store, pool, tools, get, calls };
+  return { cfg, store, pool, tools, get, calls };
 }
 
 const run = async (tool: any, params: any) => {
@@ -107,15 +106,18 @@ test("memory expire：按 id 关，不校验 user", async () => {
   assert.ok(store.getMemory(id)?.valid_to, "按 id 关掉了");
 });
 
-test("plan add / plan done：一件事从记下到标完成", async () => {
-  const { store, get } = setup();
-  const a = await run(get("plan"), { action: "add", title: "提醒他带钥匙", when: hourLater() });
+test("plan create / goal-check：计划落到 md，目标能勾", async () => {
+  const { cfg, get } = setup();
+  const a = await run(get("plan"), {
+    action: "create", title: "出门别忘带钥匙", background: "他总把钥匙落桌上", goals: ["出门前看桌上", "路上别丢"],
+  });
   assert.equal(a.details?.ok, true, JSON.stringify(a));
-  const plans = store.listPlans("pending");
-  assert.ok(plans.length >= 1, "计划要真的进库");
-  const id = plans[0].id;
-  const b = await run(get("plan"), { action: "done", id });
-  assert.equal(b.details?.ok, true);
+  const slug = a.details?.plan?.slug;
+  assert.ok(slug, "create 要返回 slug");
+  assert.equal(listBoards(boardDir(cfg), "all").length, 1, "计划要真的写成文件");
+  const b = await run(get("plan"), { action: "goal-check", id: slug, goal: "1" });
+  assert.equal(b.details?.ok, true, JSON.stringify(b));
+  assert.equal(getBoard(boardDir(cfg), slug)!.goals[0].done, true);
 });
 
 test("没有对应池时明确报错，别写到一个空池里", async () => {
@@ -261,13 +263,13 @@ test("memory：search 能按关键词翻，recent 给最近的", async () => {
   assert.equal(recent.details?.count, 2);
 });
 
-test("plan：list 给得出刚加的，help 列出四个动作", async () => {
+test("plan：list 给得出刚建的，help 列出看板动作", async () => {
   const { get } = setup();
-  await get("plan").execute("id", { action: "add", title: "提醒他开会", when: hourLater() });
+  await get("plan").execute("id", { action: "create", title: "提醒他开会", goals: ["会前十分钟提醒"] });
   const l: any = await get("plan").execute("id", { action: "list" });
   assert.match(l.content.map((c: any) => c.text ?? "").join(""), /提醒他开会/);
   const h: any = await get("plan").execute("id", { action: "help" });
-  assert.match(h.content.map((c: any) => c.text ?? "").join(""), /add[\s\S]*done[\s\S]*list/);
+  assert.match(h.content.map((c: any) => c.text ?? "").join(""), /create[\s\S]*goal-check[\s\S]*progress/);
 });
 
 test("terminal：WA 始终有，描述里说清列目录也走它", async () => {
@@ -340,15 +342,6 @@ test("chat：没搜到就说没搜到，别沉默", async () => {
 
 import { resolvePrimaryPool } from "../src/core/primary-pool.ts";
 
-test("计划唤醒：pools 是空的，也要能从 planFires 找到这条计划排给谁", async () => {
-  const { store, pool } = setup();
-  const p = addPlan(store, loadConfig().timezone, {
-    title: "提醒他喝水", pool: pool!, kind: "once", when: hourLater(),
-  }, Date.now()) as any;
-  const wake: any = { type: "plan", pools: new Set(), planFires: [{ planId: p.id, fireTs: Date.now() }], proactive: [], reasons: [], enqueuedAt: Date.now() };
-  assert.equal(resolvePrimaryPool(store, wake), pool, "排计划的时候要知道排给哪个池");
-});
-
 test("消息唤醒：多个池同时触发时，选有未读的那个", async () => {
   const { store, pool } = setup();
   store.insertMessage({
@@ -369,15 +362,6 @@ test("纯 tick：什么都没有就退回最近有消息的池，实在没有才
   const wake: any = { type: "tick", pools: new Set(), planFires: [], proactive: [], reasons: [], enqueuedAt: Date.now() };
   assert.equal(resolvePrimaryPool(store, wake), pool);
   assert.equal(resolvePrimaryPool(new Store(":memory:"), wake), null);
-});
-
-test("plan add：同一条没停之前不会排第二遍", async () => {
-  const { get } = setup();
-  const a: any = await get("plan").execute("id", { action: "add", title: "每周聊聊你自己", when: "0 21 * * 2,5" });
-  const b: any = await get("plan").execute("id", { action: "add", title: "每周聊聊你自己", when: "0 21 * * 2,5" });
-  assert.equal(a.details?.ok, true);
-  assert.equal(b.details?.duplicate, true, "第二条该被认成重复");
-  assert.match(b.content.map((c: any) => c.text ?? "").join(""), /已经有一条一样的/);
 });
 
 // ---------------------------------------------------------------- approval（UFA）

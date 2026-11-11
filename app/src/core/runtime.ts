@@ -35,7 +35,7 @@ export function ensureRuntime(cfg: Config, subs: string[] = []): string {
  * 运行时内容子目录：容器里是 /work/<name>，沙盒根默认就是运行时目录。
  * 只列「内容」目录，不列 shared/ files/ 这类运行产物。
  */
-export const RUNTIME_SUBDIRS = ["prompt", "topics"] as const;
+export const RUNTIME_SUBDIRS = ["prompt", "topics", "board"] as const;
 
 /** 沙盒根就是运行时目录时，prompt/ topics/ 已经天然在 /work 下，不用再叠加挂载。 */
 export function runtimeIsSandbox(cfg: Config): boolean {
@@ -55,6 +55,11 @@ export function filesDir(cfg: Config): string {
 /** 业务地图：对象、关系、动作、术语表；私有数据，只放运行时目录。 */
 export function businessDir(cfg: Config): string {
   return runtimePath(cfg, "business");
+}
+
+/** 计划看板：一条计划一个 md，归档在同目录 archive/ 下。 */
+export function boardDir(cfg: Config): string {
+  return runtimePath(cfg, "board");
 }
 
 /**

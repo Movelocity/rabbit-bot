@@ -33,14 +33,14 @@ mock 适配器(模拟) ──┘        │
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
 | `src/core/reflection.ts` | 自省：没人说话时让模型想一下，输出 `urgency`（有多想说）+ 念头 |
 | `src/core/gate.ts` | 主动开口的六道门：低分 / 刚聊完 / 夜间 / 冷却 / 日上限 / 连说没人回 |
-| `src/core/plans.ts` / `time.ts` | 计划校验（ISO / cron，Asia/Shanghai）、到点匹配、同点只触发一次、停机补发/跳过、过期 |
+| `src/core/board.ts` / `time.ts` | 计划看板：`runtime/board/*.md` 的解析/渲染、目标勾选、进展追加、归档（md 是唯一真相） |
 | `src/core/emoji.ts` | 表情映射表加载；出站 `[emoji:中文id]` 解析（匹配不上原样输出，普通 `[xxx]` 不处理）；入站 `[名字]` → `[emoji:中文id]` |
 | `src/core/loopguard.ts` | 防死循环：接入 pi-death-loop-guard；同语义内置实现（回退/测试用） |
 | `src/core/tool-call.ts` | 工具调用的判定（`didSend` / `didSkip` / `didPlanAdd` / `didPlanDone`）：二级入口看名字不够，还要看 action |
 | `src/core/approval.ts` / `task-approval.ts` | 宿主机命令审批 / 任务发布审批：审批提示走系统消息、超时按拒绝；只有被闸门认领的裁决动作不进池，同一聊天里的正常文字照常入池（审批房可能就是私聊） |
 | `src/ops/business-map.ts` | 业务地图：加载/校验 `runtime/business` 的对象、关系、动作、术语，供 `map` 工具、任务文档和管理台只读展示 |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
-| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（add/done/list）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
+| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（md 看板：create/list/goal-check/progress/archive）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
 | `src/agent/faux.ts` | 桩 LLM（pi 自带 faux provider + 确定性脚本），用于模拟器/测试 |
 | `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`matrix.ts`；`mock.ts` |

@@ -39,7 +39,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
 const TAB_HINTS: Record<string, string> = {
   tasks: "飞书审批为主 · Web 备用",
   approvals: "只读 · 审批请在飞书里完成",
-  plans: "只读 · 新增/完成走 IM",
+  plans: "md 看板 · 目标可在 Web 或 IM 勾选",
   memories: "可直接改正文或删除 · 新增/过期走 IM",
   business: "只读 · 对象 / 关系 / 动作",
 };

@@ -1,12 +1,11 @@
-/** 组装：Store + Hub + Scheduler + RunQueue + PlanEngine + Agent 引擎；处理唤醒。 */
+/** 组装：Store + Hub + Scheduler + RunQueue + Agent 引擎；处理唤醒。 */
 import path from "node:path";
 import fs from "node:fs";
 import type { Config } from "./config.ts";
-import { isChatCall, didPlanAdd } from "./core/tool-call.ts";
+import { isChatCall } from "./core/tool-call.ts";
 import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
-import { PlanEngine } from "./core/plans.ts";
 import { evaluateGate } from "./core/gate.ts";
 import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
@@ -22,7 +21,6 @@ import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey, fmtShort } from "./core/time.ts";
 import { costUsd } from "./core/pricing.ts";
 import { EmojiTable } from "./core/emoji.ts";
-import { needsPlanNudge } from "./core/nudge.ts";
 import { toImageContent } from "./core/media.ts";
 import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
@@ -33,7 +31,7 @@ import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } f
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { Plan, StoredMessage, Wake } from "./types.ts";
+import type { StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
 import { businessDir, runtimeDir, sharedDir } from "./core/runtime.ts";
 import { ensureBusinessSeeded } from "./ops/business-map.ts";
@@ -121,7 +119,6 @@ export class App {
   readonly log: Logger;
   readonly queue: RunQueue;
   readonly scheduler: Scheduler;
-  readonly plans: PlanEngine;
   readonly engine: AgentEngine;
   readonly emoji: EmojiTable;
   /** 宿主机命令的审批闸门（host 模式下 terminal 才会用它） */
@@ -155,7 +152,6 @@ export class App {
     try { ensureBusinessSeeded(this.store, businessDir(cfg)); } catch (e) { this.log.warn(`业务地图导入失败：${(e as Error).message}`); }
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
-    this.plans = new PlanEngine(this.store, { missedPolicy: cfg.plans.missedPolicy, missedGraceMs: cfg.plans.missedGraceMs, tz: cfg.timezone, tide: cfg.tide }, this.clock.now());
     this.queue = new RunQueue((w) => this.handleWake(w));
     this.queue.onError = (e) => this.log.error("唤醒处理异常", e);
     this.approval = new ApprovalGate(
@@ -186,7 +182,7 @@ export class App {
     };
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
-      poolsWithUnread: () => this.store.poolsWithUnread(), duePlans: (now) => this.plans.due(now),
+      poolsWithUnread: () => this.store.poolsWithUnread(),
       poolKind: (id) => this.store.getPool(id)?.kind,
       proactivePools: (now) => this.proactivePools(now),
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
@@ -937,16 +933,14 @@ export class App {
     }
 
     // 读池：所有有未读的池（不只是触发的池），一次唤醒合并处理
-    const plans: Plan[] = w.planFires.map((f) => this.store.getPlan(f.planId)).filter((p): p is Plan => !!p);
     const cursorsBefore = new Map(this.store.poolsWithUnread().map((p) => [p, this.store.getCursor(p)]));
     const unread = this.hub.takeUnread();
     this.currentUnread = unread;
     const proactive = w.proactive ?? [];
-    if (!unread.length && !plans.length && !proactive.length) return finish("skipped:nothing-new");
+    if (!unread.length && !proactive.length) return finish("skipped:nothing-new");
 
     const involved = new Set<string>([
       ...unread.map((m) => m.pool_id),
-      ...plans.map((p) => p.pool_id).filter((x): x is string => !!x),
       ...proactive.map((x) => x.pool).filter((x): x is string => !!x),
     ]);
     const context = new Map<string, StoredMessage[]>();
@@ -961,7 +955,7 @@ export class App {
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
     // 话题库已经搬进沙盒（/work/topics），她自己去读，这里不再查库。
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, plans, handoff, topics: [] });
+    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, handoff, topics: [] });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;
@@ -990,30 +984,6 @@ export class App {
     }, images);
     this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
 
-    // 主动唤醒兜底：这是它自己排的计划，说完却没给自己排下一次 → 补一次极短的自我决定
-    // 只劝它「要么排、要么明确不排」，不替它做决定，也不用 send 再发一条。
-    if (needsPlanNudge({ wakeType: w.type, error: res.error, aborted: res.aborted, toolCalls: res.toolCalls })) {
-      const left = {
-        tokensLeft: tokensLeftOf(cfg, usage.tokens) - res.tokens,
-        callsLeft: callsLeftOf(cfg, usage.llm_calls) - res.llmCalls,
-      };
-      if (left.callsLeft > 0 && left.tokensLeft > 0) {
-        try {
-          const r2 = await this.engine.run(
-            "你刚才是照自己排的计划开口的，说完了。现在做决定：还想接着聊，就用 plan 工具（action=add）给自己排下一次（content 写清到点要说什么）；不想，就只回一句「不排」。别用 send，这条不发出去。",
-            left,
-          );
-          this.store.addUsage(day, r2.llmCalls, r2.tokens, 0, this.usageExtra(r2));
-          res.toolCalls.push(...r2.toolCalls);
-          res.tokens += r2.tokens;
-          res.llmCalls += r2.llmCalls;
-          entry.nudged = true;
-          this.log.info(`主动唤醒没排下次计划 → 已补提醒（${r2.toolCalls.some((c) => didPlanAdd(c)) ? "排上了" : "它说不排"}）`);
-        } catch (e) {
-          this.log.warn(`补提醒失败：${(e as Error).message}`);
-        }
-      }
-    }
     const sent = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError).map((c) => c.args);
     this.sendsThisTurn = sent.length;
     // 主动这一轮的真实结果：发了才记 speak（连说计数和冷却都靠这张表），

@@ -159,23 +159,34 @@ test("用户：列表、手动改名、回填历史消息", async () => {
   assert.equal(kept.display_name, "小王");
 });
 
-test("计划：写、列、改状态", async () => {
+test("计划看板：建、列、勾目标、改状态、归档", async () => {
   const add = await call("/v1/plans", {
     method: "POST",
-    body: JSON.stringify({ title: "问他结果", kind: "once", when: "2030-01-01T10:00", pool: "p1" }),
+    body: JSON.stringify({ title: "问他结果", background: "他周三出结果", goals: ["问他", "记结果"] }),
   });
   assert.equal(add.status, 201, JSON.stringify(add.body));
-  const id = add.body.data.id;
+  const slug = add.body.data.slug;
 
-  const list = await call("/v1/plans");
-  assert.ok(list.body.data.some((p: any) => p.id === id && p.title === "问他结果"));
+  const list = await call("/v1/plans?status=all");
+  assert.ok(list.body.data.some((p: any) => p.slug === slug && p.title === "问他结果"));
 
-  const done = await call(`/v1/plans/${id}`, { method: "PATCH", body: JSON.stringify({ status: "done" }) });
+  const one = await call(`/v1/plans/${encodeURIComponent(slug)}`);
+  assert.equal(one.status, 200);
+  assert.equal(one.body.data.goals_total, 2);
+
+  const done = await call(`/v1/plans/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ goal_check: { goal: 1 } }),
+  });
   assert.equal(done.status, 200);
-  assert.equal(done.body.data.status, "done");
+  assert.equal(done.body.data.goals[0].done, true);
+
+  const archived = await call(`/v1/plans/${encodeURIComponent(slug)}`, { method: "DELETE" });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.data.status, "archived");
 
   const bad = await call("/v1/plans/99999", { method: "PATCH", body: JSON.stringify({ status: "done" }) });
-  assert.equal(bad.status, 400);
+  assert.equal(bad.status, 404);
   assert.match(bad.body.error, /没有计划/);
 });
 

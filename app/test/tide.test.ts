@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
-import { PlanEngine } from "../src/core/plans.ts";
 import { canFire, localDay, anchorOf, type TideConfig } from "../src/core/tide.ts";
 
 const CFG: TideConfig = { enabled: true, dailyCap: { L1: 2, L2: 1 } };
@@ -87,54 +86,6 @@ test("tide.enabled=false 时闸门全开", () => {
   const p = mkPlan(store, { anchor_kind: "L2" });
   fire(store, localDay(now, TZ), "L2");
   assert.equal(canFire(store, p, { ...CFG, enabled: false }, now, TZ).ok, true);
-});
-
-test("due()：计划到点但额度用满 → 不触发，记 skip，once 计划标 expired", () => {
-  const store = new Store(":memory:");
-  const T = Date.now();
-  const day = localDay(T + 2000, TZ);
-  fire(store, day, "L2"); // 占掉今天唯一一条 L2
-  const engine = new PlanEngine(store, { missedPolicy: "skip", missedGraceMs: 0, tz: TZ, tide: CFG }, T);
-  const p = mkPlan(store, { schedule_kind: "once", schedule: new Date(T + 1000).toISOString(), anchor_kind: "L2" });
-
-  const fires = engine.due(T + 2000);
-  assert.equal(fires.length, 0, "被闸门拦下不该产生唤醒");
-  assert.equal(store.getPlan(p.id)!.status, "expired", "没执行成，不是 done");
-  const ev = store.recentTideEvents(1)[0];
-  assert.equal(ev.kind, "skip");
-  assert.equal(ev.anchor_kind, "L2");
-  assert.match(ev.reason, /上限/);
-});
-
-test("due()：额度还有 → 正常触发并记 fired", () => {
-  const store = new Store(":memory:");
-  const T = Date.now();
-  const engine = new PlanEngine(store, { missedPolicy: "skip", missedGraceMs: 0, tz: TZ, tide: CFG }, T);
-  const p = mkPlan(store, { schedule_kind: "once", schedule: new Date(T + 1000).toISOString(), anchor_kind: "L1" });
-
-  const fires = engine.due(T + 2000);
-  assert.equal(fires.length, 1);
-  assert.equal(fires[0].planId, p.id);
-  assert.equal(store.getPlan(p.id)!.status, "done");
-  const ev = store.recentTideEvents(1)[0];
-  assert.equal(ev.kind, "fired");
-  assert.equal(ev.anchor_kind, "L1");
-  assert.equal(ev.why, "测试");
-});
-
-test("due()：L0 计划即使当天发满也照常触发", () => {
-  const store = new Store(":memory:");
-  const T = Date.now();
-  const day = localDay(T + 2000, TZ);
-  fire(store, day, "L2");
-  fire(store, day, "L1");
-  fire(store, day, "L1");
-  const engine = new PlanEngine(store, { missedPolicy: "skip", missedGraceMs: 0, tz: TZ, tide: CFG }, T);
-  const p = mkPlan(store, { schedule_kind: "once", schedule: new Date(T + 1000).toISOString(), anchor_kind: "L0", title: "生日" });
-
-  const fires = engine.due(T + 2000);
-  assert.equal(fires.length, 1, "生日不该被任何额度挡住");
-  assert.equal(store.getPlan(p.id)!.status, "done");
 });
 
 test("lastTideFired：能给唤醒剧本提供「上次主动是几时、为什么」", () => {
