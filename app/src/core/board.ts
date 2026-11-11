@@ -222,7 +222,7 @@ export function renderBoard(b: Board): string {
     "",
     "## 背景",
     "",
-    b.background.trim() || "（还没写背景）",
+    b.background.trim(),
     "",
     "## 目标",
     "",
@@ -230,7 +230,7 @@ export function renderBoard(b: Board): string {
     "",
     "## 进展",
     "",
-    ...(progress.length ? progress : ["- （暂无进展）"]),
+    ...(progress.length ? progress : ["（暂无进展）"]),
     "",
   ].join("\n");
 }

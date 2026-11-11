@@ -7,7 +7,7 @@ import path from "node:path";
 import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
-import { listBoards } from "../src/core/board.ts";
+import { getBoard, listBoards } from "../src/core/board.ts";
 import { boardDir } from "../src/core/runtime.ts";
 
 const NOW = Date.parse("2026-11-11T03:00:00Z"); // 上海 11:00
@@ -45,6 +45,15 @@ test("create → list → goal-check：目标落 md 并能勾上", async () => {
   const md = fs.readFileSync(path.join(boardDir(cfg), `${slug}.md`), "utf8");
   assert.match(md, /- \[x\] 查 state/);
   assert.match(md, /- \[ \] 回报结果/);
+});
+
+test("空看板不把占位文字当成目标/进展", async () => {
+  const { cfg, plan } = setup();
+  const created = await plan.execute("t1", { action: "create", title: "空计划" });
+  const b = getBoard(boardDir(cfg), created.details.plan.slug)!;
+  assert.equal(b.background, "");
+  assert.equal(b.goals.length, 0);
+  assert.equal(b.progress.length, 0);
 });
 
 test("同名计划不重复建", async () => {
