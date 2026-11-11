@@ -307,7 +307,8 @@ export function createTools(d: ToolDeps) {
     label: "memory",
     executionMode: "sequential",
     description:
-      "长期记忆。action 决定做什么：recent（最近记下的）/ search（按关键词翻，all=1 连失效的）/ "
+      "长期记忆。记忆不会自动注入——指代不清、要引用旧事时先查，别猜。action 决定做什么："
+      + "recent（最近记下的）/ search（按关键词翻，all=1 连失效的）/ "
       + "add（记一条）/ trace（回看来源消息和前后文）/ expire（不再成立，关掉）/ update（就地订正）/ help。"
       + "记的是对方明说过的具体事实，不是你的推断。他说变了的事，add 时把旧条目的 #id 填进 supersede；"
       + "没有新事实、只是不再成立，用 expire。别名也走 add：kind=alias，content 写「那个项目 → 电商 AI Agent」。"

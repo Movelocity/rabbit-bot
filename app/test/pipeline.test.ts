@@ -521,7 +521,7 @@ test("私聊不等 tick：batchToTick 开着也走快路（他盯着屏幕等）
   await t.done();
 });
 
-test("说法对照：他说「那个项目」时，指向跟消息一起到，不用反问", async () => {
+test("记忆不主动注入：不灌正文/别名，只给 user_id 让她自己查", async () => {
   const t = await setup();
   t.dm("在吗");
   await t.settle(6_000);
@@ -529,6 +529,7 @@ test("说法对照：他说「那个项目」时，指向跟消息一起到，�
   // user_id 是 users 表里映射出来的，不是 sender_id 原文
   const uid = t.app.store.lastUserId(pool)!;
   addMemory(t.app.store, { user: uid, content: "那个项目 → 电商 AI Agent", pool, kind: "alias" });
+  addMemory(t.app.store, { user: uid, content: "他对花生过敏", pool });
 
   const seen: string[] = [];
   const orig = (t.app as any).engine.run.bind((t.app as any).engine);
@@ -537,27 +538,9 @@ test("说法对照：他说「那个项目」时，指向跟消息一起到，�
   t.dm("那个项目进展怎么样");
   await t.settle(6_000);
   const p = seen[seen.length - 1] ?? "";
-  assert.match(p, /说法对照/, "命中别名时该多一行对照");
-  assert.match(p, /「那个项目」= 电商 AI Agent/);
-  await t.done();
-});
-
-test("没提别名就不加这一行（别每轮都灌一遍）", async () => {
-  const t = await setup();
-  t.dm("在吗");
-  await t.settle(6_000);
-  const pool = t.app.store.listPools()[0].pool_id;
-  // user_id 是 users 表里映射出来的，不是 sender_id 原文
-  const uid = t.app.store.lastUserId(pool)!;
-  addMemory(t.app.store, { user: uid, content: "那个项目 → 电商 AI Agent", pool, kind: "alias" });
-
-  const seen: string[] = [];
-  const orig = (t.app as any).engine.run.bind((t.app as any).engine);
-  (t.app as any).engine.run = async (prompt: string, ...rest: any[]) => { seen.push(prompt); return orig(prompt, ...rest); };
-
-  t.dm("今天吃了米饭");
-  await t.settle(6_000);
-  assert.doesNotMatch(seen[seen.length - 1] ?? "", /说法对照/);
+  assert.doesNotMatch(p, /说法对照/, "别名不再自动注入");
+  assert.doesNotMatch(p, /他对花生过敏/, "记忆正文不再自动注入");
+  assert.ok(p.includes(`user_id=${uid}`), "仍要告诉她 user_id，方便自己用 memory search");
   await t.done();
 });
 

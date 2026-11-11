@@ -31,7 +31,6 @@ import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
 import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
-import { resolveAliases } from "./ops/memories.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Plan, StoredMessage, Wake } from "./types.ts";
@@ -863,42 +862,18 @@ export class App {
       ...proactive.map((x) => x.pool).filter((x): x is string => !!x),
     ]);
     const context = new Map<string, StoredMessage[]>();
-    const memories = new Map<string, { user_id: string; items: { id: number; content: string }[] }[]>();
     for (const pid of involved) {
-      const pool = this.store.getPool(pid);
-      if (!pool) continue;
+      if (!this.store.getPool(pid)) continue;
       if (!this.engine.seenPools.has(pid)) {
         const firstUnread = unread.find((m) => m.pool_id === pid)?.seq ?? Number.MAX_SAFE_INTEGER;
         context.set(pid, this.store.recentMessages(pid, cfg.context.recentContextMessages, firstUnread - 1));
       }
-      const users = [...new Set(unread.filter((m) => m.pool_id === pid && m.user_id).map((m) => m.user_id!))];
-      const list = [];
-      for (const u of users) {
-        const key = `${pid}|${u}`;
-        if (this.engine.seenPools.has(key)) continue;
-        const items = this.store.visibleMemories(u, pool, cfg.context.maxMemoriesPerUser);
-        if (items.length) list.push({ user_id: u, items });
-        this.engine.seenPools.add(key);
-      }
-      if (list.length) memories.set(pid, list);
     }
-    // 检索前置：他这次的话里出现「那个项目」这类说法时，先把指向翻出来给她，
-    // 省掉一轮「您说的是哪个」——那是把记忆的活推回给用户
-    const aliases: NonNullable<Parameters<typeof wakePrompt>[1]["aliases"]> = [];
-    for (const pid of involved) {
-      const pool = this.store.getPool(pid);
-      if (!pool) continue;
-      const users = [...new Set(unread.filter((m) => m.pool_id === pid && m.user_id).map((m) => m.user_id!))];
-      for (const u of users) {
-        const said = unread.filter((m) => m.pool_id === pid && m.user_id === u).map((m) => m.text).join("\n");
-        const hits = resolveAliases(this.store, { user: u, pool: pid, text: said });
-        if (hits.length) aliases.push({ pool: pid, user_id: u, hits });
-      }
-    }
+    // 记忆和别名都不主动注入：她需要时用 memory search / trace 自己查，避免每轮灌一屏陈旧内容。
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
     // 话题库已经搬进沙盒（/work/topics），她自己去读，这里不再查库。
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, memories, aliases, plans, handoff, topics: [] });
+    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, plans, handoff, topics: [] });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;

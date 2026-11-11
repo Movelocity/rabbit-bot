@@ -55,11 +55,8 @@ export interface WakePromptInput {
   unread: StoredMessage[];
   /** 首次在本会话出现的池：附近期上下文 */
   context: Map<string, StoredMessage[]>;
-  memories: Map<string, { user_id: string; items: { id: number; content: string }[] }[]>;
   plans: Plan[];
   handoff?: string | null;
-  /** 他这次说的话里命中的别名（「那个项目」= 电商 Agent），按池/用户分组 */
-  aliases?: { pool: string; user_id: string; hits: { alias: string; target: string }[] }[];
   /** 可聊的谈资（只在主动 tick 时给，有人说话时不需要） */
   topics?: { id: number; kind: string; content: string; source?: string }[];
 }
@@ -73,16 +70,7 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     const pool = store.getPool(pid)!;
     blocks.push(`近期上下文 [${poolLabel(store, pool)}]：\n` + ctx.map((m) => fmtMsg(store, m, false)).join("\n"));
   }
-  for (const [pid, users] of x.memories) {
-    for (const u of users) {
-      if (!u.items.length) continue;
-      blocks.push(`记忆 ${u.user_id}（在 ${store.poolAlias(pid)} 可见；#号是条目 id，改口时用得上）：${u.items.map((i) => `#${i.id} ${i.content}`).join("；")}`);
-    }
-  }
-  for (const a of x.aliases ?? []) {
-    if (!a.hits.length) continue;
-    blocks.push(`说法对照 ${a.user_id}（他这么说的时候指的就是这个，别反问）：${a.hits.map((h) => `「${h.alias}」= ${h.target}`).join("；")}`);
-  }
+  // 记忆和业务知识都不主动注入：只给 user_id 和查法，需要时让她自己用工具查。
   // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
   const people = new Map<string, { name: string; owner: boolean }>();
   for (const m of x.unread) {
