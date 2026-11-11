@@ -15,6 +15,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 |---|---|---|---|
 | `ufa-business-map` | UFA | 查业务地图、解释关系、算影响面、判断该不该派活 | `ufa-business-map/SKILL.md` |
 | `wa-business-map` | WA | 新增/修改业务地图、校验、汇报 | `wa-business-map/SKILL.md` |
+| `reporting` | UFA / WA | 写汇报、验收产出、他问「做完了没 / 结果在哪」 | `reporting/SKILL.md` |
 
 ## 项目坐标
 
@@ -29,6 +30,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 
 - 业务关系/对象/影响面 → UFA 读 `ufa-business-map/SKILL.md`；WA 读 `wa-business-map/SKILL.md`
 - 人设/提示词 → 读 `app/README.md` 的「定制它」；运行时优先，仓库默认份在 `app/prompts/` 和 `app/config/persona.md`
+- 写汇报 / 验收 → 读 `reporting/SKILL.md`（`app/prompts/system.md` 里只留四段结构和五条硬规则）
 - 任务/审批/worker → 读 `app/prompts/system.md`、`docs/SPEC-*`
 - 运维排障 → `app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
 
