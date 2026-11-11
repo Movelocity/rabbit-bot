@@ -279,6 +279,8 @@ test("replaceBusinessMap：全量替换并校验引用", () => {
   };
   const saved = replaceBusinessMap(store, snapshot)!;
   assert.equal(saved.version, 2);
+  assert.equal(saved.objects[0].graph_id, "default", "不传图谱落默认图谱");
+  assert.equal(saved.edges[0].evidence, "test", "快照回显保留 evidence");
   const map = loadBusinessMap(store)!;
   assert.ok(findPaths(map, "service:a", "env:prod").length);
   assert.deepEqual(impactOf(map, "env:prod").map((h) => h.object.id), ["service:a"]);
@@ -288,5 +290,77 @@ test("replaceBusinessMap：全量替换并校验引用", () => {
     /不存在/,
   );
   assert.equal(loadBusinessMap(store)!.version, 2, "失败的替换不该改掉原数据");
+  store.close();
+});
+
+test("图谱：不传 graph_id 落默认图谱，import_batch 保留", () => {
+  const x = setup();
+  const map = loadBusinessMap(x.store)!;
+  assert.ok(map.objects.every((o) => o.graph_id === "default" && o.import_batch === ""), "文件导入默认落 default");
+  assert.ok(map.relations.every((r) => r.graph_id === "default"));
+  assert.ok([...map.edges.values()].flat().every((e) => e.graph_id === "default"));
+  cleanup(x);
+
+  const store = new Store(":memory:");
+  const snapshot = {
+    version: 1,
+    types: [{ id: "service", name: "服务" }],
+    objects: [
+      { id: "service:a", type: "service", name: "a" },
+      { id: "service:b", type: "service", name: "b" },
+      { id: "service:c", type: "service", name: "c", graph_id: "codex", import_batch: "codex-62" },
+      { id: "service:d", type: "service", name: "d", graph_id: "codex" },
+    ],
+    relations: [
+      { id: "rel_default", name: "links", fromType: "service", toType: "service" },
+      { id: "rel_codex", name: "links", fromType: "service", toType: "service", graph_id: "codex", import_batch: "codex-62" },
+    ],
+    edges: [
+      { relation: "rel_default", from: "service:a", to: "service:b", evidence: "a->b" },
+      { relation: "rel_codex", from: "service:c", to: "service:d", evidence: "c->d" },
+    ],
+    actions: [], terms: [],
+  };
+  replaceBusinessMap(store, snapshot);
+  const rows = store.listBusinessObjects();
+  const defaultRows = rows.filter((o) => o.id === "service:a" || o.id === "service:b");
+  const codexRows = rows.filter((o) => o.id === "service:c" || o.id === "service:d");
+  assert.ok(defaultRows.every((o) => o.graph_id === "default" && o.import_batch === ""));
+  assert.ok(codexRows.every((o) => o.graph_id === "codex"));
+  assert.equal(codexRows.find((o) => o.id === "service:c")!.import_batch, "codex-62");
+  assert.equal(codexRows.find((o) => o.id === "service:d")!.import_batch, "", "没传批次就留空");
+  assert.equal(store.listBusinessRelations().find((r) => r.id === "rel_default")!.graph_id, "default");
+  const codexEdge = store.listBusinessEdges().find((e) => e.relation_id === "rel_codex")!;
+  assert.equal(codexEdge.graph_id, "codex", "边不传图谱时继承关系");
+  assert.equal(codexEdge.import_batch, "codex-62", "边不传批次时继承关系");
+  store.close();
+});
+
+test("图谱：跨图谱连边、边与关系图谱冲突都拒绝", () => {
+  const store = new Store(":memory:");
+  const base = {
+    version: 1,
+    types: [{ id: "service", name: "服务" }],
+    objects: [
+      { id: "service:a", type: "service", name: "a" },
+      { id: "service:c", type: "service", name: "c", graph_id: "codex" },
+    ],
+    relations: [{ id: "rel_codex", name: "links", fromType: "service", toType: "service", graph_id: "codex" }],
+    edges: [],
+    actions: [], terms: [],
+  };
+  assert.throws(
+    () => replaceBusinessMap(store, { ...base, edges: [{ relation: "rel_codex", from: "service:a", to: "service:c" }] }),
+    /图谱.*不是「codex」/,
+    "默认图谱对象不能连进 codex 的边",
+  );
+  assert.throws(
+    () => replaceBusinessMap(store, {
+      ...base,
+      edges: [{ relation: "rel_codex", from: "service:c", to: "service:c", graph_id: "default" }],
+    }),
+    /graph_id.*不一致/,
+    "边显式图谱必须和关系一致",
+  );
   store.close();
 });

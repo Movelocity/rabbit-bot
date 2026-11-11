@@ -341,6 +341,8 @@ export interface BusinessObject {
   key?: { kind?: string; value: string };
   source?: { kind?: string; value: string };
   tags?: string[];
+  graph_id?: string;
+  import_batch?: string;
 }
 
 export interface BusinessRelation {
@@ -355,6 +357,8 @@ export interface BusinessRelation {
   semantics?: string;
   mapping?: { kind?: string; file?: string; select?: string };
   edge_count?: number;
+  graph_id?: string;
+  import_batch?: string;
 }
 
 export interface BusinessAction {
@@ -377,6 +381,9 @@ export interface BusinessEdge {
   relation_name: string;
   from: string;
   to: string;
+  graph_id?: string;
+  import_batch?: string;
+  evidence?: string | null;
 }
 
 export interface BusinessLintFinding {

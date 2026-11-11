@@ -27,6 +27,7 @@ import {
   relationRiskVariant,
 } from "../lib/format.ts";
 import { cx } from "../lib/cx.ts";
+import { ALL_GRAPHS, DEFAULT_GRAPH, collectGraphIds, filterByGraph } from "../lib/business-graph.ts";
 import type {
   BusinessCategory,
   BusinessData,
@@ -40,9 +41,11 @@ import {
   Button,
   Empty,
   Input,
+  Select,
   StatusText,
 } from "../components/ui.tsx";
 import { Drawer } from "../components/Drawer.tsx";
+import { Modal } from "../components/Modal.tsx";
 import { DetailRows, type DetailRow } from "../components/DetailRows.tsx";
 
 const CATEGORIES: { id: BusinessCategory; label: string }[] = [
@@ -66,58 +69,13 @@ const TYPE_COLORS = [
   "#0f766e",
 ];
 
-const STAT_CARDS: { id: BusinessCategory; label: string; hint: string; color: string }[] = [
-  { id: "objects", label: "对象", hint: "实例", color: "#2563eb" },
-  { id: "relations", label: "关系", hint: "定义", color: "#0891b2" },
-  { id: "actions", label: "动作", hint: "可执行", color: "#16a34a" },
-  { id: "terms", label: "术语", hint: "说法", color: "#db2777" },
-  { id: "types", label: "类型", hint: "对象类", color: "#f59e0b" },
-];
-
-function StatIcon({ kind }: { kind: BusinessCategory }) {
-  const icons: Record<BusinessCategory, ReactNode> = {
-    objects: (
-      <>
-        <path d="m12 3.5 7.5 4v9L12 20.5l-7.5-4v-9l7.5-4Z" />
-        <path d="m4.5 7.5 7.5 4 7.5-4M12 11.5v9" />
-      </>
-    ),
-    relations: (
-      <>
-        <path d="m9.5 14.5 5-5" />
-        <path d="m11 6.5 1.5-1.5a3.5 3.5 0 0 1 5 5L16 11.5" />
-        <path d="m13 17.5-1.5 1.5a3.5 3.5 0 0 1-5-5L8 12.5" />
-      </>
-    ),
-    actions: <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" />,
-    terms: (
-      <>
-        <path d="M3.5 11.5v-7a1 1 0 0 1 1-1h7l9 9-8 8-9-9Z" />
-        <circle cx="8" cy="8" r="1.4" />
-      </>
-    ),
-    types: (
-      <>
-        <path d="m12 3 9 5-9 5-9-5 9-5Z" />
-        <path d="m3 12 9 5 9-5M3 16l9 5 9-5" />
-      </>
-    ),
-  };
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="h-[18px] w-[18px]"
-    >
-      {icons[kind]}
-    </svg>
-  );
-}
+const CATEGORY_COLORS: Record<BusinessCategory, string> = {
+  objects: "#2563eb",
+  relations: "#0891b2",
+  actions: "#16a34a",
+  terms: "#db2777",
+  types: "#f59e0b",
+};
 
 interface BusinessItem {
   kind: BusinessCategory;
@@ -190,14 +148,6 @@ function businessItemsFor(
     }));
 }
 
-function categoryCount(data: BusinessData, id: BusinessCategory): number {
-  if (id === "objects") return data.objects.length;
-  if (id === "relations") return data.relations.length;
-  if (id === "actions") return data.actions.length;
-  if (id === "terms") return data.terms.length;
-  return data.types.length;
-}
-
 function categoryLabel(id: BusinessCategory): string {
   return CATEGORIES.find((c) => c.id === id)?.label ?? id;
 }
@@ -216,6 +166,25 @@ function BusinessLink({ children, onClick }: { children: ReactNode; onClick: () 
 
 function Subhead({ children }: { children: ReactNode }) {
   return <h4 className="mb-0.5 mt-4 text-[13px] font-semibold text-muted">{children}</h4>;
+}
+
+function BugIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={className}>
+      <path
+        d="M8 5.2a3 3 0 0 1 3 3v.7a3 3 0 1 1-6 0v-.7a3 3 0 0 1 3-3Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 5.2V3.4M5.9 5.9 4.7 4.7M10.1 5.9l1.2-1.2M5 8.2H2.9M13.1 8.2H11M5.1 10.3l-1.5.9M10.9 10.3l1.5.9M6.8 11.9l-.7 1.4M9.2 11.9l.7 1.4"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 function EdgeRow({
@@ -517,129 +486,155 @@ interface GraphFocusRequest {
   nonce: number;
 }
 
+const NODE_SIZE = 96;
+const NODE_RADIUS = NODE_SIZE / 2;
+const ARROW_GAP = 12;
+
+const TREE_GAP_X = 145;
+const TREE_GAP_Y = 175;
+
+interface TreeComponent {
+  ids: string[];
+  xs: Map<string, number>;
+  depths: Map<string, number>;
+  spanX: number;
+  spanY: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 function layoutGraph(
   nodes: GraphNode[],
   edges: BusinessEdge[],
   width: number,
-  height: number,
+  _height: number,
 ): void {
-  const n = nodes.length;
-  const cx = width / 2;
-  const cy = height / 2;
-  const radius = Math.min(width, height) * 0.38;
-  for (let i = 0; i < n; i++) {
-    const angle = (Math.PI * 2 * i) / Math.max(1, n);
-    nodes[i].x = cx + Math.cos(angle) * radius;
-    nodes[i].y = cy + Math.sin(angle) * radius;
-  }
+  if (!nodes.length) return;
+
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const links = edges
-    .map((e) => ({ a: byId.get(e.from), b: byId.get(e.to) }))
-    .filter((l): l is { a: GraphNode; b: GraphNode } => !!l.a && !!l.b && l.a !== l.b);
-  const ideal = 220;
-  const minGap = 170;
-  const separate = (strength: number) => {
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = nodes[i];
-        const b = nodes[j];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.hypot(dx, dy);
-        if (dist < 0.01) {
-          dx = ((i + 1) % 7) - 3 || 1;
-          dy = ((j + 1) % 5) - 2 || 1;
-          dist = Math.hypot(dx, dy) || 1;
-        }
-        if (dist < minGap) {
-          dx /= dist;
-          dy /= dist;
-          const push = (minGap - dist) * strength;
-          a.x -= dx * push;
-          a.y -= dy * push;
-          b.x += dx * push;
-          b.y += dy * push;
-        }
+  const adjacency = new Map<string, Set<string>>();
+  for (const node of nodes) adjacency.set(node.id, new Set());
+  for (const edge of edges) {
+    if (edge.from === edge.to) continue;
+    const from = adjacency.get(edge.from);
+    const to = adjacency.get(edge.to);
+    if (!from || !to) continue;
+    from.add(edge.to);
+    to.add(edge.from);
+  }
+
+  const visited = new Set<string>();
+  const components: string[][] = [];
+  for (const node of nodes) {
+    if (visited.has(node.id)) continue;
+    const members: string[] = [];
+    const queue = [node.id];
+    visited.add(node.id);
+    while (queue.length) {
+      const id = queue.shift()!;
+      members.push(id);
+      for (const next of adjacency.get(id) ?? []) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
       }
     }
-  };
-  for (let iter = 0; iter < 260; iter++) {
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = nodes[i];
-        const b = nodes[j];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.hypot(dx, dy);
-        if (dist < 0.01) {
-          dx = ((i + 1) % 7) - 3 || 1;
-          dy = ((j + 1) % 5) - 2 || 1;
-          dist = Math.hypot(dx, dy) || 1;
-        }
-        const force = 18000 / (dist * dist);
-        dx /= dist;
-        dy /= dist;
-        a.x -= dx * force;
-        a.y -= dy * force;
-        b.x += dx * force;
-        b.y += dy * force;
-        if (dist < minGap) {
-          const push = (minGap - dist) * 0.5;
-          a.x -= dx * push;
-          a.y -= dy * push;
-          b.x += dx * push;
-          b.y += dy * push;
-        }
+    components.push(members);
+  }
+
+  const trees: TreeComponent[] = [];
+  for (const members of components) {
+    let root = members[0];
+    let bestDegree = -1;
+    for (const id of members) {
+      const degree = adjacency.get(id)?.size ?? 0;
+      if (degree > bestDegree) {
+        bestDegree = degree;
+        root = id;
       }
     }
-    for (const link of links) {
-      const dx = link.b.x - link.a.x;
-      const dy = link.b.y - link.a.y;
-      const dist = Math.hypot(dx, dy) || 1;
-      const force = (dist - ideal) * 0.006;
-      const ux = dx / dist;
-      const uy = dy / dist;
-      link.a.x += ux * force;
-      link.a.y += uy * force;
-      link.b.x -= ux * force;
-      link.b.y -= uy * force;
+
+    const children = new Map<string, string[]>();
+    const depths = new Map<string, number>();
+    const ids: string[] = [];
+    const queue = [root];
+    const seen = new Set([root]);
+    depths.set(root, 0);
+    while (queue.length) {
+      const id = queue.shift()!;
+      ids.push(id);
+      children.set(id, []);
+      for (const next of adjacency.get(id) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        depths.set(next, (depths.get(id) ?? 0) + 1);
+        children.get(id)!.push(next);
+        queue.push(next);
+      }
     }
-    for (const node of nodes) {
-      node.x += (cx - node.x) * 0.002;
-      node.y += (cy - node.y) * 0.002;
+
+    const xs = new Map<string, number>();
+    let cursor = 0;
+    const assign = (id: string): number => {
+      const kids = children.get(id) ?? [];
+      if (!kids.length) {
+        const x = cursor * TREE_GAP_X;
+        cursor += 1;
+        xs.set(id, x);
+        return x;
+      }
+      let first = 0;
+      let last = 0;
+      kids.forEach((kid, index) => {
+        const x = assign(kid);
+        if (index === 0) first = x;
+        last = x;
+      });
+      const x = (first + last) / 2;
+      xs.set(id, x);
+      return x;
+    };
+    assign(root);
+
+    let maxDepth = 0;
+    for (const id of ids) maxDepth = Math.max(maxDepth, depths.get(id) ?? 0);
+    trees.push({
+      ids,
+      xs,
+      depths,
+      spanX: Math.max(0, cursor - 1) * TREE_GAP_X,
+      spanY: maxDepth * TREE_GAP_Y,
+      offsetX: 0,
+      offsetY: 0,
+    });
+  }
+
+  const targetWidth = Math.max(width, TREE_GAP_X * 4);
+  const ordered = [...trees].sort((a, b) => b.spanX - a.spanX || b.spanY - a.spanY);
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+  for (const tree of ordered) {
+    if (cursorX > 0 && cursorX + tree.spanX > targetWidth) {
+      cursorX = 0;
+      cursorY += rowHeight + TREE_GAP_Y;
+      rowHeight = 0;
     }
+    tree.offsetX = cursorX;
+    tree.offsetY = cursorY;
+    cursorX += tree.spanX + TREE_GAP_X;
+    rowHeight = Math.max(rowHeight, tree.spanY);
   }
-  for (let iter = 0; iter < 80; iter++) {
-    separate(0.5);
-    for (const node of nodes) {
-      node.x += (cx - node.x) * 0.001;
-      node.y += (cy - node.y) * 0.001;
+
+  for (const tree of ordered) {
+    for (const id of tree.ids) {
+      const node = byId.get(id);
+      if (!node) continue;
+      node.x = tree.offsetX + (tree.xs.get(id) ?? 0) - NODE_RADIUS;
+      node.y = tree.offsetY + (tree.depths.get(id) ?? 0) * TREE_GAP_Y - NODE_RADIUS;
     }
-  }
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const node of nodes) {
-    minX = Math.min(minX, node.x);
-    maxX = Math.max(maxX, node.x);
-    minY = Math.min(minY, node.y);
-    maxY = Math.max(maxY, node.y);
-  }
-  const pad = 70;
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  const scaleX = Math.min((width - pad * 2) / spanX, 2.2);
-  const scaleY = Math.min((height - pad * 2) / spanY, 2.2);
-  for (const node of nodes) {
-    node.x = pad + (node.x - minX) * scaleX + (width - pad * 2 - spanX * scaleX) / 2;
-    node.y = pad + (node.y - minY) * scaleY + (height - pad * 2 - spanY * scaleY) / 2;
   }
 }
-
-const NODE_SIZE = 96;
-const NODE_RADIUS = NODE_SIZE / 2;
-const ARROW_GAP = 12;
 
 function BusinessNodeView({ data }: NodeProps<BusinessFlowNode>) {
   return (
@@ -956,8 +951,10 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [lint, setLint] = useState<BusinessLintReport | null>(null);
   const [linting, setLinting] = useState(false);
+  const [lintOpen, setLintOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<BusinessCategory>("objects");
+  const [graphId, setGraphId] = useState<string>(DEFAULT_GRAPH);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<BusinessSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<GraphFocusRequest | null>(null);
@@ -996,29 +993,48 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
     }
   };
 
+  const openLint = () => {
+    setLintOpen(true);
+    void runLint();
+  };
+
   const query = search.trim().toLowerCase();
+
+  const graphIds = useMemo(() => (data ? collectGraphIds(data) : []), [data]);
+  const activeGraph = graphId === ALL_GRAPHS || graphIds.includes(graphId) ? graphId : ALL_GRAPHS;
+  const graphOptions = useMemo(
+    () => [
+      { value: ALL_GRAPHS, label: "全部" },
+      ...graphIds.map((id) => ({ value: id, label: id })),
+    ],
+    [graphIds],
+  );
+  const view = useMemo(
+    () => (data ? filterByGraph(data, activeGraph) : null),
+    [data, activeGraph],
+  );
 
   const typeColors = useMemo(() => {
     const map = new Map<string, string>();
-    data?.types.forEach((type, index) => {
+    view?.types.forEach((type, index) => {
       map.set(type.id, TYPE_COLORS[index % TYPE_COLORS.length]);
     });
     return map;
-  }, [data]);
+  }, [view]);
 
   const relatedIds = useMemo(() => {
-    if (!data || !selectedId) return null;
+    if (!view || !selectedId) return null;
     const ids = new Set<string>([selectedId]);
-    for (const edge of data.edges) {
+    for (const edge of view.edges) {
       if (edge.from === selectedId) ids.add(edge.to);
       if (edge.to === selectedId) ids.add(edge.from);
     }
     return ids;
-  }, [data, selectedId]);
+  }, [view, selectedId]);
 
   const items = useMemo(() => {
-    if (!data) return [];
-    const base = businessItemsFor(data, category, query);
+    if (!view) return [];
+    const base = businessItemsFor(view, category, query);
     if (!relatedIds) return base;
     return base
       .filter((item) => item.kind === "objects" && relatedIds.has(item.id))
@@ -1027,11 +1043,11 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
         if (b.id === selectedId) return 1;
         return a.title.localeCompare(b.title, "zh-Hans-CN");
       });
-  }, [data, category, query, relatedIds, selectedId]);
+  }, [view, category, query, relatedIds, selectedId]);
 
   const selectedObject = useMemo(
-    () => (data && selectedId ? data.objects.find((o) => o.id === selectedId) : undefined),
-    [data, selectedId],
+    () => (view && selectedId ? view.objects.find((o) => o.id === selectedId) : undefined),
+    [view, selectedId],
   );
 
   const closeDetail = useCallback(() => setDetail(null), []);
@@ -1052,18 +1068,25 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
     setCategory(id);
   };
 
+  const chooseGraph = useCallback((id: string) => {
+    setGraphId(id);
+    setSelectedId(null);
+    setDetail(null);
+    setFocusRequest(null);
+  }, []);
+
   const focusInGraph = useCallback((id: string) => {
     setDetail(null);
     setFocusRequest({ id, nonce: Date.now() });
   }, []);
 
-  const graphTruncated = !!data && (data.edges_truncated || data.objects.length > 160);
+  const graphTruncated = !!view && (view.edges_truncated || view.objects.length > 160);
 
   return (
     <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
       {status.text ? <StatusText text={status.text} error={status.error} /> : null}
 
-      {!data ? null : !data.exists ? (
+      {!view ? null : !view.exists ? (
         <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">
           <p className="m-0 max-w-[380px] text-[13px] leading-relaxed text-muted">
             还没有知识数据。由任务通过 `PUT /v1/business` 写入后再刷新。
@@ -1071,44 +1094,6 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 min-[720px]:grid-cols-3 min-[1100px]:grid-cols-5">
-            {STAT_CARDS.map((card) => {
-              const active = category === card.id;
-              return (
-                <button
-                  key={card.id}
-                  type="button"
-                  className={cx(
-                    "group rounded-[14px] border bg-surface p-3.5 text-left shadow-[var(--rb-shadow)] transition hover:-translate-y-0.5 hover:border-accent/45",
-                    active ? "border-accent ring-1 ring-accent/20" : "border-border",
-                  )}
-                  onClick={() => chooseCategory(card.id)}
-                >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className="grid h-9 w-9 flex-none place-items-center rounded-[9px] text-white"
-                      style={{ backgroundColor: card.color }}
-                    >
-                      <StatIcon kind={card.id} />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="truncate text-[11px] font-medium tracking-wide text-muted">
-                        {card.label}
-                      </div>
-                      <div className="text-[22px] font-semibold leading-tight tabular-nums">
-                        {categoryCount(data, card.id)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex items-center justify-between border-t border-border pt-2 text-[11px] text-muted transition group-hover:text-accent">
-                    <span>{card.hint}</span>
-                    <span aria-hidden="true">→</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
           <section className="mt-4 overflow-hidden rounded-[14px] border border-border bg-surface shadow-[var(--rb-shadow)]">
             <div className="grid items-stretch min-[1100px]:h-[clamp(520px,70vh,820px)] min-[1100px]:grid-cols-[minmax(0,1fr)_320px]">
               <aside className="order-1 flex max-h-[70vh] min-h-0 flex-col border-b border-border min-[1100px]:order-2 min-[1100px]:max-h-none min-[1100px]:border-b-0 min-[1100px]:border-l">
@@ -1144,7 +1129,7 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
                         )}
                         onClick={() => chooseCategory(c.id)}
                       >
-                        {c.label} {categoryCount(data, c.id)}
+                        {c.label}
                       </button>
                     ))}
                   </div>
@@ -1175,11 +1160,11 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
                           (detail?.kind === item.kind && detail?.id === item.id);
                         const objectType =
                           item.kind === "objects"
-                            ? data.objects.find((o) => o.id === item.id)?.type
+                            ? view.objects.find((o) => o.id === item.id)?.type
                             : undefined;
                         const dot =
                           (objectType && typeColors.get(objectType)) ||
-                          STAT_CARDS.find((c) => c.id === item.kind)?.color ||
+                          CATEGORY_COLORS[item.kind] ||
                           TYPE_COLORS[0];
                         return (
                           <button
@@ -1216,20 +1201,37 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
               </aside>
 
               <div className="order-2 flex min-w-0 flex-col min-[1100px]:order-1">
-                <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-                  <div className="min-w-0">
+                <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <h2 className="m-0 text-sm font-semibold">知识图谱</h2>
-                    <p className="m-0 mt-0.5 text-xs text-muted">
-                      {`节点 = 对象，连线 = 关系，颜色 = 类型 · 点击节点高亮往来关系、右侧列出相关实体${graphTruncated ? " · 边已截断" : ""}`}
-                    </p>
+                    <div className="w-32">
+                      <Select
+                        value={activeGraph}
+                        onValueChange={chooseGraph}
+                        options={graphOptions}
+                        ariaLabel="切换图谱"
+                        className="px-2 py-1 text-[11px]"
+                      />
+                    </div>
                   </div>
-                  <span className="text-xs text-muted tabular-nums">
-                    {`${data.objects.length} 个对象 · ${data.edge_total || data.edges.length} 条边 · 只读`}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted tabular-nums">
+                      {`${view.edges.length} 条边${graphTruncated ? " · 已截断" : ""}`}
+                    </span>
+                    <button
+                      type="button"
+                      title="检查异常"
+                      aria-label="检查异常"
+                      className="flex-none rounded-full border border-border bg-surface/95 p-1 text-muted shadow-[var(--rb-shadow)] transition hover:text-text"
+                      onClick={openLint}
+                    >
+                      <BugIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </header>
                 <div className="min-h-0 flex-1">
                   <BusinessGraph
-                    data={data}
+                    data={view}
                     typeColors={typeColors}
                     selection={selectedId ? { kind: "objects", id: selectedId } : null}
                     query={query}
@@ -1244,39 +1246,61 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
         </>
       )}
 
-      <div className="mt-6 border-t border-border pt-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" disabled={linting} onClick={() => void runLint()}>
-            {linting ? "检查中…" : "检查异常"}
-          </Button>
-          {lint ? (
-            <span className="text-xs text-muted">
-              {`error ${lint.summary.error} · warn ${lint.summary.warn} · info ${lint.summary.info}`}
-            </span>
-          ) : null}
-        </div>
-        {lint ? (
-          <div className="mt-2 grid gap-2">
-            {lint.findings.length ? lint.findings.map((f, i) => (
-              <div key={`${f.code}-${i}`} className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-surface px-3 py-2 text-sm">
-                <Badge variant={f.level === "error" ? "closed" : f.level === "warn" ? "warn" : "info"}>{f.level}</Badge>
-                <span>{f.message}</span>
-                {f.ref ? <span className="font-mono text-xs text-muted">{f.ref}</span> : null}
-              </div>
-            )) : <p className="text-sm text-muted">没有发现异常。</p>}
-          </div>
-        ) : null}
-      </div>
-
-      {data?.exists && detail && (
+      {view?.exists && detail && (
         <Drawer title={`${categoryLabel(detail.kind)}详情`} onClose={closeDetail}>
           <BusinessDetail
-            data={data}
+            data={view}
             selection={detail}
             onSelect={openDetail}
             onFocus={focusInGraph}
           />
         </Drawer>
+      )}
+
+      {lintOpen && (
+        <Modal title="检查异常" onClose={() => setLintOpen(false)}>
+          {!lint ? (
+            <p className="m-0 text-sm text-muted">{linting ? "检查中…" : "还没有检查结果。"}</p>
+          ) : (
+            <>
+              <div className="mb-2.5 flex flex-wrap items-center gap-3">
+                <span className="text-xs text-muted">
+                  {`error ${lint.summary.error} · warn ${lint.summary.warn} · info ${lint.summary.info}`}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={linting}
+                  onClick={() => void runLint()}
+                >
+                  {linting ? "检查中…" : "重新检查"}
+                </Button>
+              </div>
+              <div className="grid gap-2">
+                {lint.findings.length ? (
+                  lint.findings.map((f, i) => (
+                    <div
+                      key={`${f.code}-${i}`}
+                      className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-surface px-3 py-2 text-sm"
+                    >
+                      <Badge
+                        variant={
+                          f.level === "error" ? "closed" : f.level === "warn" ? "warn" : "info"
+                        }
+                      >
+                        {f.level}
+                      </Badge>
+                      <span>{f.message}</span>
+                      {f.ref ? <span className="font-mono text-xs text-muted">{f.ref}</span> : null}
+                    </div>
+                  ))
+                ) : (
+                  <p className="m-0 text-sm text-muted">没有发现异常。</p>
+                )}
+              </div>
+            </>
+          )}
+        </Modal>
       )}
     </div>
   );

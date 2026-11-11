@@ -901,16 +901,20 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               id: r.id, name: r.name, fromType: r.fromType, toType: r.toType,
               kind: r.kind, cardinality: r.cardinality, direction: r.direction,
               risk: r.risk, semantics: r.semantics,
+              graph_id: r.graph_id, import_batch: r.import_batch,
               edge_count: relationEdges(map, r.id).length,
             }));
-            const edges: { relation: string; relation_name: string; from: string; to: string }[] = [];
+            const edges: { relation: string; relation_name: string; from: string; to: string; graph_id: string; import_batch: string; evidence: string | null }[] = [];
             let edgeTotal = 0;
             for (const r of map.relations) {
               const es = relationEdges(map, r.id);
               edgeTotal += es.length;
               for (const e of es) {
                 if (edges.length >= MAX_BUSINESS_EDGES) continue;
-                edges.push({ relation: r.id, relation_name: r.name, from: e.from, to: e.to });
+                edges.push({
+                  relation: r.id, relation_name: r.name, from: e.from, to: e.to,
+                  graph_id: e.graph_id, import_batch: e.import_batch, evidence: e.evidence ?? null,
+                });
               }
             }
             return reply(200, {

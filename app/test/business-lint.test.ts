@@ -90,3 +90,40 @@ test("报告落盘到运行时目录，能读回", () => {
   store.close();
   fs.rmSync(runtimeDir, { recursive: true, force: true });
 });
+
+test("图谱：按图谱统计，跨图谱边报 error", () => {
+  const store = new Store(":memory:");
+  replaceBusinessMap(store, {
+    version: 1,
+    types: [{ id: "service", name: "服务" }],
+    objects: [
+      { id: "service:a", type: "service", name: "a" },
+      { id: "service:c", type: "service", name: "c", graph_id: "codex", import_batch: "codex-62" },
+    ],
+    relations: [
+      { id: "rel_default", name: "links", fromType: "service", toType: "service" },
+      { id: "rel_codex", name: "links", fromType: "service", toType: "service", graph_id: "codex", import_batch: "codex-62" },
+    ],
+    edges: [
+      { relation: "rel_default", from: "service:a", to: "service:a", evidence: "a" },
+      { relation: "rel_codex", from: "service:c", to: "service:c", evidence: "c" },
+    ],
+    actions: [], terms: [],
+  });
+  const report = lintBusinessMap(store);
+  assert.deepEqual(report.counts.graphs.default, { objects: 1, relations: 1, edges: 1 });
+  assert.deepEqual(report.counts.graphs.codex, { objects: 1, relations: 1, edges: 1 });
+  assert.equal(report.summary.error, 0);
+  assert.equal(report.summary_by_graph.default.error, 0);
+  assert.equal(report.summary_by_graph.codex.error, 0);
+
+  // 手工改库造一条跨图谱边：起点在 default，边和关系在 codex
+  store.db.prepare("INSERT INTO business_edges(relation_id,from_id,to_id,evidence,updated_at,graph_id,import_batch) VALUES(?,?,?,?,?,?,?)")
+    .run("rel_codex", "service:a", "service:c", "", 0, "codex", "codex-62");
+  const bad = lintBusinessMap(store);
+  const codes = new Set(bad.findings.map((f) => f.code));
+  assert.ok(codes.has("edge.from_graph_mismatch"));
+  assert.ok(bad.summary.error >= 1);
+  assert.ok(bad.summary_by_graph.codex.error >= 1);
+  store.close();
+});

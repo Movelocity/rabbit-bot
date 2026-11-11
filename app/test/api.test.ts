@@ -306,9 +306,9 @@ test("业务知识：没有地图返回空；有地图返回对象/关系/动作
   assert.equal(d.exists, true);
   assert.equal(d.version, 1);
   assert.ok(d.types.length >= 5);
-  assert.ok(d.objects.some((o: any) => o.id === "project:rabbit-bot"));
-  assert.ok(d.relations.some((rel: any) => rel.id === "repo_belongs_to_project" && rel.edge_count === 1));
-  assert.ok(d.edges.some((e: any) => e.relation === "repo_belongs_to_project" && e.from === "repo:rabbit-bot" && e.to === "project:rabbit-bot"));
+  assert.ok(d.objects.some((o: any) => o.id === "project:rabbit-bot" && o.graph_id === "default" && o.import_batch === ""));
+  assert.ok(d.relations.some((rel: any) => rel.id === "repo_belongs_to_project" && rel.edge_count === 1 && rel.graph_id === "default"));
+  assert.ok(d.edges.some((e: any) => e.relation === "repo_belongs_to_project" && e.from === "repo:rabbit-bot" && e.to === "project:rabbit-bot" && e.graph_id === "default"));
   assert.ok(d.edge_total >= d.edges.length);
   assert.equal(d.edges_truncated, false);
   assert.ok(d.actions.some((a: any) => a.id === "deploy"));
@@ -320,18 +320,24 @@ test("业务知识：没有地图返回空；有地图返回对象/关系/动作
     body: JSON.stringify({
       version: 3,
       types: [{ id: "service", name: "服务" }],
-      objects: [{ id: "service:x", type: "service", name: "x" }],
+      objects: [
+        { id: "service:x", type: "service", name: "x" },
+        { id: "service:y", type: "service", name: "y", graph_id: "codex", import_batch: "codex-62" },
+      ],
       relations: [], edges: [], actions: [], terms: [],
     }),
   });
   assert.equal(put.status, 200, JSON.stringify(put.body));
   assert.equal(put.body.data.version, 3);
-  assert.ok(put.body.data.objects.some((o: any) => o.id === "service:x"));
+  assert.ok(put.body.data.objects.some((o: any) => o.id === "service:x" && o.graph_id === "default"));
+  assert.ok(put.body.data.objects.some((o: any) => o.id === "service:y" && o.graph_id === "codex" && o.import_batch === "codex-62"));
 
   // 只读 lint：报告异常但不改地图
   const lint = await call("/v1/business/lint");
   assert.equal(lint.status, 200, JSON.stringify(lint.body));
-  assert.equal(lint.body.data.counts.objects, 1);
+  assert.equal(lint.body.data.counts.objects, 2);
+  assert.deepEqual(lint.body.data.counts.graphs.default, { objects: 1, relations: 0, edges: 0 });
+  assert.deepEqual(lint.body.data.counts.graphs.codex, { objects: 1, relations: 0, edges: 0 });
   assert.ok(Array.isArray(lint.body.data.findings));
 
   fs.rmSync(target, { recursive: true, force: true });

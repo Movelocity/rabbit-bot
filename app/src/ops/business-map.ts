@@ -24,6 +24,8 @@ export interface BusinessObject {
   key?: { kind?: string; value: string };
   source?: { kind?: string; value: string };
   tags?: string[];
+  graph_id: string;
+  import_batch: string;
 }
 
 export type MappingKind = "manual" | "file";
@@ -44,6 +46,8 @@ export interface BusinessRelation {
   direction?: "forward" | "both";
   risk?: "low" | "medium" | "high";
   semantics?: string;
+  graph_id: string;
+  import_batch: string;
 }
 
 export interface BusinessAction {
@@ -65,6 +69,9 @@ export interface BusinessEdge {
   from: string;
   to: string;
   relation: string;
+  graph_id: string;
+  import_batch: string;
+  evidence?: string | null;
 }
 
 export interface BusinessMap {
@@ -147,6 +154,23 @@ function strList(v: unknown, max = 50): string[] {
   return [...new Set(v.map((x) => String(x ?? "").trim()).filter(Boolean))].slice(0, max);
 }
 
+export const DEFAULT_GRAPH_ID = "default";
+const MAX_GRAPH_ID_LEN = 100;
+const MAX_IMPORT_BATCH_LEN = 100;
+
+/** 图谱名：缺省/空白都落到默认图谱；超过长度直接报错，避免脏值进库。 */
+function graphId(v: unknown, file: string, where: string): string {
+  const raw = v === undefined || v === null ? "" : String(v).trim();
+  if (raw.length > MAX_GRAPH_ID_LEN) fail(file, `${where} 的 graph_id 超过 ${MAX_GRAPH_ID_LEN} 字符`);
+  return raw || DEFAULT_GRAPH_ID;
+}
+
+function importBatch(v: unknown, file: string, where: string): string {
+  const raw = v === undefined || v === null ? "" : String(v).trim();
+  if (raw.length > MAX_IMPORT_BATCH_LEN) fail(file, `${where} 的 import_batch 超过 ${MAX_IMPORT_BATCH_LEN} 字符`);
+  return raw;
+}
+
 function slug(o: Pick<BusinessObject, "id" | "key" | "name">): string {
   const fromId = String(o.id ?? "").split(":").pop() ?? "";
   return fromId || String(o.key?.value ?? "").trim() || String(o.name ?? "").trim();
@@ -195,6 +219,8 @@ function normalizeObjects(raw: unknown, file: string): BusinessObject[] {
       key: key && typeof key === "object" ? { kind: key.kind === undefined ? undefined : String(key.kind), value: String(key.value ?? "") } : undefined,
       source: source && typeof source === "object" ? { kind: source.kind === undefined ? undefined : String(source.kind), value: String(source.value ?? "") } : undefined,
       tags: strList((x as any).tags),
+      graph_id: graphId((x as any).graph_id ?? (x as any).graphId, file, `objects[${i}]`),
+      import_batch: importBatch((x as any).import_batch ?? (x as any).importBatch, file, `objects[${i}]`),
     });
   }
   return out;
@@ -237,6 +263,8 @@ function normalizeRelations(raw: unknown, file: string): BusinessRelation[] {
       direction: (x as any).direction === undefined ? "forward" : String((x as any).direction) as any,
       risk: (x as any).risk === undefined ? undefined : String((x as any).risk) as any,
       semantics: (x as any).semantics === undefined ? undefined : String((x as any).semantics),
+      graph_id: graphId((x as any).graph_id ?? (x as any).graphId, file, `relations[${i}]`),
+      import_batch: importBatch((x as any).import_batch ?? (x as any).importBatch, file, `relations[${i}]`),
     };
     if (normalized.cardinality && !["1:1", "1:N", "N:1", "N:N"].includes(normalized.cardinality)) {
       fail(file, `relations[${i}].cardinality 只能是 1:1 / 1:N / N:1 / N:N`);
@@ -407,7 +435,10 @@ function buildMapFromStore(store: Store): BusinessMap {
     id: String(t.id), name: t.name ?? "", description: t.description ?? "",
   }));
   const objects: BusinessObject[] = store.listBusinessObjects().map((o) => {
-    const obj: BusinessObject = { id: String(o.id), type: String(o.type), name: String(o.name ?? "") };
+    const obj: BusinessObject = {
+      id: String(o.id), type: String(o.type), name: String(o.name ?? ""),
+      graph_id: String(o.graph_id ?? DEFAULT_GRAPH_ID), import_batch: String(o.import_batch ?? ""),
+    };
     if (o.description) obj.description = String(o.description);
     if (o.key_value) obj.key = { ...(o.key_kind ? { kind: String(o.key_kind) } : {}), value: String(o.key_value) };
     if (o.source_value) obj.source = { ...(o.source_kind ? { kind: String(o.source_kind) } : {}), value: String(o.source_value) };
@@ -424,6 +455,7 @@ function buildMapFromStore(store: Store): BusinessMap {
     ...(r.risk ? { risk: r.risk } : {}),
     ...(r.semantics ? { semantics: r.semantics } : {}),
     kind: "manual", mapping: { kind: "manual" },
+    graph_id: String(r.graph_id ?? DEFAULT_GRAPH_ID), import_batch: String(r.import_batch ?? ""),
   } as BusinessRelation));
   const actions: BusinessAction[] = store.listBusinessActions().map((a) => ({
     id: String(a.id), name: a.name ?? "",
@@ -443,7 +475,11 @@ function buildMapFromStore(store: Store): BusinessMap {
   for (const e of store.listBusinessEdges()) {
     const list = edges.get(String(e.relation_id));
     if (!list) continue;
-    list.push({ from: String(e.from_id), to: String(e.to_id), relation: String(e.relation_id) });
+    list.push({
+      from: String(e.from_id), to: String(e.to_id), relation: String(e.relation_id),
+      graph_id: String(e.graph_id ?? DEFAULT_GRAPH_ID), import_batch: String(e.import_batch ?? ""),
+      evidence: e.evidence == null ? null : String(e.evidence),
+    });
   }
   return {
     dir: meta.dir ?? "", version: Number(meta.version ?? 1),
@@ -467,6 +503,7 @@ export function importBusinessMap(store: Store, dir: string): BusinessMap | null
   if (!map) return null;
   const edges = map.relations.flatMap((r) => relationEdges(map, r.id).map((e) => ({
     relation: e.relation, from: e.from, to: e.to,
+    graph_id: e.graph_id, import_batch: e.import_batch,
   })));
   store.replaceBusinessMap({
     version: map.version, types: map.types, objects: map.objects, relations: map.relations,
@@ -496,8 +533,12 @@ export function businessSnapshot(store: Store) {
     relations: map.relations.map((r) => ({
       id: r.id, name: r.name, fromType: r.fromType, toType: r.toType,
       cardinality: r.cardinality, direction: r.direction, risk: r.risk, semantics: r.semantics,
+      graph_id: r.graph_id, import_batch: r.import_batch,
     })),
-    edges: [...map.edges.values()].flat().map((e) => ({ relation: e.relation, from: e.from, to: e.to })),
+    edges: [...map.edges.values()].flat().map((e) => ({
+      relation: e.relation, from: e.from, to: e.to, graph_id: e.graph_id, import_batch: e.import_batch,
+      evidence: e.evidence ?? null,
+    })),
     actions: map.actions,
     terms: map.terms,
   };
@@ -521,6 +562,16 @@ function validateSnapshot(raw: unknown): Parameters<Store["replaceBusinessMap"]>
     if (!Array.isArray(v)) throw new BusinessMapError(`${name} 要是数组`);
     return v;
   };
+  const graphOf = (v: unknown, where: string, fallback = DEFAULT_GRAPH_ID): string => {
+    const raw = v === undefined || v === null ? "" : String(v).trim();
+    if (raw.length > MAX_GRAPH_ID_LEN) throw new BusinessMapError(`${where} 的 graph_id 超过 ${MAX_GRAPH_ID_LEN} 字符`);
+    return raw || fallback;
+  };
+  const batchOf = (v: unknown, where: string, fallback = ""): string => {
+    const raw = v === undefined || v === null ? "" : String(v).trim();
+    if (raw.length > MAX_IMPORT_BATCH_LEN) throw new BusinessMapError(`${where} 的 import_batch 超过 ${MAX_IMPORT_BATCH_LEN} 字符`);
+    return raw || fallback;
+  };
   const types = arr(x.types, "types").map((t, i) => {
     const id = String(t?.id ?? "").trim();
     if (!id) throw new BusinessMapError(`types[${i}].id 不能为空`);
@@ -542,10 +593,13 @@ function validateSnapshot(raw: unknown): Parameters<Store["replaceBusinessMap"]>
     return {
       id, type, name: String(o?.name ?? ""), description: String(o?.description ?? ""), key, source,
       aliases: jsonList(o?.aliases), tags: jsonList(o?.tags),
+      graph_id: graphOf(o?.graph_id ?? o?.graphId, `objects[${i}]`),
+      import_batch: batchOf(o?.import_batch ?? o?.importBatch, `objects[${i}]`),
     };
   });
   const objectIds = new Set(objects.map((o) => o.id));
   if (objectIds.size !== objects.length) throw new BusinessMapError("objects 里 id 重复");
+  const objectGraph = new Map(objects.map((o) => [o.id, o.graph_id]));
 
   const relations = arr(x.relations, "relations").map((r, i) => {
     const id = String(r?.id ?? "").trim();
@@ -563,23 +617,40 @@ function validateSnapshot(raw: unknown): Parameters<Store["replaceBusinessMap"]>
     return {
       id, name: String(r?.name ?? ""), fromType, toType, cardinality, direction, risk,
       semantics: r?.semantics ? String(r.semantics) : undefined,
+      graph_id: graphOf(r?.graph_id ?? r?.graphId, `relations[${i}]`),
+      import_batch: batchOf(r?.import_batch ?? r?.importBatch, `relations[${i}]`),
     };
   });
   const relationIds = new Set(relations.map((r) => r.id));
   if (relationIds.size !== relations.length) throw new BusinessMapError("relations 里 id 重复");
+  const relationById = new Map(relations.map((r) => [r.id, r]));
 
   const seenEdge = new Set<string>();
   const edges = arr(x.edges, "edges").map((e, i) => {
     const relation = String(e?.relation ?? "").trim();
     const from = String(e?.from ?? "").trim();
     const to = String(e?.to ?? "").trim();
-    if (!relationIds.has(relation)) throw new BusinessMapError(`edges[${i}] 的 relation「${relation}」不存在`);
+    const rel = relationById.get(relation);
+    if (!rel) throw new BusinessMapError(`edges[${i}] 的 relation「${relation}」不存在`);
     if (!objectIds.has(from)) throw new BusinessMapError(`edges[${i}] 的 from「${from}」不存在`);
     if (!objectIds.has(to)) throw new BusinessMapError(`edges[${i}] 的 to「${to}」不存在`);
+    const graph = graphOf(e?.graph_id ?? e?.graphId, `edges[${i}]`, rel.graph_id);
+    if (graph !== rel.graph_id) {
+      throw new BusinessMapError(`edges[${i}] 的 graph_id「${graph}」和关系 ${relation} 的「${rel.graph_id}」不一致`);
+    }
+    if (objectGraph.get(from) !== graph) {
+      throw new BusinessMapError(`edges[${i}] 的 from「${from}」属于图谱「${objectGraph.get(from)}」，不是「${graph}」`);
+    }
+    if (objectGraph.get(to) !== graph) {
+      throw new BusinessMapError(`edges[${i}] 的 to「${to}」属于图谱「${objectGraph.get(to)}」，不是「${graph}」`);
+    }
     const k = `${relation}|${from}|${to}`;
     if (seenEdge.has(k)) throw new BusinessMapError(`edges 重复：${k}`);
     seenEdge.add(k);
-    return { relation, from, to, evidence: e?.evidence ? String(e.evidence) : null };
+    return {
+      relation, from, to, evidence: e?.evidence ? String(e.evidence) : null,
+      graph_id: graph, import_batch: batchOf(e?.import_batch ?? e?.importBatch, `edges[${i}]`, rel.import_batch),
+    };
   });
 
   const actions = arr(x.actions, "actions").map((a, i) => {
@@ -653,7 +724,10 @@ function computeEdges(map: BusinessMap, rel: BusinessRelation): BusinessEdge[] {
   if (kind === "manual") {
     for (const e of rel.mapping.edges ?? []) {
       if (!map.byId.has(e.from) || !map.byId.has(e.to)) continue;
-      out.push({ from: e.from, to: e.to, relation: rel.id });
+      out.push({
+        from: e.from, to: e.to, relation: rel.id,
+        graph_id: rel.graph_id, import_batch: rel.import_batch,
+      });
       if (out.length >= MAX_EDGES_PER_RELATION) break;
     }
   } else {
@@ -672,7 +746,10 @@ function computeEdges(map: BusinessMap, rel: BusinessRelation): BusinessEdge[] {
       for (const value of selectValues(data, rel.mapping.select)) {
         const from = matchObject(sources, value);
         if (!from) continue;
-        out.push({ from: from.id, to: target.id, relation: rel.id });
+        out.push({
+          from: from.id, to: target.id, relation: rel.id,
+          graph_id: rel.graph_id, import_batch: rel.import_batch,
+        });
         if (out.length >= MAX_EDGES_PER_RELATION) break;
       }
       if (out.length >= MAX_EDGES_PER_RELATION) break;
@@ -694,7 +771,10 @@ function outEdges(map: BusinessMap, id: string): BusinessEdge[] {
     const both = rel.direction === "both";
     for (const e of computeEdges(map, rel)) {
       if (e.from === id) out.push(e);
-      else if (both && e.to === id) out.push({ from: id, to: e.from, relation: rel.id });
+      else if (both && e.to === id) out.push({
+        from: id, to: e.from, relation: rel.id,
+        graph_id: e.graph_id, import_batch: e.import_batch,
+      });
     }
   }
   return out;
@@ -706,7 +786,10 @@ function inEdges(map: BusinessMap, id: string): BusinessEdge[] {
     const both = rel.direction === "both";
     for (const e of computeEdges(map, rel)) {
       if (e.to === id) out.push(e);
-      else if (both && e.from === id) out.push({ from: e.to, to: id, relation: rel.id });
+      else if (both && e.from === id) out.push({
+        from: e.to, to: id, relation: rel.id,
+        graph_id: e.graph_id, import_batch: e.import_batch,
+      });
     }
   }
   return out;

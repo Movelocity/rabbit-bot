@@ -113,16 +113,20 @@ CREATE TABLE IF NOT EXISTS business_types (
 CREATE TABLE IF NOT EXISTS business_objects (
   id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
   key_kind TEXT, key_value TEXT, source_kind TEXT, source_value TEXT,
-  aliases TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]'
+  aliases TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]',
+  graph_id TEXT NOT NULL DEFAULT 'default', import_batch TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_business_objects_type ON business_objects(type);
 CREATE TABLE IF NOT EXISTS business_relations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', from_type TEXT NOT NULL, to_type TEXT NOT NULL,
-  cardinality TEXT, direction TEXT, risk TEXT, semantics TEXT
+  cardinality TEXT, direction TEXT, risk TEXT, semantics TEXT,
+  graph_id TEXT NOT NULL DEFAULT 'default', import_batch TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_business_relations_type ON business_relations(from_type);
 CREATE TABLE IF NOT EXISTS business_edges (
   relation_id TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL,
   evidence TEXT, updated_at INTEGER NOT NULL DEFAULT 0,
+  graph_id TEXT NOT NULL DEFAULT 'default', import_batch TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(relation_id, from_id, to_id)
 );
 CREATE INDEX IF NOT EXISTS idx_business_edges_from ON business_edges(from_id);
@@ -310,6 +314,14 @@ export class Store {
       "doc_path TEXT NOT NULL DEFAULT ''",
     ]) {
       try { this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`); } catch { /* 已存在 */ }
+    }
+    // 业务地图图谱维度（2026-11-11）：对象/关系/边各自带 graph_id 与导入批次；老库补列
+    for (const table of ["business_objects", "business_relations", "business_edges"]) {
+      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN graph_id TEXT NOT NULL DEFAULT 'default'`); } catch { /* 已存在 */ }
+      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN import_batch TEXT NOT NULL DEFAULT ''`); } catch { /* 已存在 */ }
+    }
+    for (const table of ["business_objects", "business_relations", "business_edges"]) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_graph ON ${table}(graph_id)`);
     }
     // 长任务提醒（2026-11-11）：同一轮执行只提醒一次；老库补列
     try { this.db.exec("ALTER TABLE tasks ADD COLUMN long_run_notified_at INTEGER"); } catch { /* 已存在 */ }
@@ -1080,13 +1092,13 @@ export class Store {
     return this.db.prepare("SELECT id,name,description FROM business_types ORDER BY id").all() as any[];
   }
   listBusinessObjects(): any[] {
-    return this.db.prepare("SELECT id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags FROM business_objects ORDER BY id").all() as any[];
+    return this.db.prepare("SELECT id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags,graph_id,import_batch FROM business_objects ORDER BY id").all() as any[];
   }
   listBusinessRelations(): any[] {
-    return this.db.prepare("SELECT id,name,from_type,to_type,cardinality,direction,risk,semantics FROM business_relations ORDER BY id").all() as any[];
+    return this.db.prepare("SELECT id,name,from_type,to_type,cardinality,direction,risk,semantics,graph_id,import_batch FROM business_relations ORDER BY id").all() as any[];
   }
   listBusinessEdges(): any[] {
-    return this.db.prepare("SELECT relation_id,from_id,to_id,evidence,updated_at FROM business_edges ORDER BY relation_id,from_id,to_id").all() as any[];
+    return this.db.prepare("SELECT relation_id,from_id,to_id,evidence,updated_at,graph_id,import_batch FROM business_edges ORDER BY relation_id,from_id,to_id").all() as any[];
   }
   listBusinessActions(): any[] {
     return this.db.prepare("SELECT id,name,applies_to,risk,requires_relations,description FROM business_actions ORDER BY id").all() as any[];
@@ -1098,9 +1110,9 @@ export class Store {
   replaceBusinessMap(data: {
     version: number;
     types: { id: string; name?: string; description?: string }[];
-    objects: { id: string; type: string; name?: string; description?: string; key?: { kind?: string; value: string } | null; source?: { kind?: string; value: string } | null; aliases?: string[]; tags?: string[] }[];
-    relations: { id: string; name?: string; fromType: string; toType: string; cardinality?: string; direction?: string; risk?: string; semantics?: string }[];
-    edges: { relation: string; from: string; to: string; evidence?: string | null }[];
+    objects: { id: string; type: string; name?: string; description?: string; key?: { kind?: string; value: string } | null; source?: { kind?: string; value: string } | null; aliases?: string[]; tags?: string[]; graph_id?: string; import_batch?: string }[];
+    relations: { id: string; name?: string; fromType: string; toType: string; cardinality?: string; direction?: string; risk?: string; semantics?: string; graph_id?: string; import_batch?: string }[];
+    edges: { relation: string; from: string; to: string; evidence?: string | null; graph_id?: string; import_batch?: string }[];
     actions: { id: string; name?: string; appliesTo?: string[]; risk?: string; requiresRelations?: string[]; description?: string }[];
     terms: { term: string; objectId: string; note?: string }[];
   }): void {
@@ -1111,19 +1123,21 @@ export class Store {
       }
       const typeStmt = this.db.prepare("INSERT INTO business_types(id,name,description) VALUES(?,?,?)");
       for (const t of data.types) typeStmt.run(t.id, t.name ?? "", t.description ?? "");
-      const objStmt = this.db.prepare(`INSERT INTO business_objects(id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`);
+      const objStmt = this.db.prepare(`INSERT INTO business_objects(id,type,name,description,key_kind,key_value,source_kind,source_value,aliases,tags,graph_id,import_batch)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
       for (const o of data.objects) {
         objStmt.run(o.id, o.type, o.name ?? "", o.description ?? "", o.key?.kind ?? null, o.key?.value ?? null,
-          o.source?.kind ?? null, o.source?.value ?? null, JSON.stringify(o.aliases ?? []), JSON.stringify(o.tags ?? []));
+          o.source?.kind ?? null, o.source?.value ?? null, JSON.stringify(o.aliases ?? []), JSON.stringify(o.tags ?? []),
+          o.graph_id ?? "default", o.import_batch ?? "");
       }
-      const relStmt = this.db.prepare(`INSERT INTO business_relations(id,name,from_type,to_type,cardinality,direction,risk,semantics)
-        VALUES(?,?,?,?,?,?,?,?)`);
+      const relStmt = this.db.prepare(`INSERT INTO business_relations(id,name,from_type,to_type,cardinality,direction,risk,semantics,graph_id,import_batch)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`);
       for (const r of data.relations) {
-        relStmt.run(r.id, r.name ?? "", r.fromType, r.toType, r.cardinality ?? null, r.direction ?? null, r.risk ?? null, r.semantics ?? null);
+        relStmt.run(r.id, r.name ?? "", r.fromType, r.toType, r.cardinality ?? null, r.direction ?? null, r.risk ?? null, r.semantics ?? null,
+          r.graph_id ?? "default", r.import_batch ?? "");
       }
-      const edgeStmt = this.db.prepare("INSERT INTO business_edges(relation_id,from_id,to_id,evidence,updated_at) VALUES(?,?,?,?,?)");
-      for (const e of data.edges) edgeStmt.run(e.relation, e.from, e.to, e.evidence ?? null, now);
+      const edgeStmt = this.db.prepare("INSERT INTO business_edges(relation_id,from_id,to_id,evidence,updated_at,graph_id,import_batch) VALUES(?,?,?,?,?,?,?)");
+      for (const e of data.edges) edgeStmt.run(e.relation, e.from, e.to, e.evidence ?? null, now, e.graph_id ?? "default", e.import_batch ?? "");
       const actStmt = this.db.prepare(`INSERT INTO business_actions(id,name,applies_to,risk,requires_relations,description)
         VALUES(?,?,?,?,?,?)`);
       for (const a of data.actions) {
