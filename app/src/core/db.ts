@@ -693,7 +693,7 @@ export class Store {
 
   // ---------- 谈资（话题库） ----------
   // 和 memories 分开存：记忆是「对方说过的具体事实」，谈资是「可以拿来聊的东西」。
-  // 混一张表的后果是话题把 maxMemoriesPerUser 的额度吃掉，真正该记住的事被挤出去。
+  // 混一张表的后果是谈资把记忆的检索结果挤掉，真正该记住的事被埋。
   addTopic(t: { content: string; kind?: string; pool_id?: string | null; source?: string; now: number }): number {
     const r = this.db.prepare(
       "INSERT INTO topics(content,kind,pool_id,source,created_at) VALUES(?,?,?,?,?)",
@@ -838,7 +838,7 @@ export class Store {
    */
   visibleMemories(
     userId: string, viewingPool: Pool, limit: number,
-    opts: { at?: number; includeExpired?: boolean; kinds?: string[]; q?: string } = {},
+    opts: { at?: number; includeExpired?: boolean; q?: string } = {},
   ): any[] {
     const base = `SELECT id,kind,content,source_pool_id,scope,created_at,valid_from,valid_to,superseded_by,source_seq_start,source_seq_end
       FROM memories WHERE user_id=? AND (
@@ -855,10 +855,6 @@ export class Store {
     if (opts.q) {
       valid += " AND content LIKE ? ESCAPE '\\'";
       args.push(`%${opts.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-    }
-    if (opts.kinds?.length) {
-      valid += ` AND kind IN (${opts.kinds.map(() => "?").join(",")})`;
-      args.push(...opts.kinds);
     }
     args.push(limit);
     return this.db.prepare(`${base}${valid} ORDER BY id DESC LIMIT ?`).all(...args) as any[];

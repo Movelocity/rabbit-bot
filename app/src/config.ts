@@ -29,7 +29,7 @@ export interface Config {
     /** 单条消息字数上限，超了只提醒不拦。默认 160 */
     maxChars?: number;
   };
-  context: { recentContextMessages: number; maxUnreadPerPool: number; maxMemoriesPerUser: number };
+  context: { recentContextMessages: number; maxUnreadPerPool: number };
   handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {
