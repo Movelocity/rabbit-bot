@@ -14,6 +14,7 @@ import {
   taskDisplayName, updateTask, type Task,
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
+import { setTaskEventNotifier } from "./core/task-events.ts";
 import { isRunnerAlive, startTask, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
@@ -188,6 +189,7 @@ export class App {
       log: (m) => this.log.info(`[sched] ${m}`), warn: (m) => this.log.warn(`[sched] ${m}`),
     });
     this.hub.scheduler = this.scheduler;
+    setTaskEventNotifier(this.store, () => this.scheduler.notifyTaskEvent());
     const baseToolDeps = {
       store: this.store, hub: this.hub, cfg, now: () => this.clock.now(),
       currentWake: () => this.activeWake,
@@ -240,6 +242,7 @@ export class App {
     await this.queue.idle();
     await this.hub.stopAdapters();
     await this.engine.dispose();
+    setTaskEventNotifier(this.store, null);
     this.store.close();
   }
 

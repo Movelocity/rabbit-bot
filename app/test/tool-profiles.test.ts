@@ -20,7 +20,7 @@ function namesFor(profile: "ufa" | "wa", mode: "host" | "docker", approval: bool
 test("UFA：host + approval=true 时包含 terminal", () => {
   const names = namesFor("ufa", "host", true);
   assert.ok(names.includes("terminal"), `该有 terminal：${names.join(",")}`);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "read_file", "rb"]) {
+  for (const name of ["chat", "memory", "knowledge", "plan", "approval", "task", "read_file", "rb"]) {
     assert.ok(names.includes(name), `UFA 少了 ${name}：${names.join(",")}`);
   }
   assert.ok(!names.includes("write_file"), `UFA 不该有 write_file：${names.join(",")}`);
@@ -39,7 +39,7 @@ test("UFA：docker 模式始终有 terminal；host 无审批时没有", () => {
 test("WA：始终有 terminal，且没有 chat/task/approval", () => {
   for (const [mode, approval] of [["host", true], ["docker", false]] as const) {
     const names = namesFor("wa", mode, approval);
-    assert.deepEqual([...names].sort(), ["rb", "read_file", "terminal", "write_file"]);
+    assert.deepEqual([...names].sort(), ["knowledge", "rb", "read_file", "terminal", "write_file"]);
   }
 });
 

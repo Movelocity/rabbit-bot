@@ -146,13 +146,14 @@ test("rb 的运维查询照旧能跑", async () => {
 
 // ---------- 文件工具：对齐 hermes 的 read_file / write_file ----------
 
-function setupFs() {
+function setupFs(topics = true) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-fs-"));
   const base = loadConfig();
   // 这组测的是「沙盒文件工具」，跟本机配置无关：固定成容器模式，免得 local.json 切了 host 就红
   const cfg = {
     ...base,
     dataDir,
+    topics: { enabled: topics },
     exec: { ...base.exec, dir: path.join(dataDir, "sandbox"), shell: { ...base.exec.shell, mode: "docker" as const } },
   };
   fs.mkdirSync(cfg.exec.dir, { recursive: true });
@@ -181,6 +182,15 @@ test("write_file → read_file：中文和空格路径都原样", async () => {
   const r = await run("read_file", { path: "topics/生活 杂记.md" });
   assert.equal(r.details?.ok, true, r.text);
   assert.equal(r.text, "今天吃了米饭");
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("话题库关闭：read_file / write_file 都拒绝 topics 路径", async () => {
+  const { dataDir, run } = setupFs(false);
+  const r = await run("read_file", { path: "topics/INDEX.md" });
+  assert.equal(r.details?.ok, false, "关闭后不该能读话题库");
+  const w = await run("write_file", { path: "topics/新条目.md", content: "x" });
+  assert.equal(w.details?.ok, false, "关闭后不该能写话题库");
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 

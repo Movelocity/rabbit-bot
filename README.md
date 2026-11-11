@@ -27,7 +27,7 @@ mock 适配器(模拟) ──┘        │
 
 | 文件 | 作用 |
 |---|---|
-| `src/core/db.ts` | SQLite：pools、messages、cursors、users/identities（跨平台 user_id）、plans/plan_fires、memories（来源池+可见范围）、handoffs、wake_log、usage_daily、kv（暂停开关） |
+| `src/core/db.ts` | SQLite：pools、messages、cursors、users/identities（跨平台 user_id）、plans/plan_fires、memories（来源池+可见范围）、knowledge（可复用业务知识）、handoffs、wake_log、usage_daily、kv（暂停开关） |
 | `src/core/hub.ts` | 入池、未读收集与游标推进、send（表情解析/确认等待/收集新消息） |
 | `src/core/scheduler.ts` | 群聊 tick、任务事件 batch tick、活跃期短 tick、私聊/被@去抖（含最长等待） |
 | `src/core/queue.ts` | 单实例 FIFO 运行队列，排队中同类唤醒合并 |
@@ -40,8 +40,9 @@ mock 适配器(模拟) ──┘        │
 | `src/core/approval.ts` / `task-approval.ts` | 宿主机命令审批 / 任务发布审批：审批提示走系统消息、超时按拒绝；只有被闸门认领的裁决动作不进池，同一聊天里的正常文字照常入池（审批房可能就是私聊） |
 | `src/core/task-usage.ts` / `src/ops/task-stats.ts` | 从 `data/tasks/<id>/runner.jsonl` 聚合任务执行耗时、token 与费用；进程退出时落库，管理台任务统计看板读取 |
 | `src/ops/business-map.ts` | 业务地图：加载/校验 `runtime/business` 的对象、关系、动作、术语，供 `map` 工具、任务文档和管理台只读展示 |
+| `src/ops/knowledge.ts` | 知识库：可复用的业务知识，一篇一条，支持 add/get/search/update/archive |
 | `src/agent/engine.ts` | pi SDK 封装：会话、用量统计、每日上限中途中止、超时、上下文上限 → 交接文档 → 新会话 |
-| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`plan`（md 看板：create/list/goal-check/progress/archive）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
+| `src/agent/tools.ts` | 工具：`chat`（send/skip/view/list/search）、`memory`（recent/search/add/expire/update）、`knowledge`（add/get/search/list/update/archive）、`plan`（md 看板：create/list/goal-check/progress/archive）、`approval`、`task`、`worker`、`read_file`/`write_file`/`terminal`、`rb`（只做运维查询） |
 | `src/agent/prompt.ts` | 系统提示词与唤醒提示（紧凑格式，池用短别名 p1/p2 省 token） |
 | `src/agent/faux.ts` | 桩 LLM（pi 自带 faux provider + 确定性脚本），用于模拟器/测试 |
 | `src/adapters/` | `types.ts` 插件接口；`feishu.ts`；`matrix.ts`；`mock.ts` |
@@ -83,7 +84,8 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `adapters.feishu.reactions` | true | 处理“表情回复”事件（需在后台订阅，见下） |
 | `adapters.feishu.logRawEmoji` | true | 把含表情的入站原始 content 记到 app.log，便于核对 |
 | `context.recentContextMessages` | 8 | 池首次出现在会话中时附带的近期上下文条数 |
-| `runtimeDir` | `~/.config/rabbit-bot/runtime` | 人设 / 提示词 / 话题库的真身目录（`RABBIT_BOT_RUNTIME` 可改），见 app/README「定制它」 |
+| `topics.enabled` | false | 可选的话题库扩展。关掉时不创建 / 不挂载 `runtime/topics`，工具描述不提示，`read_file` / `write_file` 也拒绝 `topics/` 路径 |
+| `runtimeDir` | `~/.config/rabbit-bot/runtime` | 人设 / 提示词的真身目录（`RABBIT_BOT_RUNTIME` 可改），见 app/README「定制它」 |
 
 任务事件（进度、开始、退出、note、完成、失败、阻塞）都不逐条唤醒 UFA；它们先写进任务池，由下一次任务事件 tick 批量带走。审批仍走立即唤醒。
 

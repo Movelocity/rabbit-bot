@@ -22,6 +22,12 @@ export interface Config {
   dataDir: string;
   logDir: string;
   /**
+   * 可选扩展：话题库（runtimeDir/topics）。
+   * 关掉时不创建、不挂载、不给工具提示，read_file / write_file 也拒绝 topics 路径。
+   * 默认关；它用于闲聊谈资，业务知识走 knowledge 工具。
+   */
+  topics?: { enabled: boolean };
+  /**
    * 跨设备路径：只写 `~` 或相对路径，加载时展开。
    * 仓库和配置里都不写死用户名，换一台 Mac 不用改。
    */

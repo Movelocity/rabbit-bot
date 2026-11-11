@@ -58,13 +58,23 @@ const call = async (p: string, init: RequestInit & { auth?: string | null } = {}
 };
 const post = (p: string, data: unknown = {}) => call(p, { method: "POST", body: JSON.stringify(data) });
 
-test("POST /v1/tasks：name 缺失 / work_dir 缺失 / 相对 / 不存在 / executor 非法都 400", async () => {
+test("POST /v1/tasks：work_dir / goal / executor 非法都 400", async () => {
   assert.equal((await post("/v1/tasks", { name: "#干活", goal: "干活" })).status, 400);
-  assert.equal((await post("/v1/tasks", { goal: "干活", work_dir: workDir })).status, 400);
-  assert.equal((await post("/v1/tasks", { name: "  ", goal: "干活", work_dir: workDir })).status, 400);
+  assert.equal((await post("/v1/tasks", { name: "#干活", work_dir: workDir })).status, 400);
   assert.equal((await post("/v1/tasks", { name: "#干活", goal: "干活", work_dir: "relative/dir" })).status, 400);
   assert.equal((await post("/v1/tasks", { name: "#干活", goal: "干活", work_dir: path.join(dir, "nope") })).status, 400);
   assert.equal((await post("/v1/tasks", { name: "#干活", goal: "干活", work_dir: workDir, executor: "other" })).status, 400);
+});
+
+test("POST /v1/tasks：name 可选，建立后返回任务号", async () => {
+  const created = await post("/v1/tasks", { goal: "干活", work_dir: workDir });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const t = created.body.data;
+  assert.equal(t.name, `#任务${t.id}`);
+
+  const blank = await post("/v1/tasks", { name: "  ", goal: "干活", work_dir: workDir });
+  assert.equal(blank.status, 201, JSON.stringify(blank.body));
+  assert.equal(blank.body.data.name, `#任务${blank.body.data.id}`);
 });
 
 test("POST /v1/tasks 默认 pending_approval：只登记，不写文档也不启动", async () => {

@@ -187,7 +187,7 @@ test("任务事件 tick 到点只入队一次，把所有任务池未读合并�
   s.stop();
 });
 
-test("任务事件到达后要等到任务 tick 才唤醒", () => {
+test("任务事件：3 分钟内没有任务唤醒，事件到了立刻 tick", () => {
   const kinds: Record<string, "private" | "group" | "task"> = { t1: "task" };
   const { clock, wakes, s, state } = setup(
     { tickMs: 180_000, taskTickMs: 45_000 },
@@ -196,12 +196,43 @@ test("任务事件到达后要等到任务 tick 才唤醒", () => {
   s.start();
   clock.advance(10_000);
   state.unread = ["t1"]; // 事件此刻写进任务池
-  assert.equal(wakes.length, 0, "事件本身不叫醒");
-  clock.advance(34_999);
-  assert.equal(wakes.length, 0);
-  clock.advance(1);
-  assert.equal(wakes.length, 1, "下一次任务 tick 才 batch 唤醒");
+  s.notifyTaskEvent();
+  assert.equal(wakes.length, 1, "不用等固定周期");
+  assert.equal(wakes[0].type, "tick");
+  assert.deepEqual([...wakes[0].pools], ["t1"]);
   assert.match(wakes[0].reasons[0], /任务事件 batch/);
+  s.stop();
+});
+
+test("任务事件：3 分钟内已有任务唤醒，等到窗口结束再 tick，并刷新下一次", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { t1: "task", t2: "task" };
+  const { clock, wakes, s, state } = setup(
+    { tickMs: 180_000, taskTickMs: 45_000 },
+    { poolKind: (id) => kinds[id] },
+  );
+  s.start();
+  state.unread = ["t1"];
+  s.notifyTaskEvent();
+  assert.equal(wakes.length, 1, "第一次事件立刻唤醒");
+
+  clock.advance(10_000);
+  state.unread = ["t2"]; // 第二次事件落在窗口内
+  s.notifyTaskEvent();
+  assert.equal(wakes.length, 1, "窗口内不重复唤醒");
+  clock.advance(34_999);
+  assert.equal(wakes.length, 1);
+  clock.advance(1);
+  assert.equal(wakes.length, 2, "窗口结束时补一次");
+  assert.deepEqual([...wakes[1].pools], ["t2"]);
+
+  clock.advance(10_000);
+  state.unread = ["t1"]; // 窗口刷新后，新事件重新等 3 分钟
+  s.notifyTaskEvent();
+  assert.equal(wakes.length, 2);
+  clock.advance(34_999);
+  assert.equal(wakes.length, 2);
+  clock.advance(1);
+  assert.equal(wakes.length, 3, "下一次窗口到点再 tick");
   s.stop();
 });
 

@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS topics (
   retired INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_topics_pick ON topics(retired, cooldown_until, used_count, last_used_at);
+-- 知识库（2026-11-11）：可复用的业务知识，一篇一条；和记忆（单条事实）、业务地图（对象/关系）分开
+CREATE TABLE IF NOT EXISTS knowledge (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  object_id TEXT NOT NULL DEFAULT '',
+  source_pool_id TEXT NOT NULL DEFAULT '',
+  source_seq_start INTEGER,
+  source_seq_end INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  retired INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_created ON knowledge(retired, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_object ON knowledge(object_id);
 -- 业务地图（2026-11-11）：从 runtime/business/*.json 搬进 SQLite，边是一等行
 CREATE TABLE IF NOT EXISTS business_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS business_types (
@@ -793,6 +809,58 @@ export class Store {
 
   retireTopic(id: number): boolean {
     return this.db.prepare("UPDATE topics SET retired=1 WHERE id=?").run(id).changes > 0;
+  }
+
+  // ---------- 知识库 ----------
+  addKnowledge(k: {
+    title: string; body: string; tags?: string; object_id?: string;
+    source_pool_id?: string; source_seq_start?: number | null; source_seq_end?: number | null; now: number;
+  }): number {
+    const r = this.db.prepare(
+      `INSERT INTO knowledge(title,body,tags,object_id,source_pool_id,source_seq_start,source_seq_end,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      k.title, k.body, k.tags ?? "[]", k.object_id ?? "", k.source_pool_id ?? "",
+      k.source_seq_start ?? null, k.source_seq_end ?? null, k.now, k.now,
+    );
+    return Number(r.lastInsertRowid);
+  }
+
+  getKnowledge(id: number): any | null {
+    return (this.db.prepare("SELECT * FROM knowledge WHERE id=?").get(id) as any) ?? null;
+  }
+
+  searchKnowledge(o: { q?: string; tag?: string; limit?: number; includeRetired?: boolean } = {}): any[] {
+    const where = [o.includeRetired ? "1=1" : "retired=0"];
+    const args: any[] = [];
+    if (o.q?.trim()) {
+      const like = `%${o.q.trim()}%`;
+      where.push("(title LIKE ? OR body LIKE ? OR tags LIKE ?)");
+      args.push(like, like, like);
+    }
+    if (o.tag?.trim()) {
+      where.push("tags LIKE ?");
+      args.push(`%"${o.tag.trim()}"%`);
+    }
+    args.push(o.limit ?? 20);
+    return this.db.prepare(
+      `SELECT * FROM knowledge WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`,
+    ).all(...args) as any[];
+  }
+
+  updateKnowledge(id: number, patch: { title?: string; body?: string; tags?: string; object_id?: string; now: number }): any | null {
+    const sets: string[] = ["updated_at=?"];
+    const args: any[] = [patch.now];
+    for (const key of ["title", "body", "tags", "object_id"] as const) {
+      if (patch[key] !== undefined) { sets.push(`${key}=?`); args.push(patch[key]); }
+    }
+    args.push(id);
+    this.db.prepare(`UPDATE knowledge SET ${sets.join(",")} WHERE id=?`).run(...args);
+    return this.getKnowledge(id);
+  }
+
+  retireKnowledge(id: number, now: number): boolean {
+    return this.db.prepare("UPDATE knowledge SET retired=1, updated_at=? WHERE id=?").run(now, id).changes > 0;
   }
 
   // ---------- 记忆 ----------

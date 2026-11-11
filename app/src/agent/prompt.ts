@@ -9,7 +9,7 @@ import { isOwnerId } from "../core/owners.ts";
 import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
 import { businessIndexLine, businessIndexLineFromDir } from "../ops/business-map.ts";
-import { businessDir } from "../core/runtime.ts";
+import { businessDir, topicsEnabled } from "../core/runtime.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[], store?: Store): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
@@ -25,6 +25,7 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",
     business_block: store ? businessIndexLine(store) : businessIndexLineFromDir(businessDir(cfg)),
+    topics_rule: topicsEnabled(cfg) ? "- `topics/` 只放闲聊谈资；业务知识用 `knowledge`。" : "",
     home,
     desktop_dir,
   });

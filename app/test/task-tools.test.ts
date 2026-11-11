@@ -87,14 +87,14 @@ test("task：create → list → get → note → status → cancel", async () =
 test("task：缺参、非法 status、不存在 id 都明确报错，不抛崩", async () => {
   const { run } = setup();
 
-  const noName = await run("task", { action: "create" });
-  assert.equal(noName.details?.ok, false);
-  assert.match(noName.text, /短任务名/);
-  assert.match(noName.text, /#xxx/);
+  const noName = await run("task", { action: "create", goal: "干活", work_dir: process.cwd() });
+  assert.equal(noName.details?.ok, true, noName.text);
+  assert.match(noName.text, new RegExp(`#${noName.details.task.id}`));
+  assert.equal(noName.details.task.name, `#任务${noName.details.task.id}`);
 
   const blankName = await run("task", { action: "create", name: "  ", goal: "干活", work_dir: process.cwd() });
-  assert.equal(blankName.details?.ok, false);
-  assert.match(blankName.text, /短任务名/);
+  assert.equal(blankName.details?.ok, true, blankName.text);
+  assert.equal(blankName.details.task.name, `#任务${blankName.details.task.id}`);
 
   const noGoal = await run("task", { action: "create", name: "#干活" });
   assert.equal(noGoal.details?.ok, false);
@@ -139,7 +139,7 @@ test("task：缺参、非法 status、不存在 id 都明确报错，不抛崩",
 
 test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批；WA 始终有", () => {
   const ufa = setup().tools.map((t: any) => t.name);
-  for (const name of ["chat", "memory", "plan", "approval", "task", "read_file", "rb"]) {
+  for (const name of ["chat", "memory", "knowledge", "plan", "approval", "task", "read_file", "rb"]) {
     assert.ok(ufa.includes(name), `UFA 少了 ${name}：${ufa.join(",")}`);
   }
   assert.ok(!ufa.includes("write_file"), `UFA 不该有 write_file：${ufa.join(",")}`);
@@ -149,7 +149,7 @@ test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批�
   assert.ok(ufaHost.includes("terminal"), `host+审批开时 UFA 该有 terminal：${ufaHost.join(",")}`);
 
   const wa = setup("wa").tools.map((t: any) => t.name);
-  assert.deepEqual([...wa].sort(), ["rb", "read_file", "terminal", "write_file"]);
+  assert.deepEqual([...wa].sort(), ["knowledge", "rb", "read_file", "terminal", "write_file"]);
   for (const name of ["chat", "memory", "plan", "approval", "task"]) {
     assert.ok(!wa.includes(name), `WA 不该有 ${name}`);
   }

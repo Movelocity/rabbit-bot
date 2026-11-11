@@ -23,6 +23,7 @@ import {
   APPROVAL_STATUSES, decideApproval, getApproval, isApprovalStatus, listApprovals,
 } from "../core/approvals.ts";
 import { addMemory, closeMemory, searchMemories, traceMemory, updateMemory } from "../ops/memories.ts";
+import { addKnowledge, archiveKnowledge, getKnowledge, searchKnowledge, updateKnowledge } from "../ops/knowledge.ts";
 import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
 import {
   addGoals, addProgress, archiveBoard, checkGoal, createBoard, getBoard, listBoards, updateBoard,
@@ -397,6 +398,108 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
+   * 知识库：跨会话可复用的业务知识，一篇一条。
+   * 比写文件快：一次 add 就落库，不建任务、不选目录、能按关键词/标签查回来。
+   */
+  const KNOWLEDGE_HELP = [
+    "knowledge 的用法（action 必填）：",
+    "  add     title body tags? object_id?        记一篇可复用的业务知识",
+    "  get     id                                 看全文",
+    "  search  q? tag? limit? all?                按关键词/标签查，all=1 连归档的也查",
+    "  list    limit?                             最近的知识",
+    "  update  id title? body? tags? object_id?   就地改",
+    "  archive id                                 归档（不再出现在默认搜索里）",
+    "  help                                       看这份说明",
+    "",
+    "和记忆的区别：知识是能反复查的正文（流程、口径、排障、设计判断）；",
+    "记忆是「谁在什么时候说过什么」的单条事实。对象和关系用 map。",
+  ].join("\n");
+
+  const fmtKnowledge = (list: any[]): string => {
+    if (!list.length) return "（没有匹配的知识）";
+    return list.map((k) => {
+      const tags = k.tags?.length ? ` [${k.tags.join(", ")}]` : "";
+      const body = String(k.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+      return `#${k.id}${tags} ${k.title}\n  ${body}${body.length >= 120 ? "…" : ""}`;
+    }).join("\n");
+  };
+
+  const knowledge = defineTool({
+    name: "knowledge",
+    label: "knowledge",
+    executionMode: "sequential",
+    description:
+      "知识库：跨会话可复用的业务知识，一篇一条。action 决定做什么："
+      + "add（title + body，一次记一篇）/ get（看全文）/ search（按 q 或 tag 查）/ "
+      + "list（最近的知识）/ update（就地改）/ archive（归档）/ help。"
+      + "它比写文件快：不用建任务、不用选目录，记完能直接查回来。"
+      + "可复用的流程、口径、排障、设计判断放这里；具体事实放 memory；对象/关系用 map。",
+    parameters: Type.Object({
+      action: Type.String({ description: "add / get / search / list / update / archive / help" }),
+      id: Type.Optional(Type.Number({ description: "get、update、archive 用：知识编号" })),
+      title: Type.Optional(Type.String({ description: "add、update 用：这篇知识叫什么" })),
+      body: Type.Optional(Type.String({ description: "add、update 用：正文" })),
+      tags: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "add、update 用：标签，逗号分隔或数组" })),
+      object_id: Type.Optional(Type.String({ description: "add、update 用：关联的业务对象 id（可选）" })),
+      q: Type.Optional(Type.String({ description: "search 用：关键词" })),
+      tag: Type.Optional(Type.String({ description: "search 用：按标签筛" })),
+      limit: Type.Optional(Type.Number({ description: "search、list 用：条数，默认 20" })),
+      all: Type.Optional(Type.Boolean({ description: "search 用：连归档的也查" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        switch (action) {
+          case "help":
+            return txt(KNOWLEDGE_HELP, { ok: true });
+          case "add": {
+            let pool = "";
+            let range: { from?: number; to?: number } = {};
+            try {
+              pool = poolOf();
+              range = wakeSeqRange(userOf(), pool);
+            } catch { /* 没有当前池/用户就不绑来源，知识本身仍然可写 */ }
+            const r = addKnowledge(d.store, {
+              title: p.title, body: p.body, tags: p.tags, object_id: p.object_id,
+              pool, source_seq: range.from, source_seq_end: range.to,
+            }, d.now());
+            return txt(`知识 #${r!.id} 收下了：${r!.title}${r!.tags.length ? ` [${r!.tags.join(", ")}]` : ""}`, { ok: true, id: r!.id });
+          }
+          case "get": {
+            if (p.id === undefined) return txt("get 要 id（知识编号）。", { ok: false });
+            const k = getKnowledge(d.store, p.id)!;
+            const tags = k.tags.length ? `标签：${k.tags.join(", ")}\n` : "";
+            const source = k.source ? `来源：${k.source.pool}${k.source.from ? ` #${k.source.from}${k.source.to !== k.source.from ? `-${k.source.to}` : ""}` : ""}\n` : "";
+            return txt(`#${k.id} ${k.title}\n${tags}${source}\n${k.body}`, { ok: true, knowledge: k });
+          }
+          case "search": {
+            const list = searchKnowledge(d.store, { q: p.q, tag: p.tag, limit: p.limit, all: p.all });
+            return txt(fmtKnowledge(list), { ok: true, count: list.length, ids: list.map((k) => k.id) });
+          }
+          case "list": {
+            const list = searchKnowledge(d.store, { limit: p.limit });
+            return txt(fmtKnowledge(list), { ok: true, count: list.length, ids: list.map((k) => k.id) });
+          }
+          case "update": {
+            const k = updateKnowledge(d.store, {
+              id: p.id, title: p.title, body: p.body, tags: p.tags, object_id: p.object_id,
+            }, d.now());
+            return txt(`知识 #${k!.id} 改好了：${k!.title}`, { ok: true, id: k!.id });
+          }
+          case "archive": {
+            const k = archiveKnowledge(d.store, { id: p.id }, d.now());
+            return txt(`知识 #${k!.id} 已归档：${k!.title}`, { ok: true, id: k!.id });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${KNOWLEDGE_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  /**
    * 计划看板：一条计划一个 md，md 是唯一真相。
    * 不排时间、不到点唤醒——这里只管目标、背景和进展。
    */
@@ -412,7 +515,7 @@ export function createTools(d: ToolDeps) {
     "  archive   id                           归档（移到 board/archive/，不再出现在默认列表）",
     "  help                                   看这份说明",
     "",
-    "他说「要做某件事」「先列个计划」，就 create 并把背景写清楚；中途有新进展用 progress，完成一项就 goal-check。",
+    "他说「要做某件事」「先列个计划」，或同时有多个并行任务/目标，就 create 并把背景写清楚；中途有新进展用 progress，完成一项就 goal-check。",
     "同一个项目/事情尽量用同一条计划，别每聊一次就新建一条。",
   ].join("\n");
 
@@ -433,7 +536,7 @@ export function createTools(d: ToolDeps) {
       + "list（看计划，默认 active）/ show（看一条）/ goal-add（加目标）/ "
       + "goal-check（勾选已完成的目标，或 done=false 取消）/ progress（追加进展）/ "
       + "status（active / done）/ archive（归档）/ help。"
-      + "他说要做某件事、先列个计划，就 create；中途有进展用 progress，完成一项就 goal-check。"
+      + "他说要做某件事、先列个计划，或同时推进多个任务/并行目标，就 create；中途有进展用 progress，完成一项就 goal-check。"
       + "同一件事用同一条计划，别重复新建。",
     parameters: Type.Object({
       action: Type.String({ description: "create / list / show / goal-add / goal-check / progress / status / archive / help" }),
@@ -610,7 +713,7 @@ export function createTools(d: ToolDeps) {
     "  status  id status result? artifact?                                 改状态/回填结果",
     "  help                                                                看这份说明",
     "",
-    "create 的 name 必填，格式 #xxx（一眼认得出这是什么任务）；没带 # 会自动补上。",
+    "create 的 name 可选：给了就用它当短标签（# 自动补），不给就用系统返回的任务号。",
     "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
     "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
     "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
@@ -633,7 +736,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 name + goal + work_dir，name 是 #xxx 短任务名，可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name 可选，建完系统返回任务号。可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -641,7 +744,7 @@ export function createTools(d: ToolDeps) {
     parameters: Type.Object({
       action: Type.String({ description: "create / list / get / updates / resume / note / cancel / status / help" }),
       id: Type.Optional(Type.Number({ description: "get、updates、resume、note、cancel、status 用：任务 id" })),
-      name: Type.Optional(Type.String({ description: "create 用：短任务名，格式 #xxx，必填；一眼认得出这是什么任务" })),
+      name: Type.Optional(Type.String({ description: "create 用：可选短标签；不给就用系统返回的任务号" })),
       work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
       executor: Type.Optional(Type.String({ description: "create 用：opencode（默认）或 mimo" })),
       model: Type.Optional(Type.String({ description: "create 用：执行器模型，留空用执行器默认" })),
@@ -668,7 +771,6 @@ export function createTools(d: ToolDeps) {
             return txt(TASK_HELP, { ok: true });
 
           case "create": {
-            if (!p.name?.trim()) return txt("需要短任务名，格式 #xxx", { ok: false });
             if (!p.goal?.trim()) return txt("create 要 goal：一句话说清要达成什么。", { ok: false });
             const workDir = String(p.work_dir ?? "").trim();
             if (!workDir) return txt("create 要 work_dir：任务的绝对工作目录。", { ok: false });
@@ -703,7 +805,7 @@ export function createTools(d: ToolDeps) {
             const created = createTask(d.store, {
               userId: d.store.lastUserId(poolId) ?? "ufa",
               poolId,
-              name: p.name,
+              name: p.name ?? "",
               goal: p.goal,
               deliverable: p.deliverable,
               constraints: p.constraints,
@@ -728,7 +830,7 @@ export function createTools(d: ToolDeps) {
                 : "审批消息没发出去（任务仍在 pending_approval），可在 Web 任务页审批。";
             }
             return txt(
-              `已建任务 #${created.id}「${created.name}」，${notice}`,
+              `已建任务 #${created.id}${created.name ? `「${created.name}」` : ""}，${notice}`,
               { ok: true, task: view },
             );
           }
@@ -826,19 +928,32 @@ export function createTools(d: ToolDeps) {
    * 原来这三件事挂在 `read_file|write|run` 上——那等于用一条字符串命令模拟文件读写，
    * 路径里带空格或中文就得赌拼参数的那一段。工具拿的是结构化参数，路径不经过切词。
    */
+  // 话题库是可选扩展：关掉后不从工具描述里出现，也不让读写 topics/。
+  const topicsOn = d.cfg.topics?.enabled === true;
+  const topicsNote = topicsOn ? "话题库在 topics/（只放闲聊谈资），" : "";
+  const examples = {
+    readPath: topicsOn ? "topics/INDEX.md" : "prompt/system.md",
+    writePath: "skills/<name>/data/notes.md",
+    shell: topicsOn ? "rg -n '关键词' topics" : "rg -n '关键词' prompt",
+  };
+
   const readFile = defineTool({
     name: "read_file",
     label: "read_file",
     executionMode: "sequential",
     description:
-      "读工作区里的文件（只读；相对路径）。话题库在 topics/，提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。"
+      `读工作区里的文件（只读；相对路径）。${topicsNote}提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。`
       + "文件太长会被截断，截断时会告诉你。",
     parameters: Type.Object({
-      path: Type.String({ description: "相对路径，例如 topics/INDEX.md" }),
+      path: Type.String({ description: `相对路径，例如 ${examples.readPath}` }),
     }),
     async execute(_id, p) {
+      const rel = String(p.path ?? "");
+      if (!topicsOn && (rel === "topics" || rel.startsWith("topics/"))) {
+        return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
+      }
       try {
-        const r = readSandboxFile(d.cfg, String(p.path ?? ""), d.readRoot);
+        const r = readSandboxFile(d.cfg, rel, d.readRoot);
         return txt(String(r.content ?? "").trim() || "（文件是空的）", { ok: true, path: r.path });
       } catch (e) {
         return txt(`读不了：${(e as Error).message}`, { ok: false });
@@ -851,15 +966,19 @@ export function createTools(d: ToolDeps) {
     label: "write_file",
     executionMode: "sequential",
     description:
-      "写沙盒里的文件（整份覆盖，不是追加）。笔记、话题库条目、技能运行时产物都写这里。"
+      "写沙盒里的文件（整份覆盖，不是追加）。笔记、技能运行时产物、任务产出都写这里。"
       + "要追加就先用 read_file 读出全文，合并后整份写回。",
     parameters: Type.Object({
-      path: Type.String({ description: "相对路径，比如 topics/life/话题.md" }),
+      path: Type.String({ description: `相对路径，比如 ${examples.writePath}` }),
       content: Type.String({ description: "完整内容" }),
     }),
     async execute(_id, p) {
+      const rel = String(p.path ?? "");
+      if (!topicsOn && (rel === "topics" || rel.startsWith("topics/"))) {
+        return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
+      }
       try {
-        const r = writeSandboxFile(d.cfg, String(p.path ?? ""), String(p.content ?? ""));
+        const r = writeSandboxFile(d.cfg, rel, String(p.content ?? ""));
         return txt(`写了 ${r.path}（${r.bytes} 字节）。`, { ok: true, path: r.path });
       } catch (e) {
         return txt(`没写成：${(e as Error).message}`, { ok: false });
@@ -886,7 +1005,7 @@ export function createTools(d: ToolDeps) {
       + (d.profile === "ufa" ? "——长活写成任务交给 WA，别在这里磨。" : "（构建、装包、转录这类长活别拆碎）。")
       + "输出太大时会截断并把全文落盘，回话里带路径。只读文件用 read_file 更快。",
     parameters: Type.Object({
-      cmd: Type.String({ description: "完整命令行，例如 rg -n '关键词' topics" }),
+      cmd: Type.String({ description: `完整命令行，例如 ${examples.shell}` }),
       timeout_sec: Type.Optional(Type.Number({ description: `超时秒数；UFA 最多 ${shellMaxSec}，WA 最多 600` })),
       cwd: Type.Optional(Type.String({ description: "在这条命令的工作目录里跑（绝对路径）；不填就是沙盒目录" })),
     }),
@@ -1104,12 +1223,12 @@ export function createTools(d: ToolDeps) {
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   // UFA 只读 + 任务面板：不写文件（交接走 tasks 表），terminal 按 host+审批开关。
   const ufaTools = [
-    chat, memory, plan, approval, task, readFile, mapTool,
+    chat, memory, knowledge, plan, approval, task, readFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];
   // WA 才需要写文件和跑命令。
-  const waTools = [readFile, writeFile, runShellTool, rb];
+  const waTools = [readFile, writeFile, runShellTool, rb, knowledge];
   // 后台记忆梳理：只给 memory，不能发消息、建任务、建技能、改业务地图。
   if (d.profile === "review") return [memory];
   return d.profile === "wa" ? waTools : ufaTools;

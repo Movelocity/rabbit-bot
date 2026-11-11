@@ -165,7 +165,7 @@ export function ensureTaskPool(store: Store, id: number): Task {
 }
 
 export function createTask(store: Store, t: CreateTaskInput): Task {
-  const name = normalizeTaskName(t.name);
+  const name = String(t.name ?? "").trim() ? normalizeTaskName(t.name) : "";
   const goal = String(t.goal ?? "");
   if (!goal.trim()) throw new Error("缺少 goal");
   if (t.status !== undefined && !isTaskStatus(t.status)) {

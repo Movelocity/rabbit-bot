@@ -41,12 +41,27 @@ test("沙盒根不是运行时目录时，prompt/topics 仍按同名子目录 ov
   fs.mkdirSync(path.join(dir, "topics"), { recursive: true });
   const cfg = loadConfig({
     runtimeDir: dir,
+    topics: { enabled: true },
     exec: { dir: other, sharedSkillsDir: "", shell: { mode: "host" } },
   });
   assert.deepEqual(runtimeOverlays(cfg), {
     prompt: path.join(dir, "prompt"),
     topics: path.join(dir, "topics"),
   });
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(other, { recursive: true, force: true });
+});
+
+test("话题库默认关闭：即使目录存在也不 overlay", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-rt-"));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "rb-sbx-"));
+  fs.mkdirSync(path.join(dir, "prompt"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "topics"), { recursive: true });
+  const cfg = loadConfig({
+    runtimeDir: dir,
+    exec: { dir: other, sharedSkillsDir: "", shell: { mode: "host" } },
+  });
+  assert.deepEqual(runtimeOverlays(cfg), { prompt: path.join(dir, "prompt") });
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(other, { recursive: true, force: true });
 });

@@ -411,10 +411,10 @@ test("任务面板：6 个路由 + 鉴权与校验", async () => {
   assert.equal((await call("/v1/tasks", { method: "POST", body: JSON.stringify({ deliverable: "x" }) })).status, 400);
   assert.equal((await call("/v1/tasks", {
     method: "POST", body: JSON.stringify({ goal: "x", work_dir: dir, dispatch: false }),
-  })).status, 400, "缺 name 要 400");
+  })).status, 201, "name 可选，系统返回任务号");
   assert.equal((await call("/v1/tasks", {
     method: "POST", body: JSON.stringify({ name: "  ", goal: "x", work_dir: dir, dispatch: false }),
-  })).status, 400, "空白 name 要 400");
+  })).status, 201, "空白 name 按未填处理");
   assert.equal((await call(`/v1/tasks/${id}/note`, { method: "POST", body: JSON.stringify({ line: "  " }) })).status, 400);
   assert.equal((await call(`/v1/tasks/${id}/status`, { method: "POST", body: JSON.stringify({ status: "wat" }) })).status, 400);
   assert.equal((await call("/v1/tasks/999999")).status, 404);

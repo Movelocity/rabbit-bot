@@ -25,6 +25,14 @@ export interface TaskEvent {
   text: string;
 }
 
+/** 每个 Store 一个任务事件监听器；App 把它接到调度器上，测试不接就是 null。 */
+const notifiers = new WeakMap<Store, () => void>();
+
+export function setTaskEventNotifier(store: Store, fn: (() => void) | null): void {
+  if (fn) notifiers.set(store, fn);
+  else notifiers.delete(store);
+}
+
 function requireTaskId(taskId: unknown): number {
   const id = Number(taskId);
   if (!Number.isInteger(id) || id <= 0) throw new Error("task_id 要是正整数");
@@ -59,6 +67,7 @@ export function appendTaskEvent(store: Store, taskId: number, input: AppendTaskE
     from_self: false,
   });
   if (!stored) throw new Error(`任务 #${id} 的事件写入失败`);
+  notifiers.get(store)?.();
   return { seq: stored.seq, ts, local: fmtLocal(ts), sender: senderName, text };
 }
 

@@ -31,11 +31,18 @@ export function ensureRuntime(cfg: Config, subs: string[] = []): string {
   return runtimeDir(cfg);
 }
 
+/** 话题库是可选扩展；默认关，只有显式打开才创建、挂载和提示。 */
+export function topicsEnabled(cfg: Config): boolean {
+  return cfg.topics?.enabled === true;
+}
+
 /**
  * 运行时内容子目录：容器里是 /work/<name>，沙盒根默认就是运行时目录。
  * 只列「内容」目录，不列 shared/ files/ 这类运行产物。
  */
-export const RUNTIME_SUBDIRS = ["prompt", "topics", "board"] as const;
+export function runtimeSubdirs(cfg: Config): string[] {
+  return ["prompt", ...(topicsEnabled(cfg) ? ["topics"] : []), "board"];
+}
 
 /** 沙盒根就是运行时目录时，prompt/ topics/ 已经天然在 /work 下，不用再叠加挂载。 */
 export function runtimeIsSandbox(cfg: Config): boolean {
@@ -75,7 +82,7 @@ export function ensureHostSandboxLinks(cfg: Config): string[] {
   if (cfg.exec.shell.mode !== "host") return made;
   // 沙盒根本来就是运行时目录：prompt/ topics/ 已经在这儿，不用再指一遍（否则会自指）
   if (runtimeIsSandbox(cfg)) return made;
-  for (const name of RUNTIME_SUBDIRS) {
+  for (const name of runtimeSubdirs(cfg)) {
     if (!runtimeHas(cfg, name)) continue;
     const target = runtimePath(cfg, name);
     const link = path.join(path.resolve(cfg.exec.dir), name);
@@ -140,7 +147,7 @@ export function runtimeOverlays(cfg: Config): Record<string, string> {
   // 沙盒根不是运行时目录时，prompt/ topics/ 才需要按同名子目录挂过去；
   // 根就是运行时目录时它们已经在 /work 下，再挂一次是多余的。
   if (!runtimeIsSandbox(cfg)) {
-    for (const name of RUNTIME_SUBDIRS) {
+    for (const name of runtimeSubdirs(cfg)) {
       if (runtimeHas(cfg, name)) out[name] = runtimePath(cfg, name);
     }
   }

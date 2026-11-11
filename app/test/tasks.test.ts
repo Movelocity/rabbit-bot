@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
 import {
   appendNote, cancelTask, createTask, getTask, isTaskStatus, listTasks, normalizeTaskName, TASK_NAME_MAX,
-  TASK_STATUSES, updateTask, type CreateTaskInput,
+  TASK_STATUSES, taskDisplayName, updateTask, type CreateTaskInput,
 } from "../src/core/tasks.ts";
 
 const mk = (s: Store, goal: string, extra: Partial<CreateTaskInput> = {}) =>
@@ -90,7 +90,9 @@ test("任务名：自动补 #、空白拒绝、完整保留", () => {
   assert.equal(normalizeTaskName("  #发票修复  "), "#发票修复");
   assert.equal(normalizeTaskName(" #发票修复"), "#发票修复");
   assert.throws(() => normalizeTaskName("   "), /短任务名/);
-  assert.throws(() => createTask(s, { userId: "u1", poolId: "p1", name: "   ", goal: "x" }), /短任务名/);
+  const noName = createTask(s, { userId: "u1", poolId: "p1", name: "   ", goal: "x" });
+  assert.equal(noName.name, "", "不强制任务名；展示时回退成任务号");
+  assert.equal(taskDisplayName(noName), `#任务${noName.id}`);
 
   const long = `#${"一".repeat(TASK_NAME_MAX + 8)}`;
   assert.equal(normalizeTaskName(long), long);

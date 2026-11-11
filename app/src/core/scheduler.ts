@@ -59,6 +59,8 @@ export class Scheduler {
   private tickDueAt: number | null = null;
   private taskTimer: unknown = null;
   private taskDueAt: number | null = null;
+  /** 上次任务事件 tick 真的唤醒了 UFA 的时刻；用来做 3 分钟节流 */
+  private lastTaskWakeAt: number | null = null;
   private lastTickAt: number | null = null;
   private lastActivity = -Infinity;
   private running = false;
@@ -217,18 +219,37 @@ export class Scheduler {
     const ms = this.cfg.taskTickMs ?? this.cfg.tickMs;
     return ms > 0 ? ms : 1000;
   }
-  private scheduleTaskTick() {
+  private scheduleTaskTick(delayMs = this.taskIntervalMs()) {
     if (this.taskTimer) this.d.clock.clearTimeout(this.taskTimer);
-    const ms = this.taskIntervalMs();
+    const ms = Math.max(0, delayMs);
     this.taskDueAt = this.d.clock.now() + ms;
     const handle = this.d.clock.setTimeout(() => { if (this.taskTimer === handle) this.runTaskTick("timer"); }, ms);
     this.taskTimer = handle;
   }
-  private runTaskTick(via: "timer" | "watchdog") {
+
+  /**
+   * 任务事件写入时调用：3 分钟内没有任务唤醒就立刻 tick；有就等到窗口结束再检查一次。
+   * 这样事件不用等固定周期，也不会连续刷醒 UFA。
+   */
+  notifyTaskEvent(): void {
+    if (!this.running) return;
+    const now = this.d.clock.now();
+    const interval = this.taskIntervalMs();
+    const last = this.lastTaskWakeAt;
+    if (last === null || now - last >= interval) {
+      this.runTaskTick("event");
+      return;
+    }
+    const due = last + interval;
+    if (this.taskDueAt === null || due < this.taskDueAt) this.scheduleTaskTick(due - now);
+  }
+
+  private runTaskTick(via: "timer" | "watchdog" | "event") {
+    if (this.taskTimer) this.d.clock.clearTimeout(this.taskTimer);
     this.taskTimer = null;
     try {
       if (via === "watchdog") this.d.log?.(`任务事件 tick 逾期 ${Math.round((this.d.clock.now() - (this.taskDueAt ?? 0)) / 1000)}s，看门狗补触发`);
-      this.tickKind("task");
+      if (this.tickKind("task")) this.lastTaskWakeAt = this.d.clock.now();
     } catch (e) {
       this.d.warn?.(`任务事件 tick 出错：${(e as Error).message}`);
     } finally {

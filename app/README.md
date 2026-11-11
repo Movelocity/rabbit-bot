@@ -44,7 +44,7 @@ cp app/config/persona.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改�
 |---|---|---|
 | `runtime/persona.md` | 人设正文，进 system prompt 的 `{{persona}}` | 要 |
 | `runtime/prompt/` | 主提示词 + 三种场景剧本（`scene-*.md`）+ 说话对照（`voice-examples.md`） | 剧本不用，`system.md` 要 |
-| `runtime/topics/` | 话题库，按块分（`rg` 搜、`read_file` 读） | 不用 |
+| `runtime/topics/` | 可选的话题库扩展（`topics.enabled=true` 才启用），只放闲聊谈资；业务知识用 `knowledge` 工具 | 不用 |
 | `runtime/shared/` | worker 交上来的汇报（`task-<id>.md`），`read_file` 直接读 | 不用 |
 | `runtime/files/` | 收到的非图片附件 | 不用 |
 

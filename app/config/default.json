@@ -3,6 +3,9 @@
   "runtimeDir": "~/.config/rabbit-bot/runtime",
   "dataDir": "./data",
   "logDir": "./logs",
+  "topics": {
+    "enabled": false
+  },
   "paths": {
     "desktopDir": "~/Desktop"
   },

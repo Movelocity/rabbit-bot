@@ -336,9 +336,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }));
           }
           if (parts.length === 2 && method === "POST") {
-            if (typeof body.name !== "string" || !body.name.trim()) {
-              throw new HttpError(400, "缺少 name（短任务名，格式 #xxx）");
-            }
+            if (body.name !== undefined && typeof body.name !== "string") throw new HttpError(400, "name 要是字符串");
             if (typeof body.goal !== "string" || !body.goal.trim()) throw new HttpError(400, "缺少 goal");
             const workDir = validateWorkDir(body.work_dir);
             const executor = validateExecutor(body.executor);
