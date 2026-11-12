@@ -227,6 +227,44 @@ test("Hub 接线：非系统消息先排队，审核通过后才落到目标聊�
   assert.ok(store.lastSelfMessageRow("feishu:oc_group")?.text.includes("火锅"));
 });
 
+test("审核未通过：在目标池写入调度器事件，让 agent 知道这条没发出去", async () => {
+  const config = loadConfig();
+  config.send.confirmWaitMs = 0;
+  config.send.pacing.enabled = false;
+  const store = new Store(":memory:");
+  const hub = new Hub(store, config, log, {} as any);
+  const sent: string[] = [];
+  hub.addAdapter({
+    platform: "feishu" as const,
+    start: async () => {},
+    stop: async () => {},
+    sendText: async (_id: string, text: string) => { sent.push(text); return { msgId: `g${++sent.length}` }; },
+  } as any);
+  let rn = 0;
+  const gate = new SendReviewGate(cfg(), log, async () => ({ ok: true, msgId: `r${++rn}` }));
+  hub.review = { shouldReview: () => true, propose: (r) => gate.propose(r) };
+
+  hub.ingest({
+    platform: "feishu", external_chat_id: "oc_group", pool_kind: "group",
+    msg_id: "u0", sender_id: "u1", sender_name: "他", ts: Date.now(), text: "聊点什么",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
+  hub.takeUnread();
+
+  const r = await hub.send("feishu:oc_group", "这句会被驳回");
+  assert.equal(r.queuedForReview, true);
+  await tick();
+  assert.equal(gate.tryHandle(react("No")), true);
+  await tick();
+
+  assert.deepEqual(sent, [], "驳回后目标群不能收到消息");
+  const events = store.unread("feishu:oc_group").filter((m) => m.sender_name === "调度器");
+  assert.equal(events.length, 1, "目标池应有一条调度器事件");
+  assert.match(events[0].text, /没有发出/);
+  assert.match(events[0].text, /这句会被驳回/);
+  assert.equal(events[0].from_self, false);
+});
+
 test("Hub 接线：审核期间来的新消息不会被补发吃掉，留给下一次唤醒", async () => {
   const config = loadConfig();
   config.send.confirmWaitMs = 0;

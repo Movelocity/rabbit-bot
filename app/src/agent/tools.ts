@@ -130,7 +130,7 @@ export function createTools(d: ToolDeps) {
     "  skip    reason                   这一轮不回，什么都不发",
     "  view    path                     把一张图读进上下文（图片#id 或 media/… / inbox/…）",
     "  download id                     按需下载收到的文件（消息里的 附件id=file_xxx）",
-    "  recall  id? pool?               撤回自己发的一条消息（不给 id 就撤该池最后一条）",
+    "  recall  prefix pool?            撤回自己发的一条消息（prefix=消息开头 5 个字符，不足 5 个给全文）",
     "  list    archived?                看有哪些池（archived=true 连归档池一起列）",
     "  search  q? pool? only? limit?    q 给了就按关键词翻原话；不给 q 就读这个池最近的消息",
     "  archive pool                     归档一个池：默认列表和唤醒里不再出现，历史仍可 search",
@@ -146,7 +146,7 @@ export function createTools(d: ToolDeps) {
       "跟他说话，以及翻聊天记录。action 决定做什么："
       + "send（发一条，pool + content，唯一会被他看到的输出）/ skip（这一轮不回，reason 写为什么）/ "
       + "view（把一张图读进上下文，path 用图片#id 或 img 清单里的名字）/ download（按需下载收到的文件，id 用消息里的 附件id=file_xxx）/ "
-      + "recall（撤回自己发的一条消息；不给 id 就撤这个池最后一条）/ "
+      + "recall（撤回自己发的一条消息；prefix 写消息开头 5 个字符，不足 5 个字符就写全文）/ "
       + "list（有哪些池，archived=true 连归档池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ "
       + "archive（归档池：默认列表和唤醒里不再出现，历史仍可 search）/ unarchive（解档）/ help。"
       + "该说话的时候一定要 send——只调用别的工具等于这轮什么都没说。"
@@ -157,7 +157,8 @@ export function createTools(d: ToolDeps) {
       content: Type.Optional(Type.String({ description: "send 用：一条短消息；表情包写 [emoji:中文id]" })),
       reason: Type.Optional(Type.String({ description: "skip 用：一句话，为什么这一轮不用回（会记进日志）" })),
       path: Type.Optional(Type.String({ description: "view 用：图片#id 或 media/… / inbox/… 开头的文件名" })),
-      id: Type.Optional(Type.String({ description: "download 用：消息里的附件 id（file_xxx）；recall 用：要撤回的消息 id（不给就撤最后一条）" })),
+      id: Type.Optional(Type.String({ description: "download 用：消息里的附件 id（file_xxx）" })),
+      prefix: Type.Optional(Type.String({ description: "recall 用：目标消息开头的 5 个字符；消息不足 5 个字符就给全文" })),
       q: Type.Optional(Type.String({ description: "search 用：关键词，至少两个字" })),
       only: Type.Optional(Type.String({ description: "search 用：self 只看自己说的 / other 只看看他说的" })),
       limit: Type.Optional(Type.Number({ description: "search 用：条数，默认 20" })),
@@ -291,7 +292,8 @@ export function createTools(d: ToolDeps) {
           case "recall": {
             const ref = p.pool ?? (d.primaryPool?.() ?? undefined);
             if (!ref) return txt("recall 要 pool（这一轮没有主要池，得自己指定）。", { ok: false });
-            const r = await d.hub.recall(ref, p.id);
+            if (!p.prefix) return txt("recall 要 prefix：目标消息开头的 5 个字符（不足 5 个字符就给全文）。", { ok: false });
+            const r = await d.hub.recall(ref, p.prefix);
             if (!r.ok) {
               return txt(`撤回${r.msgId ? `消息 ${r.msgId} ` : ""}失败：${r.error}`, { ok: false, msgId: r.msgId });
             }

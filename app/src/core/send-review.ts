@@ -53,6 +53,8 @@ export interface SendReviewRequest {
   content: string;
   /** 审核通过后真正执行发送；返回发送结果 */
   deliver: () => Promise<{ ok: boolean; error?: string }>;
+  /** 审核未通过（驳回 / 超时）时通知目标池，让 agent 知道这条没发出去 */
+  notifyUnsent?: (decision: ReviewDecision) => void;
 }
 
 export interface ProposeResult {
@@ -228,6 +230,13 @@ export class SendReviewGate {
         await this.send(p.target, line).catch(() => undefined);
       }
       return;
+    }
+
+    // 目标池也要留痕：这条没发出去，agent 下一轮读池时得知道，不能当成已经说过了
+    try {
+      p.req.notifyUnsent?.(decision);
+    } catch (e) {
+      this.log.warn(`发送审核 #${p.id} 未通过事件写入失败：${(e as Error).message}`);
     }
 
     if (this.cfg.notify !== false) {

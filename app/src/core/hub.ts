@@ -11,8 +11,8 @@ import { waitBefore, visibleLen } from "./pacing.ts";
 import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
-import type { InboundMessage, StoredMessage } from "../types.ts";
-import type { ProposeResult, SendReviewRequest } from "./send-review.ts";
+import type { InboundMessage, Pool, StoredMessage } from "../types.ts";
+import type { ProposeResult, ReviewDecision, SendReviewRequest } from "./send-review.ts";
 import path from "node:path";
 
 export interface SendOutcome {
@@ -40,6 +40,12 @@ export interface RecallOutcome {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 撤回用定位串：消息开头 5 个字符；不足 5 个字符时就是全文。 */
+function recallHead(text: string): string {
+  const chars = Array.from(text ?? "");
+  return chars.slice(0, Math.min(5, chars.length)).join("");
+}
 
 export class Hub {
   private adapters = new Map<string, IMAdapter>();
@@ -170,23 +176,27 @@ export class Hub {
   }
 
   /**
-   * 撤回自己发出的一条消息。不给 msgId 就撤这个池里最后一条自己发的。
-   * 平台失败原因原样带回（权限、时限、已删除等），不要吞成 false。
+   * 撤回自己发出的一条消息。用消息开头的 5 个字符定位（不足 5 个字符就写全文），
+   * 同前缀取最近的一条。平台失败原因原样带回（权限、时限、已删除等），不要吞成 false。
    */
-  async recall(poolRef: string, msgId?: string): Promise<RecallOutcome> {
+  async recall(poolRef: string, prefix?: string): Promise<RecallOutcome> {
     const pool = this.store.resolvePool(poolRef);
     if (!pool) return { ok: false, error: `未知的池 ${poolRef}` };
     const adapter = this.adapters.get(pool.platform);
     if (!adapter) return { ok: false, error: `平台 ${pool.platform} 没有可用的适配器` };
     if (!adapter.recall) return { ok: false, error: `平台 ${pool.platform} 不支持撤回消息` };
 
-    const key = msgId?.trim();
-    const target = key
-      ? this.store.messageByMsgId(pool.platform, key)
-      : this.store.lastSelfMessageRow(pool.pool_id);
-    if (!target) return { ok: false, error: key ? `没有找到消息 ${key}` : "这个池里还没有你发过的消息" };
-    if (target.pool_id !== pool.pool_id) return { ok: false, msgId: target.msg_id, error: `消息 ${target.msg_id} 不在池 ${poolRef} 里` };
-    if (!target.from_self) return { ok: false, msgId: target.msg_id, text: target.text, error: "只能撤回自己发出的消息" };
+    const key = String(prefix ?? "").trim();
+    if (!key) return { ok: false, error: "撤回哪条：给消息开头的 5 个字符（不足 5 个字符就给全文）" };
+
+    // 最近 200 条，从新往旧找；同前缀取最新一条
+    const recent = this.store.recentMessages(pool.pool_id, 200).reverse();
+    const target = recent.find((m) => m.from_self && recallHead(m.text) === key);
+    if (!target) {
+      const other = recent.find((m) => !m.from_self && recallHead(m.text) === key);
+      if (other) return { ok: false, msgId: other.msg_id, text: other.text, error: "只能撤回自己发出的消息" };
+      return { ok: false, error: `没有找到开头是「${key}」的你发出的消息（要写开头的 5 个字符，不足 5 个字符写全文）` };
+    }
 
     try {
       const r = await adapter.recall(pool.external_id, target.msg_id);
@@ -196,6 +206,22 @@ export class Hub {
     } catch (e) {
       return { ok: false, msgId: target.msg_id, text: target.text, error: (e as Error).message };
     }
+  }
+
+  /** 目标池里的「未通过」事件：以调度器身份留痕，下一轮读池时 agent 能看到。 */
+  private emitUnsent(pool: Pool, content: string, decision: ReviewDecision): void {
+    const preview = content.replace(/\s+/g, " ").trim();
+    const shown = Array.from(preview).length > 60 ? `${Array.from(preview).slice(0, 60).join("")}…` : preview;
+    const why = decision === "timeout" ? "超时未裁决，按不发送处理" : "主人驳回，不发送";
+    const text = `发送审核未通过：你发给「${this.store.poolDisplayTitle(pool)}」的消息没有发出（${why}）。原内容：「${shown}」`;
+    const now = Date.now();
+    const saved = this.store.insertMessage({
+      platform: pool.platform, external_chat_id: pool.external_id, pool_kind: pool.kind, pool_title: pool.title,
+      msg_id: `send-review-unsent:${pool.pool_id}:${now}:${Math.random().toString(36).slice(2, 8)}`,
+      sender_id: "dispatcher", sender_name: "调度器", ts: now, text, reply_to: null,
+      mentions: [], is_mention_me: false, media_type: "text", from_self: false,
+    });
+    if (saved) this.log.info(`发送审核未通过：已写入调度器事件 ${this.store.poolAlias(pool.pool_id)} #${saved.seq}`);
   }
 
   /** send(pool, content)：审核 → 表情解析 → 发送 → 等待约 1 秒确认 → 收集期间新消息 */
@@ -236,6 +262,7 @@ export class Hub {
           const sent = await this.send(poolRef, content, { reviewed: true });
           return { ok: sent.ok, error: sent.error };
         },
+        notifyUnsent: (decision) => this.emitUnsent(pool, content, decision),
       });
       if (r.queued) {
         return { ok: true, queuedForReview: true, reviewId: r.id, sentParts: [], newMessages: [] };
