@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const TABS = [
   "chat",
   "tasks",
+  "outputs",
   "approvals",
   "plans",
   "memories",

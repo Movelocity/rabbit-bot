@@ -170,6 +170,125 @@
   font-size: 9px;
 }
 
+.rb-markdown {
+  color: var(--rb-text);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
+
+.rb-markdown > :first-child {
+  margin-top: 0;
+}
+
+.rb-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.rb-markdown h1,
+.rb-markdown h2,
+.rb-markdown h3,
+.rb-markdown h4,
+.rb-markdown h5,
+.rb-markdown h6 {
+  margin: 1.4em 0 0.6em;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.rb-markdown h1 { font-size: 1.55em; }
+.rb-markdown h2 { font-size: 1.3em; }
+.rb-markdown h3 { font-size: 1.12em; }
+.rb-markdown h4,
+.rb-markdown h5,
+.rb-markdown h6 { font-size: 1em; }
+
+.rb-markdown p,
+.rb-markdown ul,
+.rb-markdown ol,
+.rb-markdown blockquote,
+.rb-markdown pre,
+.rb-markdown table {
+  margin: 0 0 0.9em;
+}
+
+.rb-markdown ul,
+.rb-markdown ol {
+  padding-left: 1.5em;
+}
+
+.rb-markdown li + li {
+  margin-top: 0.25em;
+}
+
+.rb-markdown a {
+  color: var(--rb-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rb-markdown strong { font-weight: 650; }
+
+.rb-markdown code {
+  border-radius: 4px;
+  background: var(--rb-surface-2);
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rb-markdown pre {
+  overflow-x: auto;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: var(--rb-surface-2);
+  padding: 0.8em 1em;
+}
+
+.rb-markdown pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.86em;
+}
+
+.rb-markdown blockquote {
+  border-left: 3px solid var(--rb-accent);
+  padding-left: 0.9em;
+  color: var(--rb-muted);
+}
+
+.rb-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+}
+
+.rb-markdown th,
+.rb-markdown td {
+  border: 1px solid var(--rb-border);
+  padding: 0.35em 0.7em;
+  text-align: left;
+  vertical-align: top;
+  min-width: 4em;
+}
+
+.rb-markdown th {
+  background: var(--rb-surface-2);
+  font-weight: 600;
+}
+
+.rb-markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.rb-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--rb-border);
+  margin: 1.4em 0;
+}
+
 @keyframes rb-select-in {
   from {
     opacity: 0;

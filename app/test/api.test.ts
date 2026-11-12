@@ -360,6 +360,44 @@ test("沙盒文件：写读、越界拒绝", async () => {
   assert.equal(escape.status, 400);
 });
 
+test("任务产出：列目录、读 markdown、越界拒绝", async () => {
+  const out = path.join(dir, "runtime", "shared", "outputs", "task-7", "报告");
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(path.join(out, "summary.md"), "# 标题\n\n正文\n");
+  fs.writeFileSync(path.join(out, "rows.csv"), "name,value\na,1\n");
+  fs.writeFileSync(path.join(out, "image.bin"), Buffer.from([0x00, 0x01, 0x02]));
+
+  const root = await call("/v1/outputs");
+  assert.equal(root.status, 200, JSON.stringify(root.body));
+  assert.deepEqual(root.body.data.map((e: any) => e.name), ["task-7"]);
+
+  const nested = await call(`/v1/outputs?path=${encodeURIComponent("task-7/报告")}`);
+  assert.equal(nested.status, 200, JSON.stringify(nested.body));
+  assert.deepEqual(nested.body.data.map((e: any) => e.name), ["image.bin", "rows.csv", "summary.md"]);
+
+  const tree = await call("/v1/outputs/tree");
+  assert.equal(tree.status, 200, JSON.stringify(tree.body));
+  const task7 = tree.body.data.find((e: any) => e.path === "task-7");
+  assert.equal(task7.kind, "dir");
+  assert.deepEqual(task7.children.map((e: any) => e.name), ["报告"]);
+  assert.deepEqual(
+    task7.children[0].children.map((e: any) => e.name),
+    ["image.bin", "rows.csv", "summary.md"],
+  );
+
+  const md = await call(`/v1/outputs/file?path=${encodeURIComponent("task-7/报告/summary.md")}`);
+  assert.equal(md.status, 200, JSON.stringify(md.body));
+  assert.equal(md.body.data.ext, "md");
+  assert.equal(md.body.data.content, "# 标题\n\n正文\n");
+
+  const bin = await call(`/v1/outputs/file?path=${encodeURIComponent("task-7/报告/image.bin")}`);
+  assert.equal(bin.body.data.binary, true);
+  assert.equal(bin.body.data.content, "");
+
+  const escape = await call(`/v1/outputs/file?path=${encodeURIComponent("../../etc/passwd")}`);
+  assert.equal(escape.status, 400);
+});
+
 test("图片：列表与原始字节，越界拒绝", async () => {
   const list = await call("/v1/images?source=inbox");
   assert.equal(list.status, 200);

@@ -39,6 +39,7 @@ import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, w
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
+import { listOutputs, listOutputTree, readOutput } from "./ops/outputs.ts";
 import { listSkills } from "./ops/skills.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
@@ -1018,6 +1019,18 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, report);
           }
           throw new HttpError(404, "用法：GET|PUT /v1/business、GET /v1/business/lint（只读检查）");
+        }
+        case "outputs": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, listOutputs(d.cfg, url.searchParams.get("path") ?? ""));
+          }
+          if (parts.length === 3 && parts[2] === "tree" && method === "GET") {
+            return reply(200, listOutputTree(d.cfg));
+          }
+          if (parts.length === 3 && parts[2] === "file" && method === "GET") {
+            return reply(200, readOutput(d.cfg, url.searchParams.get("path") ?? ""));
+          }
+          throw new HttpError(404, "用法：GET /v1/outputs?path=、GET /v1/outputs/tree、GET /v1/outputs/file?path=");
         }
         case "sandbox": {
           // 只暴露文件区；`sb run` 不给 —— 技能脚本本来就在 shell 里

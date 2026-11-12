@@ -503,3 +503,31 @@ export interface LlmSessionDetail {
   next_before: number | null;
   messages: LlmLogMessage[];
 }
+
+export interface OutputEntry {
+  path: string;
+  name: string;
+  kind: "file" | "dir";
+  bytes?: number;
+  mtime?: number;
+}
+
+export interface OutputFile {
+  path: string;
+  name: string;
+  ext: string;
+  bytes: number;
+  mtime: number;
+  binary: boolean;
+  truncated: boolean;
+  content: string;
+}
+
+export interface OutputNode {
+  path: string;
+  name: string;
+  kind: "file" | "dir";
+  bytes?: number;
+  mtime?: number;
+  children?: OutputNode[];
+}

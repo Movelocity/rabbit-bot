@@ -15,6 +15,7 @@ import { Button } from "./components/ui.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
 import { TasksPage } from "./pages/TasksPage.tsx";
+import { OutputsPage } from "./pages/OutputsPage.tsx";
 import { ApprovalsPage } from "./pages/ApprovalsPage.tsx";
 import { PlansPage } from "./pages/PlansPage.tsx";
 import { MemoriesPage } from "./pages/MemoriesPage.tsx";
@@ -29,6 +30,7 @@ const ICON_URL = `${import.meta.env.BASE_URL}logo.png`;
 const TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "chat", label: "会话" },
   { tab: "tasks", label: "任务" },
+  { tab: "outputs", label: "产出" },
   { tab: "approvals", label: "权限" },
   { tab: "plans", label: "计划" },
   { tab: "memories", label: "记忆" },
@@ -38,6 +40,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
 
 const TAB_HINTS: Record<string, string> = {
   tasks: "飞书审批为主 · Web 备用",
+  outputs: "任务最终交付物 · Markdown / CSV 预览",
   approvals: "只读 · 审批请在飞书里完成",
   plans: "md 看板 · 目标可在 Web 或 IM 勾选",
   memories: "可直接改正文或删除 · 新增/过期走 IM",
@@ -254,6 +257,7 @@ export default function App() {
             />
           )}
           {tab === "tasks" && <TasksPage reloadSignal={reloadSignal} />}
+          {tab === "outputs" && <OutputsPage reloadSignal={reloadSignal} />}
           {tab === "approvals" && <ApprovalsPage reloadSignal={reloadSignal} />}
           {tab === "plans" && <PlansPage reloadSignal={reloadSignal} />}
           {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
