@@ -44,8 +44,8 @@ export class Hub {
   scheduler: Scheduler | null = null;
   /** 审批闸门：入站先过它，命中的不进池、不进她的上下文（见 core/approval.ts） */
   approval?: { tryHandle(m: InboundMessage): boolean };
-  /** 每次 send 的回调（日志/测试） */
-  onSent?: (poolId: string, text: string) => void;
+  /** 每次 send 的回调（日志/测试）；seq 是最后一段消息的本地序号 */
+  onSent?: (poolId: string, text: string, seq?: number) => void;
   /** 被 takeUnread 消费掉、但还没喂给模型的图片消息（send 的"期间新消息"会顺带把游标推过图片） */
   private pendingMedia: StoredMessage[] = [];
 
@@ -249,19 +249,21 @@ export class Hub {
     }
 
     await sleep(this.cfg.send.confirmWaitMs);
+    let lastSeq = 0;
     for (const p of parts) {
       p.confirmed = adapter.confirm && (this.cfg.send.confirmViaApi || adapter.platform === "mock") ? await adapter.confirm(p.msgId) : true;
       // 自己发的消息也入池（from_self），保证池里是完整对话；
       // internal=true 的是系统提示（额度用尽等）：入库留痕，但 recentMessages 会排掉，不污染上下文
-      this.store.insertMessage({
+      const saved = this.store.insertMessage({
         platform: pool.platform, external_chat_id: pool.external_id, pool_kind: pool.kind, msg_id: p.msgId,
         sender_id: "self", sender_name: this.cfg.agent.name, ts: Date.now(), text: p.content, reply_to: null,
         mentions: [], is_mention_me: false, media_type: p.kind === "sticker" ? "sticker" : "text", from_self: true,
         internal: opts.internal === true,
       });
+      if (saved) lastSeq = saved.seq;
     }
     this.scheduler?.markActive();
-    this.onSent?.(pool.pool_id, content);
+    this.onSent?.(pool.pool_id, content, lastSeq || undefined);
     // internal 的系统提示不能吃掉未读：它只是通知，用户的话还得等下次唤醒去读
     return { ok: true, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread(undefined, { excludeTask: true }) };
   }

@@ -7,7 +7,7 @@ import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
 import { evaluateGate } from "./core/gate.ts";
-import { buildReflectionPrompt, parseReflection } from "./core/reflection.ts";
+import { buildReflectionPrompt, extractJsonObject, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
 import {
   appendNote, archiveSettledTaskPools, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
@@ -18,6 +18,7 @@ import { setTaskEventNotifier } from "./core/task-events.ts";
 import { isRunnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
+import { AgentWatchdog, type WatchdogDecision } from "./core/agent-watchdog.ts";
 import { appendScheduleEvent, ensureSchedulePool, fireSchedule } from "./core/schedules.ts";
 import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey, fmtShort } from "./core/time.ts";
@@ -42,6 +43,7 @@ import {
   effectiveMemoryReviewSettings, loadMemoryReviewState, memoryReviewDue, saveMemoryReviewState,
   type MemoryReviewState,
 } from "./ops/memory-review.ts";
+import { effectiveWatchdogSettings } from "./ops/watchdog-settings.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -148,6 +150,8 @@ export class App {
   readonly approval: ApprovalGate;
   /** 任务发布审批闸门：任务先发到原聊天/审批房，主人在 IM 里裁决 */
   readonly taskApproval: TaskApprovalGate;
+  /** 发完消息后的看门狗：静默 10s 后复核是否可以直接执行等点头的项目动作 */
+  readonly watchdog: AgentWatchdog;
   private clock: Clock;
   /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
   private activeWake: Wake | null = null;
@@ -256,6 +260,17 @@ export class App {
       model: o.model, modelRuntime: o.modelRuntime, inMemorySessions: o.inMemorySessions,
       onUsage: (u) => this.store.addUsageEvent({ ...u, source: "llm" }),
     });
+    this.watchdog = new AgentWatchdog({
+      clock: this.clock, store: this.store, log: this.log,
+      settings: () => effectiveWatchdogSettings(cfg),
+      isPaused: () => this.store.isPaused(),
+      review: (poolId, lastSelf) => this.reviewWithWatchdog(poolId, lastSelf),
+      nudge: (poolId, reason) => this.nudgeFromWatchdog(poolId, reason),
+    });
+    this.hub.onSent = (poolId, _text, seq) => {
+      const sentSeq = seq ?? this.store.lastSelfMessageRow(poolId)?.seq ?? 0;
+      this.watchdog.onSent(poolId, sentSeq, this.clock.now());
+    };
   }
 
   async start() {
@@ -269,6 +284,7 @@ export class App {
   }
 
   async stop() {
+    this.watchdog.stop();
     this.scheduler.stop();
     if (this.reflectionTimer) { clearInterval(this.reflectionTimer as any); this.reflectionTimer = null; }
     if (this.approvalSweepTimer) { clearInterval(this.approvalSweepTimer as any); this.approvalSweepTimer = null; }
@@ -550,14 +566,14 @@ export class App {
 
   /** 每轮唤醒后累加用户回合；到点由 maybeMemoryReview 决定跑不跑。 */
   private noteInboundMessages(unread: StoredMessage[]): void {
-    const inbound = unread.filter((m) => !m.from_self).length;
+    const inbound = unread.filter((m) => !m.from_self && m.sender_id !== "system").length;
     if (!inbound) return;
     this.memoryReviewState = { ...this.memoryReviewState, turns: this.memoryReviewState.turns + inbound };
     try { saveMemoryReviewState(this.o.cfg, this.memoryReviewState); } catch { /* 状态写失败不影响唤醒 */ }
   }
 
   private pickReviewPool(unread: StoredMessage[]): string | null {
-    const inbound = unread.filter((m) => !m.from_self && m.user_id);
+    const inbound = unread.filter((m) => !m.from_self && m.user_id && m.sender_id !== "system");
     if (inbound.length) return inbound[inbound.length - 1].pool_id;
     return resolvePrimaryPool(this.store, this.activeWake) ?? null;
   }
@@ -611,6 +627,74 @@ export class App {
       this.reviewBusy = false;
       try { saveMemoryReviewState(cfg, this.memoryReviewState); } catch { /* ignore */ }
     }
+  }
+
+  // ---------- 发完消息后的看门狗 ----------
+
+  /**
+   * 独立临时会话复核最后一条消息：只判断「万事俱备，只欠用户点头」的项目内动作。
+   * 没有工具，不能发消息；解析失败一律按不放行处理。
+   */
+  private async reviewWithWatchdog(poolId: string, lastSelf: StoredMessage): Promise<WatchdogDecision | null> {
+    const cfg = this.o.cfg;
+    const now = this.clock.now();
+    if (!effectiveWatchdogSettings(cfg).enabled || this.store.isPaused()) return null;
+
+    const day = dayKey(now, cfg.timezone);
+    const usage = this.store.getUsage(day);
+    const tokensLeft = tokensLeftOf(cfg, usage.tokens);
+    const callsLeft = callsLeftOf(cfg, usage.llm_calls);
+    if (tokensLeft < 1500 || callsLeft < 1) return null;
+
+    const pool = this.store.getPool(poolId);
+    if (!pool) return null;
+    const rows = this.store.recentMessages(poolId, 13, lastSelf.seq)
+      .filter((m) => m.seq !== lastSelf.seq);
+    const recent = rows.map((m) =>
+      `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
+    ).join("\n");
+    const prompt = render("watchdog", {
+      now: new Intl.DateTimeFormat("zh-CN", {
+        timeZone: cfg.timezone, dateStyle: "medium", timeStyle: "short",
+      }).format(new Date(now)),
+      pool: this.store.poolAlias(poolId),
+      kind: pool.kind === "private" ? "私聊" : pool.kind === "group" ? "群聊" : pool.kind,
+      last: lastSelf.text.slice(0, 1200),
+      recent: recent || "（没有更早的消息）",
+    });
+    const res = await this.engine.review(prompt, { tokensLeft, callsLeft }, [], render("watchdog-system", {}));
+    this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
+    if (res.error || res.aborted) {
+      this.log.warn(`看门狗复核失败：${res.error ?? res.abortReason ?? "unknown"}`);
+      return null;
+    }
+    const json = extractJsonObject(res.assistantText);
+    if (!json) return null;
+    let raw: any;
+    try { raw = JSON.parse(json); } catch { return null; }
+    const action = String(raw?.action ?? "").trim().toLowerCase();
+    if (action !== "execute" && action !== "wait") return null;
+    const reason = String(raw?.reason ?? "").trim().slice(0, 200);
+    return { execute: action === "execute", reason: reason || (action === "execute" ? "条件满足" : "没有明确在等点头") };
+  }
+
+  /** 往原池插一条系统消息并立即唤醒；不经过适配器，用户不会在 IM 里看到它。 */
+  private nudgeFromWatchdog(poolId: string, reason: string): void {
+    const pool = this.store.getPool(poolId);
+    if (!pool) return;
+    const now = this.clock.now();
+    const text = "〔系统〕看门狗：你上一条在等用户点头的项目内动作，已经自动放行。"
+      + "直接执行，不要往聊天池发消息；如果已经做过或不需要再等，忽略这条，不要重复建任务。"
+      + `复核理由：${reason.slice(0, 200)}`;
+    const saved = this.store.insertMessage({
+      platform: pool.platform, external_chat_id: pool.external_id, pool_kind: pool.kind, pool_title: pool.title,
+      msg_id: `watchdog:${poolId}:${now}:${Math.random().toString(36).slice(2, 8)}`,
+      sender_id: "system", sender_name: "系统", ts: now, text, reply_to: null,
+      mentions: [], is_mention_me: false, media_type: "text", from_self: false,
+    });
+    if (!saved) return;
+    this.log.info(`看门狗插入系统消息 ${this.store.poolAlias(poolId)} #${saved.seq}`);
+    this.queue.enqueue(makeWake("message", [poolId], "看门狗：放行项目内动作", [], now));
   }
 
   // ---------- 自省 ----------

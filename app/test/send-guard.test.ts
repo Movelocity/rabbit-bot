@@ -8,7 +8,7 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 
 /** 假 Hub：记下每次 send 的内容，永远成功。 */
-function setup(opts: { wake?: string } = {}) {
+function setup(opts: { wake?: string; reasons?: string[] } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-send-"));
   const cfg = { ...loadConfig(), dataDir };
   const sent: string[] = [];
@@ -24,7 +24,7 @@ function setup(opts: { wake?: string } = {}) {
     cfg,
     now: () => Date.now(),
     profile: "ufa",
-    currentWake: () => (opts.wake ? { type: opts.wake } : null),
+    currentWake: () => (opts.wake ? { type: opts.wake, reasons: opts.reasons } : null),
   });
   const send = (tools as any[]).find((t) => t.name === "chat");
   return { send, sent };
@@ -59,4 +59,12 @@ test("send：正常的主动消息照发", async () => {
   const r = await send.execute("c", { action: "send", pool: "p1", content: "刚吃完饭，想起你昨天说的那家店" });
   assert.equal(r.details.ok, true);
   assert.equal(sent.length, 1);
+});
+
+test("send：看门狗放行的那一轮不许往聊天池发消息", async () => {
+  const { send, sent } = setup({ wake: "message", reasons: ["看门狗：放行项目内动作"] });
+  const r = await send.execute("c", { action: "send", pool: "p1", content: "已建好 #12" });
+  assert.equal(r.details.ok, false);
+  assert.equal(r.details.blocked, "watchdog");
+  assert.equal(sent.length, 0);
 });

@@ -36,6 +36,11 @@
     "recentContextMessages": 8,
     "maxUnreadPerPool": 50
   },
+  "watchdog": {
+    "enabled": false,
+    "delayMs": 10000,
+    "cooldownMs": 600000
+  },
   "handoff": {
     "contextTokenLimit": 60000,
     "sessionTokenLimit": 600000

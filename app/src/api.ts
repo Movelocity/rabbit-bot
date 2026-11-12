@@ -50,6 +50,9 @@ import {
 import {
   effectiveMemoryReviewSettings, saveMemoryReviewSettings, validateMemoryReviewSettings,
 } from "./ops/memory-review.ts";
+import {
+  applyWatchdogSettings, effectiveWatchdogSettings, saveWatchdogSettings, validateWatchdogSettings,
+} from "./ops/watchdog-settings.ts";
 import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 512 * 1024;
@@ -740,6 +743,25 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, effectiveSchedulerSettings(d.cfg));
           }
           throw new HttpError(404, "用法：GET|PUT /v1/scheduler");
+        }
+        case "watchdog": {
+          if (parts.length === 2 && method === "GET") return reply(200, effectiveWatchdogSettings(d.cfg));
+          if (parts.length === 2 && method === "PUT") {
+            let settings;
+            try {
+              settings = validateWatchdogSettings(body);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            try {
+              saveWatchdogSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入看门狗设置失败：${(e as Error).message}`);
+            }
+            applyWatchdogSettings(d.cfg, settings);
+            return reply(200, effectiveWatchdogSettings(d.cfg));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/watchdog");
         }
         case "memory-review": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveMemoryReviewSettings(d.cfg));

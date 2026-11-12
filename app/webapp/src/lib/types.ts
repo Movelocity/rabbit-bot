@@ -320,6 +320,12 @@ export interface MemoryReviewSettings {
   minIntervalSec: number;
 }
 
+export interface WatchdogSettings {
+  enabled: boolean;
+  delayMs: number;
+  cooldownMs: number;
+}
+
 export interface RuntimeFile {
   path: string;
   content: string;

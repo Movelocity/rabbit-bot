@@ -25,6 +25,8 @@ const PROMPT_LABELS: Record<string, string> = {
   "memory-review-system": "记忆梳理 · 系统",
   "voice-examples": "语气示例",
   "part-topics": "话题素材",
+  watchdog: "看门狗 · 复核",
+  "watchdog-system": "看门狗 · 系统",
 };
 
 const PROMPT_ORDER = [
@@ -37,6 +39,8 @@ const PROMPT_ORDER = [
   "memory-review-system",
   "voice-examples",
   "part-topics",
+  "watchdog",
+  "watchdog-system",
 ];
 
 const promptLabel = (name: string) => PROMPT_LABELS[name] ?? name;

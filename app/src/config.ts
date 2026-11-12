@@ -49,6 +49,17 @@ export interface Config {
     maxChars?: number;
   };
   context: { recentContextMessages: number; maxUnreadPerPool: number };
+  /**
+   * 发完消息后的「看门狗」：静默 delayMs 后复核 agent 最后一条消息。
+   * 只放行「万事俱备、只欠用户点头」且属于项目内部动作的事：往池里插一条系统消息并立即唤醒。
+   * 与 scheduler.watchdogMs（定时器逾期补触发）不是一回事。
+   */
+  watchdog: {
+    enabled: boolean;
+    delayMs: number;
+    /** 同一个池两次自动放行之间的冷却，防止来回触发 */
+    cooldownMs: number;
+  };
   handoff: { contextTokenLimit: number; sessionTokenLimit: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {

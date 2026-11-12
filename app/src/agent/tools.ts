@@ -47,8 +47,8 @@ export interface ToolDeps {
   hub: Hub;
   cfg: Config;
   now: () => number;
-  /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏 */
-  currentWake?: () => { type: string } | null;
+  /** 本轮唤醒类型；主动消息（plan）要过情感绑架护栏，看门狗放行不发聊天消息 */
+  currentWake?: () => { type: string; reasons?: string[] } | null;
   /** 本轮决定不回时的理由（chat action=skip）；非空就是已决定不回 */
   silenceReason?: () => string | null;
   /** 测试注入：用进程内实现替代沙盒 rb（生产走 docker）。 */
@@ -173,6 +173,10 @@ export function createTools(d: ToolDeps) {
 
           case "send": {
             if (!p.pool || !p.content) return txt("send 要 pool 和 content。", { ok: false });
+            // 看门狗只放行项目内动作；这一轮不往聊天池发消息
+            if (d.currentWake?.()?.reasons?.some((r) => r.startsWith("看门狗"))) {
+              return txt("看门狗放行只执行项目内动作，不往聊天池发消息。做完就结束这一轮。", { ok: false, blocked: "watchdog" });
+            }
             // 只有主动开口（plan 到点）才拦：日常对话里「你怎么还不回来」可能是玩笑
             if (d.currentWake?.()?.type === "plan") {
               const why = coerciveHit(p.content);
