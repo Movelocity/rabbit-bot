@@ -17,6 +17,9 @@ description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任�
 | `wa-business-map` | WA | 新增/修改业务地图、校验、汇报 | `{{SKILL_LIBRARY}}/wa-business-map/SKILL.md` |
 | `business-relation-modeling` | UFA / WA / 人 | 设计/清洗/评审业务关系图，判断图是否健康，把文档或代码事实转成业务对象和关系 | `{{SKILL_LIBRARY}}/business-relation-modeling/SKILL.md` |
 | `reporting` | UFA / WA | 写汇报、验收产出、他问「做完了没 / 结果在哪」 | `{{SKILL_LIBRARY}}/reporting/SKILL.md` |
+| `product-manager` | UFA / WA / 人 | 需求说不清、判断这活能不能接、替项目把需求和验收定下来 | `{{SKILL_LIBRARY}}/product-manager/SKILL.md` |
+| `project-manager` | UFA / WA / 人 | 项目既定、需求砍不掉、要拆解放进时间、排优先级、管风险、按周汇报 | `{{SKILL_LIBRARY}}/project-manager/SKILL.md` |
+| `requirement-methods` | UFA / WA / 人 | 要谈验收、判该不该做、定时间预算、砍范围——四份模板直接抄 | `{{SKILL_LIBRARY}}/requirement-methods/` |
 
 先完整读对应子技能的 `SKILL.md`，再按里面的步骤做。
 
@@ -24,6 +27,9 @@ description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任�
 
 - 业务关系/对象/影响面 → UFA 读 `ufa-business-map`；WA 读 `wa-business-map`
 - 设计/清洗/评审关系图，或判断图是否太碎 → 读 `business-relation-modeling`
+- 需求澄清 / 验收标准 / 停损条件 / 该不该接活 → 读 `product-manager`
+- 项目拆解 / 排序 / 风险触发信号 / 进度按验收块算 → 读 `project-manager`
+- 具体怎么把需求谈清 / 排优先级 / 定预算 / 判立项 → `requirement-methods`（Example Mapping、Impact Mapping、Shape Up Pitch、PR-FAQ）
 - 人设/提示词 → `app/README.md` 的「定制它」；运行时优先，仓库默认份在 `app/prompts/` 和 `app/config/persona.md`
 - 任务/审批/worker → `app/prompts/system.md`、`docs/SPEC-*`
 - 运维排障 → `app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
