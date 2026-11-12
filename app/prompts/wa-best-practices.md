@@ -46,9 +46,9 @@
 ## 产出落点
 
 - 最终交付物复制或导出到 `$RB_SHARED_DIR/outputs/task-<id>/`，不要只留在工作目录。
-- UFA 在沙盒里通过 `/work/shared/outputs/` 验收。
+- 项目经理在沙盒里通过 `/work/shared/outputs/` 验收。
 - `artifact` 填 shared 产出路径；工作目录里的原始路径写进交接文档。
-- 数据类产出（xlsx/csv）尤其要放这里，否则 UFA 看不到，等于没交付。
+- 数据类产出（xlsx/csv）尤其要放这里，否则项目经理看不到，等于没交付。
 
 ## 汇报口径
 

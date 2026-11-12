@@ -67,7 +67,8 @@ test("运行时目录空着 → 用仓库里的默认人设", () => {
   assert.match(personaPath(c), /config[\\/]persona\.md$/);
   const text = loadPersona(c);
   assert.match(text, /^# 小池/);
-  assert.ok(text.includes("工作汇报规范"), "默认人设要带说话规则，不是一句占位");
+  assert.ok(text.includes("项目经理"), "默认人设要写清角色，不是一句占位");
+  assert.ok(text.includes("决策压到最少"), "默认人设要带目标，不是一句占位");
 });
 
 test("提示词、人设、默认配置不写死本机用户名", () => {
