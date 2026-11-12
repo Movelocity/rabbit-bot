@@ -12,11 +12,16 @@ import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { InboundMessage, StoredMessage } from "../types.ts";
+import type { ProposeResult, SendReviewRequest } from "./send-review.ts";
 import path from "node:path";
 
 export interface SendOutcome {
   ok: boolean;
   error?: string;
+  /** true = 已进审核队列，主人批准后才会真正发到目标聊天 */
+  queuedForReview?: boolean;
+  /** 审核序号（queuedForReview=true 时有值） */
+  reviewId?: number;
   /** true = 没发出去，因为发之前来了新消息，把话原样退回去让她重新判断 */
   held?: boolean;
   /** held 时被压住的那句（原样） */
@@ -44,6 +49,11 @@ export class Hub {
   scheduler: Scheduler | null = null;
   /** 审批闸门：入站先过它，命中的不进池、不进她的上下文（见 core/approval.ts） */
   approval?: { tryHandle(m: InboundMessage): boolean };
+  /** 出站审核：这个池要不要审由 App 按配置实时判断；要审时先提交预览，贴 OK 才真正发 */
+  review?: {
+    shouldReview(poolId: string): boolean;
+    propose(req: SendReviewRequest): Promise<ProposeResult>;
+  };
   /** 每次 send 的回调（日志/测试）；seq 是最后一段消息的本地序号 */
   onSent?: (poolId: string, text: string, seq?: number) => void;
   /** 被 takeUnread 消费掉、但还没喂给模型的图片消息（send 的"期间新消息"会顺带把游标推过图片） */
@@ -188,8 +198,8 @@ export class Hub {
     }
   }
 
-  /** send(pool, content)：表情解析 → 发送 → 等待约 1 秒确认 → 收集期间新消息 */
-  async send(poolRef: string, content: string, opts: { internal?: boolean } = {}): Promise<SendOutcome> {
+  /** send(pool, content)：审核 → 表情解析 → 发送 → 等待约 1 秒确认 → 收集期间新消息 */
+  async send(poolRef: string, content: string, opts: { internal?: boolean; reviewed?: boolean } = {}): Promise<SendOutcome> {
     const pool = this.store.resolvePool(poolRef);
     if (!pool) return { ok: false, error: `未知的池 ${poolRef}`, sentParts: [], newMessages: [] };
     const adapter = this.adapters.get(pool.platform);
@@ -205,11 +215,32 @@ export class Hub {
     // 这期间他要是又说话了，这一句就先压住不发。
     // 她是在「上一条消息」的基础上想好这几句的；人已经补了新信息，
     // 照着旧前提继续说是最像机器的一件事。原话退回去，让她看完再决定发不发、改不改。
-    if (!opts.internal) {
+    if (!opts.internal && !opts.reviewed) {
       const fresh = this.takeUnread(undefined, { excludeTask: true });
       if (fresh.length) {
         return { ok: false, held: true, heldText: content, error: "发之前来了新消息", sentParts: [], newMessages: fresh };
       }
+    }
+
+    // 出站审核：这里只把预览发到审批聊天，目标聊天一个字都还没收到。
+    // 主人贴 OK 后 gate 会再调一次 send({ reviewed: true }) 真正发送。
+    if (!opts.internal && !opts.reviewed && this.review?.shouldReview(pool.pool_id)) {
+      const r = await this.review.propose({
+        platform: pool.platform,
+        chatId: pool.external_id,
+        poolRef: pool.pool_id,
+        poolTitle: pool.title,
+        kind: pool.kind,
+        content,
+        deliver: async () => {
+          const sent = await this.send(poolRef, content, { reviewed: true });
+          return { ok: sent.ok, error: sent.error };
+        },
+      });
+      if (r.queued) {
+        return { ok: true, queuedForReview: true, reviewId: r.id, sentParts: [], newMessages: [] };
+      }
+      return { ok: false, error: r.error ?? "发送审核不可用，这条没有发", sentParts: [], newMessages: [] };
     }
 
     const parts: SendOutcome["sentParts"] = [];
@@ -240,7 +271,7 @@ export class Hub {
       await flush();
     } catch (e) {
       this.log.error(`发送失败 ${pool.pool_id}`, e);
-      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread(undefined, { excludeTask: true }) };
+      return { ok: false, error: (e as Error).message, sentParts: parts, newMessages: opts.internal || opts.reviewed ? [] : this.takeUnread(undefined, { excludeTask: true }) };
     }
     // 节奏的基准：这一条发出去的时刻和长度，决定下一条要等多久
     if (!opts.internal && parts.length) {
@@ -264,7 +295,9 @@ export class Hub {
     }
     this.scheduler?.markActive();
     this.onSent?.(pool.pool_id, content, lastSeq || undefined);
-    // internal 的系统提示不能吃掉未读：它只是通知，用户的话还得等下次唤醒去读
-    return { ok: true, sentParts: parts, newMessages: opts.internal ? [] : this.takeUnread(undefined, { excludeTask: true }) };
+    // internal 的系统提示不能吃掉未读：它只是通知，用户的话还得等下次唤醒去读。
+    // reviewed 是审核通过后的补发，此刻没有一轮 agent 在等返回值；吃掉未读会让新消息
+    // 既没进下一轮 prompt、也不再触发唤醒。留着，交给调度器下一次唤醒去读。
+    return { ok: true, sentParts: parts, newMessages: opts.internal || opts.reviewed ? [] : this.takeUnread(undefined, { excludeTask: true }) };
   }
 }

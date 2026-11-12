@@ -301,7 +301,7 @@ export function Segmented<T extends string>({
 }) {
   return (
     <div
-      className="inline-flex rounded-full border border-border bg-surface2 p-0.5"
+      className="inline-flex rounded-full border border-border bg-surface p-0.5"
       role="group"
       aria-label={label}
     >
@@ -310,9 +310,10 @@ export function Segmented<T extends string>({
           key={option.value}
           type="button"
           className={cx(
-            "rounded-full px-3 py-1 text-xs transition",
+            "rounded-full px-3 py-1 text-xs outline-none transition",
+            "focus-visible:ring-2 focus-visible:ring-accent/35",
             value === option.value
-              ? "bg-accent-soft font-semibold text-accent"
+              ? "bg-accent font-semibold text-[color:var(--rb-surface)] shadow-sm"
               : "text-muted hover:text-text",
           )}
           aria-pressed={value === option.value}

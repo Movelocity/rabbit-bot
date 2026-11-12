@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { friendlyError } from "../../lib/format.ts";
-import type { MemoryReviewSettings, SchedulerSettings, WatchdogSettings } from "../../lib/types.ts";
+import type {
+  MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
+} from "../../lib/types.ts";
 import { Button, Card, CardBody, CardHead, CardTitle, Field, Input, Select, StatusText } from "../../components/ui.tsx";
 
 const DEFAULT_MEMORY_REVIEW: MemoryReviewSettings = {
@@ -14,6 +16,13 @@ const DEFAULT_WATCHDOG: WatchdogSettings = {
   enabled: false,
   delayMs: 10000,
   cooldownMs: 600000,
+};
+
+const DEFAULT_SEND_REVIEW: SendReviewSettings = {
+  enabled: false,
+  defaultReview: false,
+  primaryPoolId: null,
+  overrides: {},
 };
 
 export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
@@ -32,6 +41,11 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   const [watchdogStatus, setWatchdogStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [watchdogSaving, setWatchdogSaving] = useState(false);
 
+  const [sendReview, setSendReview] = useState<SendReviewSettings>(DEFAULT_SEND_REVIEW);
+  const [sendReviewReady, setSendReviewReady] = useState(true);
+  const [sendReviewStatus, setSendReviewStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [sendReviewSaving, setSendReviewSaving] = useState(false);
+
   const apply = useCallback((s: SchedulerSettings) => {
     setPrivateSec(String(Math.round(Number(s.privateWakeMs) / 1000)));
     setGroupSec(String(Math.round(Number(s.groupWakeMs) / 1000)));
@@ -42,22 +56,33 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     setStatus({ text: "加载中…" });
     setMemoryStatus({ text: "加载中…" });
     setWatchdogStatus({ text: "加载中…" });
+    setSendReviewStatus({ text: "加载中…" });
     try {
-      const [s, m, w] = await Promise.all([
+      const [s, m, w, sr] = await Promise.all([
         request<SchedulerSettings>("/v1/scheduler"),
         request<MemoryReviewSettings>("/v1/memory-review"),
         request<WatchdogSettings>("/v1/watchdog"),
+        request<SendReviewSettingsResponse>("/v1/send-review"),
       ]);
       apply(s);
       setMemoryReview(m);
       setWatchdog(w);
+      setSendReview({
+        enabled: sr.enabled,
+        defaultReview: sr.defaultReview,
+        primaryPoolId: sr.primaryPoolId ?? null,
+        overrides: sr.overrides ?? {},
+      });
+      setSendReviewReady(sr.ready !== false);
       setStatus({ text: "" });
       setMemoryStatus({ text: "" });
       setWatchdogStatus({ text: "" });
+      setSendReviewStatus({ text: "" });
     } catch (e) {
       setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setMemoryStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setWatchdogStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
+      setSendReviewStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
     }
   }, [request, apply]);
 
@@ -135,6 +160,34 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
       setWatchdogStatus({ text: `保存失败：${friendlyError(e)}`, error: true });
     } finally {
       setWatchdogSaving(false);
+    }
+  };
+
+  const saveSendReview = async () => {
+    setSendReviewSaving(true);
+    setSendReviewStatus({ text: "保存中…" });
+    try {
+      const saved = await request<SendReviewSettingsResponse>("/v1/send-review", {
+        method: "PUT",
+        body: {
+          enabled: sendReview.enabled,
+          defaultReview: sendReview.defaultReview,
+          primaryPoolId: sendReview.primaryPoolId,
+          overrides: sendReview.overrides,
+        },
+      });
+      setSendReview({
+        enabled: saved.enabled,
+        defaultReview: saved.defaultReview,
+        primaryPoolId: saved.primaryPoolId ?? null,
+        overrides: saved.overrides ?? {},
+      });
+      setSendReviewReady(saved.ready !== false);
+      setSendReviewStatus({ text: "已保存并生效" });
+    } catch (e) {
+      setSendReviewStatus({ text: `保存失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setSendReviewSaving(false);
     }
   };
 
@@ -282,6 +335,54 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
             </Button>
           </div>
           <StatusText text={watchdogStatus.text} error={watchdogStatus.error} />
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHead>
+          <CardTitle>发送审核</CardTitle>
+        </CardHead>
+        <CardBody>
+          <p className="mb-3 text-sm text-muted">
+            agent 发出的消息先在审批房预览，主人贴 OK / 👍 才真正发到聊天；贴 No / 👎 或超时就不发。
+            按会话的开关在「会话」页顶部：主对话默认直接发，需要审的群单独打开。默认关闭。
+          </p>
+          {!sendReviewReady && (
+            <p className="mb-3 text-sm text-bad">
+              审批房还没配好：先在 config/local.json 的 sendReview（或 approval）里填 platform / roomId / ownerIds，重启后才能打开。
+            </p>
+          )}
+          <div className="grid grid-cols-[minmax(120px,220px)_minmax(180px,300px)] gap-3 max-[820px]:grid-cols-1">
+            <Field label="总开关">
+              <Select
+                value={sendReview.enabled ? "on" : "off"}
+                onValueChange={(value) => setSendReview((x) => ({ ...x, enabled: value === "on" }))}
+                options={[
+                  { value: "off", label: "关闭（全部直接发）" },
+                  { value: "on", label: "开启" },
+                ]}
+                ariaLabel="发送审核总开关"
+              />
+            </Field>
+            <Field label="未单独设置的会话">
+              <Select
+                value={sendReview.defaultReview ? "review" : "direct"}
+                onValueChange={(value) => setSendReview((x) => ({ ...x, defaultReview: value === "review" }))}
+                options={[
+                  { value: "review", label: "需审批" },
+                  { value: "direct", label: "直接发送" },
+                ]}
+                ariaLabel="发送审核默认策略"
+              />
+            </Field>
+          </div>
+
+          <div className="my-3">
+            <Button variant="primary" disabled={sendReviewSaving} onClick={() => void saveSendReview()}>
+              {sendReviewSaving ? "保存中…" : "保存"}
+            </Button>
+          </div>
+          <StatusText text={sendReviewStatus.text} error={sendReviewStatus.error} />
         </CardBody>
       </Card>
     </>

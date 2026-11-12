@@ -53,6 +53,10 @@ import {
 import {
   applyWatchdogSettings, effectiveWatchdogSettings, saveWatchdogSettings, validateWatchdogSettings,
 } from "./ops/watchdog-settings.ts";
+import {
+  applySendReviewSettings, effectiveSendReviewSettings, saveSendReviewSettings, validateSendReviewSettings,
+} from "./ops/send-review-settings.ts";
+import { resolveSendReviewConfig, sendReviewReady } from "./core/send-review.ts";
 import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 512 * 1024;
@@ -780,6 +784,38 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, effectiveMemoryReviewSettings(d.cfg));
           }
           throw new HttpError(404, "用法：GET|PUT /v1/memory-review");
+        }
+        case "send-review": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, { ...effectiveSendReviewSettings(d.cfg), ready: sendReviewReady(d.cfg) });
+          }
+          if (parts.length === 2 && method === "PUT") {
+            let settings;
+            try {
+              settings = validateSendReviewSettings(body);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            // 主对话必须真实存在，避免写进一个永远收不到审批的池
+            if (settings.primaryPoolId && !d.store.getPool(settings.primaryPoolId)) {
+              throw new HttpError(400, `没有这个会话池：${settings.primaryPoolId}`);
+            }
+            // 没配审批去处时不允许打开：否则所有出站消息都会 fail-closed 被拦下。
+            // 用这次要保存的设置算，而不是还没应用的旧 cfg，否则「刚指定主对话就打开」会被误拒。
+            const resolved = resolveSendReviewConfig(d.cfg);
+            const hasTarget = !!resolved.roomId || !!settings.primaryPoolId;
+            if (settings.enabled && (!hasTarget || !(resolved.ownerIds ?? []).length)) {
+              throw new HttpError(400, "审批去处没配好：先在 config/local.json 的 sendReview 或 approval 里配置 platform / roomId / ownerIds，或指定一个主对话池");
+            }
+            try {
+              saveSendReviewSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入发送审核设置失败：${(e as Error).message}`);
+            }
+            applySendReviewSettings(d.cfg, settings);
+            return reply(200, { ...effectiveSendReviewSettings(d.cfg), ready: sendReviewReady(d.cfg) });
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/send-review");
         }
         case "persona": {
           if (parts.length === 2 && method === "GET") return reply(200, readPersona(d.cfg));

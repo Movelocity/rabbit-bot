@@ -177,6 +177,32 @@ export interface Config {
     /** 裁决后回一句状态到原聊天/审批房 */
     notify?: boolean;
   };
+  /**
+   * 出站消息审核：agent 往聊天池发消息前，先把内容发到审批聊天，主人贴 OK / No 裁决。
+   * 打开后所有池（私聊、群聊、任务）的非系统消息都要过审；超时 = 不发送（fail-closed）。
+   * platform / roomId / ownerIds / timeoutMs 留空时复用 approval 的配置。
+   */
+  sendReview?: {
+    enabled: boolean;
+    /** 未单独设置的池默认是否审核（默认 false：主对话直接发，只有标记过的会话走审批） */
+    defaultReview?: boolean;
+    /** 主对话池的 pool_id：永远不审核，审批消息也发到这个会话 */
+    primaryPoolId?: string | null;
+    /** 按池覆盖：pool_id → 是否审核；Web 管理台保存后写运行时文件并覆盖这里 */
+    overrides?: Record<string, boolean>;
+    /** matrix / feishu */
+    platform?: string;
+    /** 审批聊天的 external chat id */
+    roomId?: string;
+    /** 谁能批；空 = 复用 approval.ownerIds，仍为空则视为没配好（不发送） */
+    ownerIds?: string[];
+    /** 超时毫秒，超时即不发送 */
+    timeoutMs?: number;
+    /** 裁决后回一句状态到审批聊天（默认 true） */
+    notify?: boolean;
+    /** 预览里最多显示原消息多少字（默认 800） */
+    previewMaxChars?: number;
+  };
   /** 本地 REST API：沙盒里的技能脚本通过它访问池/计划/记忆/沙盒文件 */
   api?: { enabled: boolean; port: number; host: string };
   inject?: { port: number };
@@ -328,6 +354,24 @@ export function validateConfig(cfg: Config): void {
     }
     if (!(cfg.taskApproval.ownerIds ?? []).length) {
       throw new Error("config: taskApproval.ownerIds 不能为空（taskApproval.enabled=true 时）");
+    }
+  }
+  if (cfg.sendReview?.enabled) {
+    const platform = String(cfg.sendReview.platform ?? "").trim() || String(cfg.approval?.platform ?? "").trim();
+    const roomId = String(cfg.sendReview.roomId ?? "").trim() || String(cfg.approval?.roomId ?? "").trim();
+    const primaryPoolId = String(cfg.sendReview.primaryPoolId ?? "").trim();
+    if (!primaryPoolId) {
+      if (!platform) throw new Error("config: sendReview.platform 不能为空（也可复用 approval.platform）");
+      if (!roomId) throw new Error("config: sendReview.roomId 不能为空（也可复用 approval.roomId，或指定 primaryPoolId）");
+    }
+    const owners = (cfg.sendReview.ownerIds ?? []).length
+      ? (cfg.sendReview.ownerIds ?? [])
+      : (cfg.approval?.ownerIds ?? []);
+    if (!owners.length) throw new Error("config: sendReview.ownerIds 不能为空（sendReview.enabled=true 时）");
+    pos(cfg.sendReview.timeoutMs ?? cfg.approval?.timeoutMs ?? 600000, "sendReview.timeoutMs");
+    const max = cfg.sendReview.previewMaxChars;
+    if (max !== undefined && !(Number.isInteger(max) && max > 0)) {
+      throw new Error("config: sendReview.previewMaxChars 必须是正整数");
     }
   }
   pos(cfg.loopGuard.blockThreshold, "loopGuard.blockThreshold");

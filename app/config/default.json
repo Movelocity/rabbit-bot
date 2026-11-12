@@ -181,5 +181,16 @@
     "ownerIds": [],
     "timeoutMs": 86400000,
     "notify": true
+  },
+  "sendReview": {
+    "enabled": false,
+    "defaultReview": false,
+    "primaryPoolId": null,
+    "overrides": {},
+    "platform": "",
+    "roomId": "",
+    "ownerIds": [],
+    "timeoutMs": 600000,
+    "notify": true
   }
 }

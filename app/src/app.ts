@@ -31,6 +31,8 @@ import { PiEngine, type AgentEngine, type RunResult } from "./agent/engine.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
 import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
+import { SendReviewGate, resolveSendReviewConfig } from "./core/send-review.ts";
+import { effectiveSendReviewSettings, reviewRequiredFor } from "./ops/send-review-settings.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -150,6 +152,8 @@ export class App {
   readonly approval: ApprovalGate;
   /** 任务发布审批闸门：任务先发到原聊天/审批房，主人在 IM 里裁决 */
   readonly taskApproval: TaskApprovalGate;
+  /** 出站消息审核闸门：开关打开时，agent 发出的消息先预览给主人贴 OK 才发 */
+  readonly sendReview: SendReviewGate;
   /** 发完消息后的看门狗：静默 10s 后复核是否可以直接执行等点头的项目动作 */
   readonly watchdog: AgentWatchdog;
   private clock: Clock;
@@ -203,11 +207,36 @@ export class App {
         onTimeout: (task) => this.timeoutTaskFromChat(task),
       },
     );
-    // 两个闸门可以共用一个审批房：先看是不是任务审批，再看是不是命令审批。
+    const sendReviewCfg = resolveSendReviewConfig(cfg);
+    this.sendReview = new SendReviewGate(
+      sendReviewCfg,
+      this.log,
+      (target, text) => this.hub.sendSystem(target.platform, target.chatId, text),
+      // 主对话池：审批预览也发到这里；没指定主对话时才退回固定审批房
+      () => {
+        const primaryId = String(cfg.sendReview?.primaryPoolId ?? "").trim();
+        if (!primaryId) return null;
+        const pool = this.store.getPool(primaryId);
+        return pool ? { platform: pool.platform, chatId: pool.external_id } : null;
+      },
+    );
+    // 钩子一直挂着：总开关和「哪些池要审」由 Web 管理台实时改 cfg.sendReview，
+    // 不能只在启动时按当时的 enabled 决定挂不挂，否则前端打开后要重启才生效。
+    this.hub.review = {
+      shouldReview: (poolId) => reviewRequiredFor(effectiveSendReviewSettings(cfg), poolId),
+      propose: (req) => this.sendReview.propose(req),
+    };
+    if (cfg.sendReview?.enabled && !this.sendReview.enabled) {
+      // 开关打开但审批房没配好时不要悄悄放行——propose 会直接报错，所有出站消息被拦下
+      this.log.warn("sendReview 开着但缺 platform / roomId / ownerIds：agent 的出站消息都会被拦下不发送");
+    } else if (cfg.sendReview?.enabled) {
+      this.log.info(`出站消息审核已开启：${sendReviewCfg.platform} / ${sendReviewCfg.roomId}，超时 ${sendReviewCfg.timeoutMs}ms 不发送`);
+    }
+    // 三个闸门可以共用一个审批房：任务审批 → 出站审核 → 命令审批。
     // 只有闸门明确认领的裁决消息才不进池；其余消息照常入池。
     // 审批房也可能是私聊，不能因为聊天 id 命中审批配置就把正常对话吞掉。
     this.hub.approval = {
-      tryHandle: (m) => this.taskApproval.tryHandle(m) || this.approval.tryHandle(m),
+      tryHandle: (m) => this.taskApproval.tryHandle(m) || this.sendReview.tryHandle(m) || this.approval.tryHandle(m),
     };
     this.scheduler = new Scheduler(cfg.scheduler, {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),

@@ -217,9 +217,29 @@ export default function App() {
           ))}
           <button
             type="button"
-            className="sticky right-0 z-[1] my-auto ml-auto mr-0 rounded-full border border-border bg-surface2 px-3 py-1 text-xs text-muted hover:text-text"
+            title="重新加载当前页数据"
+            className={cx(
+              "sticky right-0 z-[1] my-auto ml-auto mr-0 inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition",
+              "hover:border-accent/40 hover:bg-accent-soft hover:text-accent",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
+            )}
             onClick={() => setReloadSignal((n) => n + 1)}
           >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-3.5">
+              <path
+                d="M20.5 7.5V12h-4.5M3.5 16.5V12H8"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M5.6 9.5A7.2 7.2 0 0 1 18.2 7M18.4 14.5A7.2 7.2 0 0 1 5.8 17"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
             刷新
           </button>
         </nav>

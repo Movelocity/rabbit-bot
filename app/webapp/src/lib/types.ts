@@ -326,6 +326,20 @@ export interface WatchdogSettings {
   cooldownMs: number;
 }
 
+export interface SendReviewSettings {
+  enabled: boolean;
+  defaultReview: boolean;
+  /** 主对话池：永远不审核，审批消息也发到这里 */
+  primaryPoolId: string | null;
+  /** pool_id → 是否审核；true = 需审批，false = 直接发 */
+  overrides: Record<string, boolean>;
+}
+
+export interface SendReviewSettingsResponse extends SendReviewSettings {
+  /** 审批房和主人有没有配好；没配好时不能打开总开关 */
+  ready: boolean;
+}
+
 export interface RuntimeFile {
   path: string;
   content: string;

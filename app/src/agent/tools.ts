@@ -120,7 +120,7 @@ export function createTools(d: ToolDeps) {
 
   const CHAT_HELP = [
     "chat 的用法（action 必填）：",
-    "  send    pool content            发一条消息（唯一会被他看到的输出）",
+    "  send    pool content            发一条消息（唯一会被他看到的输出；开了出站审核时先提交审核，批准后才真正发出）",
     "  skip    reason                   这一轮不回，什么都不发",
     "  view    path                     把一张图读进上下文（图片#id 或 media/… / inbox/…）",
     "  download id                     按需下载收到的文件（消息里的 附件id=file_xxx）",
@@ -192,6 +192,15 @@ export function createTools(d: ToolDeps) {
               if (!v.ok) return txt(v.hint ?? "这句别发，换你自己的说法。", { ok: false, blocked: v.reason });
             }
             const r = await d.hub.send(p.pool, p.content);
+            // 出站审核开着：这条只是进了审核队列，主人批准后才会真正发到聊天里。
+            // 明确告诉她别再重发，否则模型容易以为没发出去又追加一条。
+            if (r.queuedForReview) {
+              return txt(
+                `已提交审核（#${r.reviewId ?? "?"}），主人在审批房贴 OK 后才会真正发到「${p.pool}」。`
+                + "现在还没发出去，这轮不用再发一次；被驳回就不会发了。",
+                { ok: true, queuedForReview: true, reviewId: r.reviewId },
+              );
+            }
             // 被压住：他在这几秒里又说话了。先把新消息给她看，那句原样退回——发不发、怎么改，她重新定
             if (r.held) {
               return txt(

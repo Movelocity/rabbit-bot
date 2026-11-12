@@ -10,8 +10,10 @@ import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError, kindLabel } from "../lib/format.ts";
-import type { Pool, PoolMessage, PoolMessages } from "../lib/types.ts";
+import type { Pool, PoolMessage, PoolMessages, SendReviewSettingsResponse } from "../lib/types.ts";
 import { Button, Empty, Segmented } from "../components/ui.tsx";
+
+type PoolReviewMode = "inherit" | "review" | "direct";
 
 function mergeMessages(prev: PoolMessage[], incoming: PoolMessage[]): PoolMessage[] {
   const map = new Map(prev.map((m) => [m.seq, m]));
@@ -38,6 +40,8 @@ export function ChatPage({
   const [reading, setReading] = useState(false);
   const [view, setView] = useState<"active" | "archived">("active");
   const [archiving, setArchiving] = useState(false);
+  const [sendReview, setSendReview] = useState<SendReviewSettingsResponse | null>(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
 
   const messagesBox = useRef<HTMLDivElement>(null);
   const messagesData = useRef<PoolMessage[]>([]);
@@ -138,9 +142,18 @@ export function ChatPage({
     }
   }, [request, loadingOlder, applyMessages]);
 
+  const loadSendReview = useCallback(async () => {
+    try {
+      setSendReview(await request<SendReviewSettingsResponse>("/v1/send-review"));
+    } catch {
+      // 老后端没有这个接口时不影响聊天
+    }
+  }, [request]);
+
   useEffect(() => {
     void loadPools(false);
-  }, [loadPools]);
+    void loadSendReview();
+  }, [loadPools, loadSendReview]);
 
   useEffect(() => {
     requestId.current++;
@@ -160,8 +173,9 @@ export function ChatPage({
 
   useEffect(() => {
     if (reloadSignal === 0) return;
+    void loadSendReview();
     void loadPools(false).then(() => loadLatest(false));
-  }, [reloadSignal, loadPools, loadLatest]);
+  }, [reloadSignal, loadSendReview, loadPools, loadLatest]);
 
   useLayoutEffect(() => {
     const box = messagesBox.current;
@@ -194,6 +208,74 @@ export function ChatPage({
       setArchiving(false);
     }
   }, [pool, archiving, request, loadPools]);
+
+  const changePoolReview = useCallback(
+    async (mode: PoolReviewMode) => {
+      if (!pool || !sendReview || reviewSaving) return;
+      setReviewSaving(true);
+      try {
+        const overrides = { ...sendReview.overrides };
+        // 默认就是直接发时，「直接发」等于回到默认，不写死一条覆盖
+        if (mode === "inherit" || (mode === "direct" && !sendReview.defaultReview)) {
+          delete overrides[pool.pool_id];
+        } else {
+          overrides[pool.pool_id] = mode === "review";
+        }
+        const saved = await request<SendReviewSettingsResponse>("/v1/send-review", {
+          method: "PUT",
+          body: {
+            // 给某个会话打开审批时顺手把总开关打开，省得再去设置页找
+            enabled: mode === "review" ? true : sendReview.enabled,
+            defaultReview: sendReview.defaultReview,
+            primaryPoolId: sendReview.primaryPoolId,
+            overrides,
+          },
+        });
+        setSendReview(saved);
+        setStatus({ text: "" });
+      } catch (e) {
+        setStatus({ text: `设置发送审核失败：${friendlyError(e)}`, error: true });
+      } finally {
+        setReviewSaving(false);
+      }
+    },
+    [pool, sendReview, reviewSaving, request],
+  );
+
+  const isPrimary = !!pool && sendReview?.primaryPoolId === pool.pool_id;
+  // 这个会话当前实际走不走审批：主对话永远免审；否则看单独覆盖，再退到全局默认
+  const effectiveReview = !pool || isPrimary
+    ? false
+    : (sendReview?.overrides[pool.pool_id] ?? sendReview?.defaultReview ?? false);
+
+  const setPrimaryPool = useCallback(
+    async (makePrimary: boolean) => {
+      if (!pool || !sendReview || reviewSaving) return;
+      setReviewSaving(true);
+      try {
+        const saved = await request<SendReviewSettingsResponse>("/v1/send-review", {
+          method: "PUT",
+          body: {
+            enabled: sendReview.enabled,
+            defaultReview: sendReview.defaultReview,
+            primaryPoolId: makePrimary ? pool.pool_id : null,
+            overrides: sendReview.overrides,
+          },
+        });
+        setSendReview(saved);
+        setStatus({
+          text: makePrimary
+            ? "已设为主对话：它发送的消息永不审批，审批消息也发到这里"
+            : "已取消主对话",
+        });
+      } catch (e) {
+        setStatus({ text: `设置主对话失败：${friendlyError(e)}`, error: true });
+      } finally {
+        setReviewSaving(false);
+      }
+    },
+    [pool, sendReview, reviewSaving, request],
+  );
 
   const canLoadOlder =
     oldestSeq !== null && messages.length > 0 && messages[0].seq > oldestSeq;
@@ -290,10 +372,39 @@ export function ChatPage({
               {pool ? `${total} 条消息` : ""}
             </div>
           </div>
-          {pool && (
-            <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
-              {pool.archived ? "取消归档" : "归档"}
-            </Button>
+          {pool && sendReview && (pool.kind === "group" || pool.kind === "private") && (
+            <div className="flex flex-none items-center gap-2">
+              {isPrimary ? (
+                <span
+                  className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
+                  title="主对话永远免审批，审批消息也发到这里"
+                >
+                  发送免审批
+                </span>
+              ) : (
+                <Segmented
+                  value={effectiveReview ? "review" : "direct"}
+                  options={[
+                    { value: "direct", label: "直接发" },
+                    { value: "review", label: "需审批" },
+                  ]}
+                  onChange={(value) => void changePoolReview(value)}
+                  label="这个会话发送是否需要审批"
+                />
+              )}
+              <Button
+                variant={isPrimary ? "default" : "ghost"}
+                size="sm"
+                disabled={reviewSaving}
+                aria-pressed={isPrimary}
+                title={isPrimary
+                  ? "主对话永远免审批，审批消息也发到这里；点此取消"
+                  : "设为主对话：永不审批，并接收审批消息"}
+                onClick={() => void setPrimaryPool(!isPrimary)}
+              >
+                {isPrimary ? "主对话 ✓" : "设为主对话"}
+              </Button>
+            </div>
           )}
         </div>
 
@@ -397,15 +508,22 @@ export function ChatPage({
 
         <div className="flex items-center justify-between gap-3 border-t border-border px-7 py-2.5 text-xs text-muted max-[820px]:px-4">
           <span>只读 · 收发走已启用的 IM</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              if (messagesBox.current) messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
-            }}
-          >
-            回到最新
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {pool && (
+              <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
+                {pool.archived ? "取消归档" : "归档"}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (messagesBox.current) messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
+              }}
+            >
+              回到最新
+            </Button>
+          </div>
         </div>
       </section>
     </div>

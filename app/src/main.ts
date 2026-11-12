@@ -20,6 +20,7 @@ import { ensureRuntime, ensureHostSandboxLinks, ensureSharedWorkspace, runtimeSu
 import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import { loadWatchdogSettings } from "./ops/watchdog-settings.ts";
+import { loadSendReviewSettings } from "./ops/send-review-settings.ts";
 import path from "node:path";
 
 async function main() {
@@ -28,6 +29,7 @@ async function main() {
   // Web 管理台保存过的调度间隔 / 看门狗：先应用再建 App，重启后照旧生效
   loadSchedulerSettings(cfg, log);
   loadWatchdogSettings(cfg, log);
+  loadSendReviewSettings(cfg, log);
   // 运行时内容（人设/提示词/话题库/汇报/附件）在仓库外：先保证目录在，再把模板目录指过去
   ensureRuntime(cfg, [...runtimeSubdirs(cfg), "shared", "files", "business"]);
   const sharedMade = ensureSharedWorkspace(cfg);
