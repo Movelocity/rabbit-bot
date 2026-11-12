@@ -165,7 +165,15 @@ export function createTools(d: ToolDeps) {
       archived: Type.Optional(Type.Boolean({ description: "list 用：true 时连已归档的池一起列" })),
     }),
     async execute(_id, p) {
-      const action = String(p.action ?? "").trim().toLowerCase();
+      // 有些模型（gemini 系）会省略 action 只给 content：content 本身就是「要说的话」，
+      // 当成 send；pool 缺省用这轮唤醒的池。别让它因为少一个字段就整轮哑掉。
+      let action = String(p.action ?? "").trim().toLowerCase();
+      if (!action && typeof p.content === "string" && p.content.trim()) action = "send";
+      if (action === "send" && !p.pool) {
+        const w: any = d.currentWake?.();
+        const cur = w?.pools?.[0] ?? w?.read?.[0]?.pool;
+        if (cur) p = { ...p, pool: cur };
+      }
       try {
         switch (action) {
           case "help":
