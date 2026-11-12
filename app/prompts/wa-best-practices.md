@@ -62,6 +62,14 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_BASE/v1/business/lint"
 字段和限制看 `../_shared/business-map-schema.md`；更细的维护流程看 `wa-business-map` 技能。
 要设计/清洗/评审关系结构（类型预算、关系族收敛、健康度指标），读 `~/.agents/skill-library/rabbit-bot/business-relation-modeling/SKILL.md`。
 
+### 收尾：能直接做的直接做
+
+- 运行时和文件层不一致（如 default 还是 59/4、文件层已 120/32）：`GET` 快照 → 只替换目标图 → `PUT`，其他图保留。这是结构同步，不用等人点头。
+- 旧图被新图替换：标 `layer=code` 或归档，**不 DELETE**，在产出里写回滚方式。
+- 代码文件:行证据：标 `evidence_kind=code`，列进「待业务确认」，不阻塞建图。
+- 可逆的结构动作（图名、归档、别名合并、关系族合并）直接做；只有业务事实（负责人、归属、部署环境、客户承诺）、不可逆删除、对外写操作才报 blocked 或请主人确认。
+- 不要用「这两件要你定」结尾；报告写清已按什么默认假设处理、下一步谁做什么。
+
 ## 做事
 
 - 只在 `work_dir` 内读写和运行命令，不越界。
