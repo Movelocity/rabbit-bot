@@ -9,7 +9,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { IMAdapter, SendResult } from "./types.ts";
+import type { IMAdapter, RecallResult, SendResult } from "./types.ts";
 import type { Attachment, InboundMessage, MediaType, PoolKind } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
 import { mediaId, saveFile, saveImage, type MediaOptions } from "../core/media.ts";
@@ -96,6 +96,18 @@ export class MatrixAdapter implements IMAdapter {
   /** 我们自己的消息也会从 sync 回来，这一步等于「已经在聊天里了」 */
   async confirm(): Promise<boolean> {
     return true;
+  }
+
+  async recall(roomId: string, msgId: string): Promise<RecallResult> {
+    const txn = `${Date.now().toString(36)}-${++this.txn}`;
+    try {
+      await this.request("PUT", `/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(msgId)}/${txn}`, {});
+      return { ok: true };
+    } catch (e) {
+      const detail = (e as Error).message;
+      this.log.warn(`matrix: 撤回消息 ${msgId} 失败：${detail}`);
+      return { ok: false, error: detail };
+    }
   }
 
   // ---- 内部：长轮询 ----

@@ -503,6 +503,17 @@ export class Store {
   hasMessage(platform: string, msgId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM messages WHERE platform=? AND msg_id=?").get(platform, msgId);
   }
+  /** 按平台消息 id 找本地记录（撤回前确认是不是自己发的）。 */
+  messageByMsgId(platform: string, msgId: string): StoredMessage | null {
+    const row = this.db.prepare("SELECT * FROM messages WHERE platform=? AND msg_id=?").get(platform, msgId) as any;
+    return row ? rowToMsg(row) : null;
+  }
+  /** 池里最后一条自己发的消息（撤回不指定 id 时用）。 */
+  lastSelfMessageRow(poolId: string): StoredMessage | null {
+    const row = this.db.prepare(
+      "SELECT * FROM messages WHERE pool_id=? AND from_self=1 ORDER BY ts DESC, seq DESC LIMIT 1").get(poolId) as any;
+    return row ? rowToMsg(row) : null;
+  }
   messagesAfter(poolId: string, afterSeq: number, limit = 200): StoredMessage[] {
     return (this.db.prepare("SELECT * FROM messages WHERE pool_id=? AND seq>? ORDER BY seq LIMIT ?").all(poolId, afterSeq, limit) as any[]).map(rowToMsg);
   }

@@ -1,5 +1,5 @@
 /** 本地 mock 适配器：模拟器和测试用。inject() 模拟用户发言，sent 记录 Agent 发出的内容。 */
-import type { IMAdapter, RichPart, SendResult } from "./types.ts";
+import type { IMAdapter, RecallResult, RichPart, SendResult } from "./types.ts";
 import type { InboundMessage, PoolKind } from "../types.ts";
 
 export interface MockSent { chat: string; kind: "text" | "sticker" | "rich"; parts?: RichPart[]; content: string; msgId: string; ts: number }
@@ -15,6 +15,10 @@ export class MockAdapter implements IMAdapter {
   /** 发送后延迟“出现在聊天里”的毫秒数；-1 表示永不出现（测试确认失败） */
   deliveryDelayMs = 0;
   private delivered = new Set<string>();
+  /** 已撤回的消息 id */
+  recalled = new Set<string>();
+  /** 测试注入：模拟平台撤回失败 */
+  recallError?: string;
   readonly selfId = "bot";
 
   async start(sink: (m: InboundMessage) => void) { this.sink = sink; }
@@ -46,4 +50,13 @@ export class MockAdapter implements IMAdapter {
     return this.record(chat, "rich", parts.map((p) => (p.type === "text" ? p.text : `<${p.key}>`)).join(""), parts);
   }
   async confirm(msgId: string) { return this.delivered.has(msgId); }
+
+  async recall(_chat: string, msgId: string): Promise<RecallResult> {
+    if (this.recallError) return { ok: false, error: this.recallError };
+    const found = this.sent.find((s) => s.msgId === msgId);
+    if (!found) return { ok: false, error: `没有这条消息：${msgId}` };
+    this.recalled.add(msgId);
+    this.delivered.delete(msgId);
+    return { ok: true };
+  }
 }

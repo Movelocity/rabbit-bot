@@ -8,7 +8,7 @@
  * 表情：出站含内置表情时发富文本 post（emotion 元素）；入站 emotion / 文本 [名字] 统一转成 [emoji:中文id]。
  */
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { IMAdapter, RichPart, SendResult } from "./types.ts";
+import type { IMAdapter, RecallResult, RichPart, SendResult } from "./types.ts";
 import { inboundEmojiText, type EmojiTable } from "../core/emoji.ts";
 import type { InboundMessage, MediaType, Attachment, RemoteAttachment } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
@@ -55,6 +55,26 @@ export function fileAttachmentOf(msgType: string, content: string, messageId: st
 
 /** 群成员列表缓存 10 分钟：新进群或改名不会立刻反映，但不会每条消息都打接口。 */
 const MEMBER_CACHE_TTL_MS = 10 * 60_000;
+
+/** 撤回失败的常见错误码：飞书的 msg 偏泛，补一句能直接行动的原因。 */
+const RECALL_ERROR_HINTS: Record<number, string> = {
+  230002: "机器人不在这个群",
+  230009: "超过管理员设置的撤回时限",
+  230026: "只能撤回机器人自己发出的消息",
+  230027: "缺少 im:message:recall / im:message 权限",
+  230054: "这种消息类型不支持撤回",
+  230110: "消息已经被删除或撤回",
+};
+
+/** 从飞书 SDK 抛出的异常里取 code/msg，并附上常见的处置提示。导出以便测试。 */
+export function feishuRecallError(e: unknown): string {
+  const err = e as any;
+  const data = err?.response?.data;
+  const code = Number(data?.code ?? err?.code);
+  const msg = data?.msg ?? data?.message ?? err?.message;
+  const hint = Number.isFinite(code) ? RECALL_ERROR_HINTS[code] : undefined;
+  return `code=${Number.isFinite(code) && code !== 0 ? code : "?"} msg=${msg ?? "未知错误"}${hint ? `（${hint}）` : ""}`;
+}
 
 const PLACEHOLDER: Record<string, [MediaType, string]> = {
   image: ["image", "[图片]"], audio: ["audio", "[语音]"], media: ["video", "[视频]"], file: ["file", "[文件]"],
@@ -388,5 +408,21 @@ export class FeishuAdapter implements IMAdapter {
       const r: any = await this.client.im.v1.message.get({ path: { message_id: msgId } });
       return r?.code === 0;
     } catch { return false; }
+  }
+
+  async recall(_chatId: string, msgId: string): Promise<RecallResult> {
+    try {
+      const r: any = await this.client.im.v1.message.delete({ path: { message_id: msgId } });
+      if (r?.code !== 0) {
+        const detail = feishuRecallError({ code: r?.code, message: r?.msg });
+        this.log.warn(`feishu: 撤回消息 ${msgId} 失败：${detail}`);
+        return { ok: false, error: detail };
+      }
+      return { ok: true };
+    } catch (e) {
+      const detail = feishuRecallError(e);
+      this.log.warn(`feishu: 撤回消息 ${msgId} 失败：${detail}`);
+      return { ok: false, error: detail };
+    }
   }
 }

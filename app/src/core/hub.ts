@@ -25,6 +25,15 @@ export interface SendOutcome {
   newMessages: StoredMessage[];
 }
 
+export interface RecallOutcome {
+  ok: boolean;
+  error?: string;
+  /** 撤回的消息 id（失败时也有，方便定位） */
+  msgId?: string;
+  /** 被撤回消息的内容（失败时也有） */
+  text?: string;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Hub {
@@ -147,6 +156,35 @@ export class Hub {
       return { ok: true, path: saved.path, bytes: saved.bytes, name: path.basename(saved.path) };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
+    }
+  }
+
+  /**
+   * 撤回自己发出的一条消息。不给 msgId 就撤这个池里最后一条自己发的。
+   * 平台失败原因原样带回（权限、时限、已删除等），不要吞成 false。
+   */
+  async recall(poolRef: string, msgId?: string): Promise<RecallOutcome> {
+    const pool = this.store.resolvePool(poolRef);
+    if (!pool) return { ok: false, error: `未知的池 ${poolRef}` };
+    const adapter = this.adapters.get(pool.platform);
+    if (!adapter) return { ok: false, error: `平台 ${pool.platform} 没有可用的适配器` };
+    if (!adapter.recall) return { ok: false, error: `平台 ${pool.platform} 不支持撤回消息` };
+
+    const key = msgId?.trim();
+    const target = key
+      ? this.store.messageByMsgId(pool.platform, key)
+      : this.store.lastSelfMessageRow(pool.pool_id);
+    if (!target) return { ok: false, error: key ? `没有找到消息 ${key}` : "这个池里还没有你发过的消息" };
+    if (target.pool_id !== pool.pool_id) return { ok: false, msgId: target.msg_id, error: `消息 ${target.msg_id} 不在池 ${poolRef} 里` };
+    if (!target.from_self) return { ok: false, msgId: target.msg_id, text: target.text, error: "只能撤回自己发出的消息" };
+
+    try {
+      const r = await adapter.recall(pool.external_id, target.msg_id);
+      if (!r.ok) return { ok: false, msgId: target.msg_id, text: target.text, error: r.error ?? "平台没有返回失败原因" };
+      this.log.info(`已撤回 ${pool.pool_id} ${target.msg_id}: ${target.text.slice(0, 40)}`);
+      return { ok: true, msgId: target.msg_id, text: target.text };
+    } catch (e) {
+      return { ok: false, msgId: target.msg_id, text: target.text, error: (e as Error).message };
     }
   }
 

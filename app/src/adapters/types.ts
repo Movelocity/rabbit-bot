@@ -3,6 +3,9 @@ import type { InboundMessage, Platform, RemoteAttachment } from "../types.ts";
 
 export interface SendResult { msgId: string }
 
+/** 撤回结果：失败时把平台原因带回来（code/msg、权限、超时等），不要只回 false */
+export interface RecallResult { ok: boolean; error?: string }
+
 /** 一条消息内的富文本片段：文字 + 平台内置表情 */
 export type RichPart = { type: "text"; text: string } | { type: "emoji"; id: string; key: string };
 
@@ -18,6 +21,8 @@ export interface IMAdapter {
   sendRich?(externalChatId: string, parts: RichPart[]): Promise<SendResult>;
   /** 检查消息是否已出现在聊天里（可选；未实现视为发送接口成功即确认） */
   confirm?(msgId: string): Promise<boolean>;
+  /** 撤回自己发出的一条消息（可选；未实现表示该平台不支持）。失败时 error 说明原因 */
+  recall?(externalChatId: string, msgId: string): Promise<RecallResult>;
   /** 按需下载消息里的远端附件（可选；未实现表示该平台不支持主动下载） */
   downloadRemote?(ref: RemoteAttachment): Promise<{ path: string; bytes: number }>;
 }
