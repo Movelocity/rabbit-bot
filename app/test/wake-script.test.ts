@@ -9,10 +9,7 @@ import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
 import { wakePrompt } from "../src/agent/prompt.ts";
 import { render } from "../src/agent/template.ts";
-import { localDay } from "../src/core/tide.ts";
 import { appendScheduleEvent, ensureSchedulePool } from "../src/core/schedules.ts";
-
-const TZ = "Asia/Shanghai";
 
 function mkWake(type: "message" | "tick" | "schedule"): any {
   return { type, pools: new Set<string>(), planFires: [], reasons: ["test"], enqueuedAt: Date.now() };
@@ -79,28 +76,11 @@ test("schedule 剧本：路由指向 scene-schedule，并从共用日程池读�
   assert.match(script, /不代表现在还合适/, "过期日程允许跳过");
 });
 
-test("状态行：第一次主动 + 今天已发 0 条", () => {
+test("状态行：不再展示主动次数与上次主动", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map() });
-  assert.match(p, /这是第一次主动开口/);
-  assert.match(p, /今天已主动 0 条/);
-});
-
-test("状态行：上次主动几小时前，附带当时的理由", () => {
-  const s = mkStore();
-  const now = Date.now();
-  s.recordTideEvent({ day: localDay(now, TZ), pool_id: null, ts: now - 3 * 3600_000, kind: "fired", anchor_kind: "L2", why: "问他面试结果" });
-  const p = wakePrompt(s, { wake: mkWake("tick"), now, unread: [], context: new Map() });
-  assert.match(p, /上次主动：3 小时前/);
-  assert.match(p, /当时说的理由：问他面试结果/);
-  assert.match(p, /今天已主动 1 条/);
-});
-
-test("状态行：skip 不算主动次数", () => {
-  const s = mkStore();
-  const now = Date.now();
-  s.recordTideEvent({ day: localDay(now, TZ), pool_id: null, ts: now - 1000, kind: "skip", anchor_kind: "L2", reason: "cap" });
-  const p = wakePrompt(s, { wake: mkWake("tick"), now, unread: [], context: new Map() });
-  assert.match(p, /今天已主动 0 条/);
-  assert.match(p, /这是第一次主动开口/);
+  assert.match(p, /## 状态/);
+  assert.match(p, /距上次对话：/);
+  assert.doesNotMatch(p, /上次主动/);
+  assert.doesNotMatch(p, /今天已主动/);
 });

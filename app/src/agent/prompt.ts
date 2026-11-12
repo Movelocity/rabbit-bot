@@ -4,7 +4,6 @@ import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import { fmtLocal, fmtShort } from "../core/time.ts";
 import type { Pool, StoredMessage, Wake } from "../types.ts";
-import { localDay } from "../core/tide.ts";
 import { isOwnerId } from "../core/owners.ts";
 import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
@@ -116,19 +115,12 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
   const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
   const silentN = primaryPool ? store.silentStreak(primaryPool) : 0;
-  const last = store.lastTideFired(primaryPool);
-  const day = localDay(x.now, "Asia/Shanghai");
-  const firedL2 = store.countTideFired(day, primaryPool, "L2");
 
   // 状态不写成模板片段，直接拼成几行数据：文案（怎么读这些数）在 scene-*.md 里
   const state: string[] = ["## 状态"];
   if (x.mainPool) {
     state.push(`- 主聊天：${store.poolAlias(x.mainPool)}（任务汇报只发这里，不发群聊）`);
   }
-  state.push(
-    `- 上次主动：${last ? `${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}` : "（这是第一次主动开口）"}`,
-  );
-  state.push(`- 今天已主动 ${firedL2} 条（普通关心 L2 每天最多 1 条，发满了就到明天）`);
   state.push(`- 距上次对话：${lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）"}`);
   if (x.wake.proactive?.length) {
     state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你；只有正事才开口，没正事就 chat（action=skip），别硬找）`);
