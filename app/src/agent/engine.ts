@@ -15,6 +15,7 @@ import type { Logger } from "../core/logger.ts";
 import { applyCommunityLoopGuardEnv, builtinLoopGuardExtension, callKey, communityLoopGuardPath } from "../core/loopguard.ts";
 import { handoffPrompt } from "./prompt.ts";
 import { costUsd, splitUsage } from "../core/pricing.ts";
+import { runtimeDir } from "../core/runtime.ts";
 
 export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
 export interface RunResult {
@@ -103,7 +104,7 @@ export class PiEngine implements AgentEngine {
 
   constructor(private d: PiEngineDeps) {
     this.piDir = path.join(d.cfg.dataDir, "pi-agent");
-    this.cwd = path.join(d.cfg.dataDir, "pi-cwd");
+    this.cwd = runtimeDir(d.cfg);
     this.sessionDir = path.join(d.cfg.dataDir, "sessions");
     for (const p of [this.piDir, this.cwd, this.sessionDir, path.join(d.cfg.dataDir, "handoffs")]) fs.mkdirSync(p, { recursive: true });
   }
