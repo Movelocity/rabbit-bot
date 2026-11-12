@@ -46,13 +46,17 @@ export function listImages(store: Store, dataDir: string, opts: ListImagesOption
   };
 }
 
-/** 把 media/x.jpg、inbox/x.png 解析成 data 目录下的真实路径；越界一律拒绝。 */
+/** 把 media/x.jpg、inbox/x.png 或图片 id（img_xxx）解析成 data 目录下的真实路径；越界一律拒绝。 */
 export function resolveImagePath(dataDir: string, target: string): string {
   if (!target) throw new Error("缺少图片路径");
   const roots = [path.join(dataDir, "inbox"), path.join(dataDir, "media")];
   const bare = target.replace(/^(media|inbox)[/\\]/, "");
+  // 消息文本里写的是 [图片#img_xxx]；她可能直接拿 id 来 view，补上常见扩展名再找
+  const cleaned = bare.replace(/^图片#?/, "").trim();
+  const names = [target, bare, cleaned, `${cleaned}.jpg`, `${cleaned}.jpeg`, `${cleaned}.png`, `${cleaned}.bin`];
   for (const root of roots) {
-    for (const rel of [target, bare]) {
+    for (const rel of names) {
+      if (!rel) continue;
       const abs = path.resolve(root, rel);
       if (!abs.startsWith(root + path.sep)) continue;
       if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;

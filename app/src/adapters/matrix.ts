@@ -12,7 +12,7 @@ import path from "node:path";
 import type { IMAdapter, SendResult } from "./types.ts";
 import type { Attachment, InboundMessage, MediaType, PoolKind } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
-import { saveFile, saveImage, type MediaOptions } from "../core/media.ts";
+import { mediaId, saveFile, saveImage, type MediaOptions } from "../core/media.ts";
 
 export interface MatrixOptions {
   homeserver: string; // https://matrix.hollway.top
@@ -284,7 +284,12 @@ export class MatrixAdapter implements IMAdapter {
       : "";
     // 「没下载下来」只在真去下了、且下失败时才说；没配落盘目录是另一回事
     const suffix = rel ? `（已存到 ${rel}）` : url && this.opts.filesDir ? "（没下载下来）" : "";
-    if (media === "image") return `[图片${body ? `：${body}` : ""}]${url && !attachment && this.opts.media ? "（没下载下来）" : ""}`;
+    if (media === "image") {
+      const label = attachment?.id
+        ? `[图片#${attachment.id}${body ? `：${body}` : ""}]`
+        : `[图片${body ? `：${body}` : ""}]`;
+      return `${label}${url && !attachment && this.opts.media ? "（没下载下来）" : ""}`;
+    }
     if (media === "file") return `[文件：${body || "未命名"}]${suffix}`;
     if (media === "audio") return `[语音]${suffix}`;
     if (media === "video") return `[视频]${suffix}`;
@@ -302,14 +307,17 @@ export class MatrixAdapter implements IMAdapter {
       if (media === "image") {
         if (!this.opts.media) return null;
         const raw = await this.download(url);
-        return raw ? saveImage(raw, this.opts.media, ev.event_id) : null;
+        if (!raw) return null;
+        const id = mediaId("img", `${ev.event_id}:image`);
+        return { ...saveImage(raw, this.opts.media, id), id };
       }
       if (!this.opts.filesDir) return null;
       const raw = await this.download(url);
       if (!raw) return null;
+      const id = mediaId("file", `${ev.event_id}:file`);
       const saved = saveFile(raw, this.opts.filesDir, body || "file", ev.event_id);
       const mime = String((ev.content as any)?.info?.mimetype ?? "application/octet-stream");
-      return { path: saved.path, mime, width: 0, height: 0, bytes: saved.bytes };
+      return { id, path: saved.path, mime, width: 0, height: 0, bytes: saved.bytes };
     } catch (e) {
       this.log.warn(`Matrix 附件落盘失败 ${url}：${String(e).slice(0, 120)}`);
       return null;

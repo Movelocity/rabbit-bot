@@ -486,6 +486,20 @@ export class Store {
     const r = this.db.prepare("SELECT * FROM messages WHERE seq=?").get(seq);
     return r ? rowToMsg(r) : undefined;
   }
+  /** 按附件 id（img_xxx / file_xxx）找消息，供主动下载和回看用。 */
+  findAttachment(id: string): { message: StoredMessage; attachment: NonNullable<StoredMessage["attachment"]> } | null {
+    const rows = this.db.prepare("SELECT * FROM messages WHERE attachment IS NOT NULL ORDER BY seq DESC LIMIT 500").all() as any[];
+    for (const r of rows) {
+      let a: any;
+      try { a = JSON.parse(r.attachment); } catch { continue; }
+      if (a?.id === id) return { message: rowToMsg(r), attachment: a };
+    }
+    return null;
+  }
+  /** 主动下载完成后回写附件，避免下次重复下载。 */
+  updateAttachment(seq: number, attachment: NonNullable<StoredMessage["attachment"]>): void {
+    this.db.prepare("UPDATE messages SET attachment=? WHERE seq=?").run(JSON.stringify(attachment), seq);
+  }
   hasMessage(platform: string, msgId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM messages WHERE platform=? AND msg_id=?").get(platform, msgId);
   }

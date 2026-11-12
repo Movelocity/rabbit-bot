@@ -12,6 +12,7 @@ import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { InboundMessage, StoredMessage } from "../types.ts";
+import path from "node:path";
 
 export interface SendOutcome {
   ok: boolean;
@@ -105,7 +106,7 @@ export class Hub {
       out.push(...msgs);
       // 图片消息额外留一份：send 的"期间新消息"会顺带把游标推过它，那一轮只拿到文字，
       // 不留档的话这张图永远不会进任何一轮 prompt
-      for (const m of msgs) if (m.attachment) this.rememberPendingMedia(m);
+      for (const m of msgs) if (m.media_type === "image" && m.attachment) this.rememberPendingMedia(m);
       // 游标推进到池内最新（含被截断的旧消息，避免无限堆积）
       this.store.advanceCursor(id, Math.max(msgs[msgs.length - 1].seq, this.store.maxSeq(id)));
     }
@@ -123,6 +124,30 @@ export class Hub {
     const out = this.pendingMedia;
     this.pendingMedia = [];
     return out;
+  }
+
+  /**
+   * 按消息里的附件 id 主动下载远端文件（飞书文件默认不落盘）。
+   * 下载成功后回写 attachment，后续再要直接返回本地路径。
+   */
+  async downloadAttachment(id: string): Promise<{ ok: boolean; path?: string; bytes?: number; name?: string; error?: string }> {
+    const key = id.trim();
+    if (!key) return { ok: false, error: "缺少附件 id" };
+    const found = this.store.findAttachment(key);
+    if (!found) return { ok: false, error: `没有这个附件 id：${key}（消息里会写成 file_xxx）` };
+    const { message, attachment } = found;
+    if (attachment.path) return { ok: true, path: attachment.path, bytes: attachment.bytes, name: path.basename(attachment.path) };
+    const remote = attachment.remote;
+    if (!remote) return { ok: false, error: "这个附件没有可下载的远端信息" };
+    const adapter = this.adapters.get(message.platform);
+    if (!adapter?.downloadRemote) return { ok: false, error: `平台 ${message.platform} 不支持主动下载附件` };
+    try {
+      const saved = await adapter.downloadRemote(remote);
+      this.store.updateAttachment(message.seq, { ...attachment, path: saved.path, bytes: saved.bytes, remote: null });
+      return { ok: true, path: saved.path, bytes: saved.bytes, name: path.basename(saved.path) };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
   }
 
   /** send(pool, content)：表情解析 → 发送 → 等待约 1 秒确认 → 收集期间新消息 */

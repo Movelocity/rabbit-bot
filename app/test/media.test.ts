@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../src/core/media.ts";
-import { imageKeyOf } from "../src/adapters/feishu.ts";
+import { imageKeyOf, fileAttachmentOf } from "../src/adapters/feishu.ts";
 import { execFileSync } from "node:child_process";
 
 /** 1x1 透明 PNG，够 sips 解析 */
@@ -74,4 +74,23 @@ test("imageKeyOf 认 image 与富文本里的 img", () => {
   assert.equal(imageKeyOf("post", post), "img_v2_post");
   assert.equal(imageKeyOf("post", JSON.stringify({ zh_cn: { content: [[{ tag: "text", text: "纯文字" }]] } })), null);
   assert.equal(imageKeyOf("text", JSON.stringify({ text: "hi" })), null);
+});
+
+test("fileAttachmentOf 只留远端信息，不自动下载", () => {
+  const a = fileAttachmentOf("file", JSON.stringify({ file_key: "fk_1", file_name: "报告.pdf" }), "om_1");
+  assert.ok(a);
+  assert.match(a!.id!, /^file_[0-9a-f]{10}$/);
+  assert.equal(a!.path, "");
+  assert.deepEqual(a!.remote, {
+    id: a!.id, message_id: "om_1", file_key: "fk_1", file_name: "报告.pdf", kind: "file",
+  });
+  // 同一个消息重投，id 不变
+  assert.equal(fileAttachmentOf("file", JSON.stringify({ file_key: "fk_1", file_name: "报告.pdf" }), "om_1")!.id, a!.id);
+  // 语音 / 视频也保留可下载信息
+  assert.equal(fileAttachmentOf("audio", JSON.stringify({ file_key: "fk_a" }), "om_2")!.remote!.kind, "audio");
+  assert.equal(fileAttachmentOf("media", JSON.stringify({ file_key: "fk_v" }), "om_3")!.remote!.kind, "video");
+  // 贴纸 / 文本 / 坏 JSON 都不当成文件
+  assert.equal(fileAttachmentOf("sticker", JSON.stringify({ file_key: "x" }), "om_4"), null);
+  assert.equal(fileAttachmentOf("text", JSON.stringify({ text: "hi" }), "om_5"), null);
+  assert.equal(fileAttachmentOf("file", "{bad json", "om_6"), null);
 });

@@ -1,10 +1,16 @@
 /** 图片落盘：收到的图先压到长边 maxEdge 的 JPEG 再存，喂模型时读成 base64。 */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import type { Attachment } from "../types.ts";
 
 export interface MediaOptions { dir: string; maxEdge: number; maxBytes: number }
+
+/** 生成稳定的媒体 id：同一平台消息 + key 每次重投都得到同一个 id。 */
+export function mediaId(prefix: "img" | "file", seed: string): string {
+  return `${prefix}_${createHash("sha1").update(seed).digest("hex").slice(0, 10)}`;
+}
 
 /** 质量阶梯：先试高质量，超字节就往下降一档。 */
 const QUALITIES = [82, 68, 55];

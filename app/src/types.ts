@@ -2,13 +2,27 @@ export type Platform = "feishu" | "mock" | "matrix" | "task" | "schedule";
 export type PoolKind = "private" | "group" | "task" | "schedule";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 
-/** 落到本地的一张图片（已压缩）。path 是绝对路径，喂模型时读成 base64。 */
+/** 还没下载的远端附件：保留平台侧定位信息，需要时再主动下载。 */
+export interface RemoteAttachment {
+  /** 与消息里的附件 id 一致（file_xxx），下载落盘时用它命名 */
+  id: string;
+  message_id: string;
+  file_key: string;
+  file_name: string;
+  kind: "file" | "audio" | "video" | "image";
+}
+
+/** 落到本地的图片（已压缩）。path 是绝对路径，喂模型时读成 base64。 */
 export interface Attachment {
+  /** 稳定 id（img_xxx / file_xxx），写进消息文本，转存时用它命名，避免只认最新一张 */
+  id?: string;
   path: string;
   mime: string;
   width: number;
   height: number;
   bytes: number;
+  /** 尚未下载的远端文件；path 为空，下载后清空 */
+  remote?: RemoteAttachment | null;
 }
 
 /** 统一消息字段（需求 §2） */

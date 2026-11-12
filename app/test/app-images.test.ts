@@ -48,5 +48,7 @@ test("handleWake 会把图片消息的图传给引擎", async () => {
   assert.equal(calls[0].images[0].type, "image");
   assert.ok(calls[0].images[0].data.length > 10);
   assert.match(calls[0].prompt, /附带图片/);
+  assert.match(calls[0].prompt, new RegExp(`图片#img_[0-9a-f]+`), "提示词要带上图片 id");
+  assert.match(calls[0].prompt, new RegExp(`#${saved!.seq} 图片#img_`), "提示词要能对应到消息 seq");
   await app.stop?.();
 });

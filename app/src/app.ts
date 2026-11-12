@@ -23,7 +23,7 @@ import { realClock, type Clock } from "./core/clock.ts";
 import { dayKey, fmtShort } from "./core/time.ts";
 import { costUsd } from "./core/pricing.ts";
 import { EmojiTable } from "./core/emoji.ts";
-import { toImageContent } from "./core/media.ts";
+import { mediaId, toImageContent } from "./core/media.ts";
 import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
 import { PiEngine, type AgentEngine, type RunResult } from "./agent/engine.ts";
@@ -70,12 +70,34 @@ export function dayStartOf(now: number, tz = "Asia/Shanghai"): number {
   return now - secOfDay * 1000 - (now % 1000);
 }
 
-/** 从消息里挑最近的 N 张图，转成 pi 的 image content；文件读不到就跳过。 */
-export function pickImages(msgs: { attachment?: Attachment | null }[], max: number): ImagePart[] {
+export interface PickedImage { seq: number; id: string; image: ImagePart }
+
+/**
+ * 从消息里挑最近的 N 张图，并带回每张图的 id 和消息 seq。
+ * id 会写进消息文本（[图片#img_xxx]），提示词里按同样顺序列出来，
+ * 模型才能分清「哪张图对应哪条消息」，而不是只盯着最后一张。
+ */
+export function pickImageEntries(
+  msgs: { seq?: number; msg_id?: string; media_type?: string; attachment?: Attachment | null }[],
+  max: number,
+): PickedImage[] {
   const n = Math.max(1, max);
-  return msgs.filter((m) => m.attachment).slice(-n)
-    .map((m) => toImageContent(m.attachment!))
-    .filter((x): x is ImagePart => !!x);
+  return msgs
+    .filter((m) => m.media_type === "image" && m.attachment?.path)
+    .slice(-n)
+    .map((m) => {
+      const image = toImageContent(m.attachment!);
+      if (!image) return null;
+      const seq = m.seq ?? 0;
+      const id = m.attachment!.id ?? mediaId("img", `${m.msg_id ?? ""}:${seq}`);
+      return { seq, id, image };
+    })
+    .filter((x): x is PickedImage => !!x);
+}
+
+/** 兼容旧调用：只取图片内容。 */
+export function pickImages(msgs: Parameters<typeof pickImageEntries>[0], max: number): ImagePart[] {
+  return pickImageEntries(msgs, max).map((x) => x.image);
 }
 
 /** 任务汇报的游标：只转述这条线之后的终态任务，重启后也不会重发。 */
@@ -1020,12 +1042,18 @@ export class App {
     const pending = this.hub.takePendingMedia();
     const mediaMsgs = [...new Map([...unread, ...pending].map((m) => [m.seq, m])).values()]
       .sort((a, b) => a.seq - b.seq);
-    const images = pickImages(mediaMsgs, cfg.media.maxImagesInContext);
-    entry.imageMsgs = mediaMsgs.filter((m) => m.attachment).length;
+    const picked = pickImageEntries(mediaMsgs, cfg.media.maxImagesInContext);
+    const images = picked.map((p) => p.image);
+    entry.imageMsgs = mediaMsgs.filter((m) => m.media_type === "image" && m.attachment).length;
     entry.imageCount = images.length;
     if (entry.imageMsgs) this.log.info(`图片：图片消息 ${entry.imageMsgs} 条（未读 ${unread.length} / 待补 ${pending.length}），实际传入 ${entry.imageCount} 张`);
+    const imageIndex = picked
+      .map((p, i) => `${i + 1}. #${p.seq} 图片#${p.id}`)
+      .join("\n");
+    const omitted = entry.imageMsgs - images.length;
     const fullPrompt = images.length
-      ? `${prompt}\n\n【附带图片】本轮有 ${images.length} 张图片随消息一起附上，对应上文出现的 [图片]，按出现顺序排列。`
+      ? `${prompt}\n\n【附带图片】本轮附上 ${images.length} 张图片，按下面的顺序与上文出现的 [图片#id] 一一对应（不要当成同一张）：\n${imageIndex}`
+        + (omitted > 0 ? `\n更早的 ${omitted} 张这次没有附上；需要时用 chat action=view path=图片#id 单独读回。` : "")
       : prompt;
     // 这个 session 已经聊掉多少 token：到顶就换个新会话接着聊，
     // 不然上下文越滚越大，每轮都按最贵的那档重发一遍。

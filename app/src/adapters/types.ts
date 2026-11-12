@@ -1,5 +1,5 @@
 /** IM 适配层插件接口：飞书、Matrix 是实现，mock 用于本地模拟/测试。 */
-import type { InboundMessage, Platform } from "../types.ts";
+import type { InboundMessage, Platform, RemoteAttachment } from "../types.ts";
 
 export interface SendResult { msgId: string }
 
@@ -18,4 +18,6 @@ export interface IMAdapter {
   sendRich?(externalChatId: string, parts: RichPart[]): Promise<SendResult>;
   /** 检查消息是否已出现在聊天里（可选；未实现视为发送接口成功即确认） */
   confirm?(msgId: string): Promise<boolean>;
+  /** 按需下载消息里的远端附件（可选；未实现表示该平台不支持主动下载） */
+  downloadRemote?(ref: RemoteAttachment): Promise<{ path: string; bytes: number }>;
 }

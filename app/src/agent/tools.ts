@@ -13,7 +13,7 @@ import { saveImage, toImageContent } from "../core/media.ts";
 import { resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
-import { businessDir, sharedDir } from "../core/runtime.ts";
+import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
 import { listPrompts, readPrompt, writePrompt } from "../ops/runtime-files.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
@@ -128,7 +128,8 @@ export function createTools(d: ToolDeps) {
     "chat 的用法（action 必填）：",
     "  send    pool content            发一条消息（唯一会被他看到的输出）",
     "  skip    reason                   这一轮不回，什么都不发",
-    "  view    path                     把一张图读进上下文（media/… 或 inbox/…）",
+    "  view    path                     把一张图读进上下文（图片#id 或 media/… / inbox/…）",
+    "  download id                     按需下载收到的文件（消息里的 附件id=file_xxx）",
     "  list    archived?                看有哪些池（archived=true 连归档池一起列）",
     "  search  q? pool? only? limit?    q 给了就按关键词翻原话；不给 q 就读这个池最近的消息",
     "  archive pool                     归档一个池：默认列表和唤醒里不再出现，历史仍可 search",
@@ -143,16 +144,18 @@ export function createTools(d: ToolDeps) {
     description:
       "跟他说话，以及翻聊天记录。action 决定做什么："
       + "send（发一条，pool + content，唯一会被他看到的输出）/ skip（这一轮不回，reason 写为什么）/ "
-      + "view（把一张图读进上下文，path 用 img 清单里的名字）/ list（有哪些池，archived=true 连归档池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ "
+      + "view（把一张图读进上下文，path 用图片#id 或 img 清单里的名字）/ download（按需下载收到的文件，id 用消息里的 附件id=file_xxx）/ "
+      + "list（有哪些池，archived=true 连归档池）/ search（按关键词翻原话，不给 q 就读最近的消息）/ "
       + "archive（归档池：默认列表和唤醒里不再出现，历史仍可 search）/ unarchive（解档）/ help。"
       + "该说话的时候一定要 send——只调用别的工具等于这轮什么都没说。"
       + "明确不用回的时候用 skip，别用「什么都不调用」来表达沉默。",
     parameters: Type.Object({
-      action: Type.String({ description: "send / skip / view / list / search / archive / unarchive / help" }),
+      action: Type.String({ description: "send / skip / view / download / list / search / archive / unarchive / help" }),
       pool: Type.Optional(Type.String({ description: "send、search、archive、unarchive 用：池别名，如 p1" })),
       content: Type.Optional(Type.String({ description: "send 用：一条短消息；表情包写 [emoji:中文id]" })),
       reason: Type.Optional(Type.String({ description: "skip 用：一句话，为什么这一轮不用回（会记进日志）" })),
-      path: Type.Optional(Type.String({ description: "view 用：media/… 或 inbox/… 开头的文件名" })),
+      path: Type.Optional(Type.String({ description: "view 用：图片#id 或 media/… / inbox/… 开头的文件名" })),
+      id: Type.Optional(Type.String({ description: "download 用：消息里的附件 id（file_xxx）" })),
       q: Type.Optional(Type.String({ description: "search 用：关键词，至少两个字" })),
       only: Type.Optional(Type.String({ description: "search 用：self 只看自己说的 / other 只看看他说的" })),
       limit: Type.Optional(Type.Number({ description: "search 用：条数，默认 20" })),
@@ -221,6 +224,20 @@ export function createTools(d: ToolDeps) {
             } catch (e) {
               return txt(`读图失败：${(e as Error).message}`, { ok: false });
             }
+          }
+
+          case "download": {
+            if (!p.id) return txt("download 要 id（消息里写的 附件id=file_xxx）。", { ok: false });
+            const r = await d.hub.downloadAttachment(p.id);
+            if (!r.ok) return txt(`下载失败：${r.error}`, { ok: false });
+            const abs = r.path!;
+            const shown = abs.startsWith(filesDir(d.cfg) + path.sep)
+              ? path.join("files", path.relative(filesDir(d.cfg), abs))
+              : abs;
+            return txt(
+              `已下载「${r.name ?? path.basename(abs)}」到 ${shown}（${r.bytes ?? 0}B）。用 read_file 打开，或 terminal 处理。`,
+              { ok: true, path: shown, id: p.id },
+            );
           }
 
           case "list": {

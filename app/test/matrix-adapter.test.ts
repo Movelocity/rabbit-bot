@@ -201,7 +201,8 @@ test("Matrix：图片消息下载落盘，长这样喂给模型", async () => {
   await flush(a);
   assert.equal(got.length, 1);
   assert.equal(got[0].media_type, "image");
-  assert.equal(got[0].text, "[图片：猫.png]");
+  assert.match(got[0].text, /^\[图片#img_[0-9a-f]+：猫\.png\]$/);
+  assert.equal(got[0].attachment?.id, /img_[0-9a-f]+/.exec(got[0].text)?.[0]);
   assert.ok(got[0].attachment?.path, "图片应该落盘");
   assert.ok(fs.existsSync(got[0].attachment.path));
   assert.ok(calls.some((c) => c.url.includes("/media/download/mx.test/abc123")));
