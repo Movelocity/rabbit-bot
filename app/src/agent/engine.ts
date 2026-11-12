@@ -352,14 +352,44 @@ export class PiEngine implements AgentEngine {
   async dispose() { this.session?.dispose(); this.session = null; this.reflectSession?.dispose(); this.reflectSession = null; }
 }
 
-/** 解析模型：真实 provider 需对应环境变量里的 API key（pi 自己读取）。 */
+/** 解析模型：真实 provider 需对应环境变量里的 API key（pi 自己读取）。
+ *
+ * 模型自带的 maxTokens 有的等于整个上下文（gemini-4-argon 943k，3.8-flash 65k）。
+ * OpenRouter 按「输入 token + max_tokens」预扣余额，一个聊天请求就能报
+ * 402 requires more credits。pi 每次请求前还会从 runtime 重新取模型，改内存里的对象没用——
+ * 得把覆盖写进 models.json（pi 的磁盘配置），maxTokens 压到对话够用的量，context 和价格照抄目录。
+ */
 export async function resolveModel(cfg: Config): Promise<{ model: Model<any>; modelRuntime: ModelRuntime }> {
   const piDir = path.join(cfg.dataDir, "pi-agent");
   fs.mkdirSync(piDir, { recursive: true });
-  const modelRuntime = await ModelRuntime.create({ authPath: path.join(piDir, "auth.json"), modelsPath: path.join(piDir, "models.json") });
+  const authPath = path.join(piDir, "auth.json");
+  const modelsPath = path.join(piDir, "models.json");
+  const cap = cfg.llm.maxTokens ?? 16384;
+
+  // 先不带覆盖读一次内置目录，拿到原厂条目（context/cost/compat 都在里面）
+  const pristine = await ModelRuntime.create({ authPath, modelsPath: path.join(piDir, "__builtin__.json") });
+  const base = pristine.getModel(cfg.llm.provider, cfg.llm.model);
+  if (base && base.maxTokens > cap) ensureModelOverride(modelsPath, cfg.llm.provider, base, cap);
+
+  const modelRuntime = await ModelRuntime.create({ authPath, modelsPath });
   const model = modelRuntime.getModel(cfg.llm.provider, cfg.llm.model);
   if (!model) throw new Error(`pi 中找不到模型 ${cfg.llm.provider}/${cfg.llm.model}（可运行 npm run ctl -- models 查看）`);
   const available = await modelRuntime.getAvailable(cfg.llm.provider);
   if (!available.some((m) => m.id === model.id)) throw new Error(`模型 ${cfg.llm.provider}/${cfg.llm.model} 没有可用凭据：请设置该 provider 的 API key 环境变量`);
   return { model, modelRuntime };
+}
+
+/** 把「目录原条目 + 压过的 maxTokens」写进 models.json，其他 provider/model 原样保留。 */
+export function ensureModelOverride(modelsPath: string, provider: string, base: Model<any>, cap: number): void {
+  const entry: Record<string, unknown> = { ...(base as any), maxTokens: cap };
+  delete entry.type;
+  let doc: any = {};
+  try { doc = JSON.parse(fs.readFileSync(modelsPath, "utf-8")); } catch { doc = {}; }
+  doc.providers ??= {};
+  doc.providers[provider] ??= {};
+  const list: any[] = Array.isArray(doc.providers[provider].models) ? doc.providers[provider].models : [];
+  const i = list.findIndex((m) => m?.id === base.id);
+  if (i >= 0) list[i] = entry; else list.push(entry);
+  doc.providers[provider].models = list;
+  fs.writeFileSync(modelsPath, `${JSON.stringify(doc, null, 2)}\n`);
 }
