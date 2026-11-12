@@ -80,7 +80,7 @@ test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变�
   assert.match(text, /\$RB_API_TOKEN/);
   assert.match(text, /\$RB_API_BASE/);
   assert.match(text, new RegExp(`"worker_id":"opencode-${task.id}"`));
-  assert.match(text, /先调用一次 progress/);
+  assert.match(text, /调用一次 progress/);
   assert.match(text, /不要改工作目录之外的文件/);
   // 不能出现任何 token 值：文档里只有变量名
   assert.equal(text.includes("secret-token-value"), false);

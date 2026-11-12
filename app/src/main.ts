@@ -16,7 +16,7 @@ import { ensureSandboxContainer } from "./core/shell-runner.ts";
 import { shellRunnerOptions } from "./ops/exec.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
-import { ensureRuntime, ensureHostSandboxLinks, runtimeSubdirs, sharedDir, filesDir } from "./core/runtime.ts";
+import { ensureRuntime, ensureHostSandboxLinks, ensureSharedWorkspace, runtimeSubdirs, sharedDir, filesDir } from "./core/runtime.ts";
 import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import path from "node:path";
@@ -28,6 +28,8 @@ async function main() {
   loadSchedulerSettings(cfg, log);
   // 运行时内容（人设/提示词/话题库/汇报/附件）在仓库外：先保证目录在，再把模板目录指过去
   ensureRuntime(cfg, [...runtimeSubdirs(cfg), "shared", "files", "business"]);
+  const sharedMade = ensureSharedWorkspace(cfg);
+  if (sharedMade.length) log.info(`shared 工作区已补齐：${sharedMade.join("、")}`);
   log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
   log.info(`沙盒根：${cfg.exec.dir}（/work），worker 汇报落点：${sharedDir(cfg)}`);
   // host 模式下没有 volume 挂载：exec.dir 不在运行时目录时，把 prompt/ topics/ 换成软链，

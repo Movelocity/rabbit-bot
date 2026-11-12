@@ -28,7 +28,7 @@
 | 任务 | `task` 有 goal / deliverable / constraints / acceptance / files（`app/src/core/tasks.ts`） | WA 拿不到“涉及哪些对象、沿哪条关系、不能碰什么” |
 | 工具 | UFA 有 `chat/memory/plan/task/worker/read_file/terminal/rb`（`app/src/agent/tools.ts`） | 没有“查业务地图”的入口 |
 | 提示词 | persona + 行为规范（`app/prompts/system.md`） | 没有业务骨架；关系全靠模型临场猜 |
-| 汇报 | `shared/task-<id>.md`（`app/src/core/dispatch.ts`） | 没有“用了哪些关系、证据是什么”的追溯 |
+| 汇报 | `shared/handoffs/task-<id>.md`（`app/src/core/dispatch.ts`） | 没有“用了哪些关系、证据是什么”的追溯 |
 
 ### 1.2 目标
 

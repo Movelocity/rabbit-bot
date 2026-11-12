@@ -81,6 +81,8 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     : renderTaskContextFromDir(opts.businessDir, task.context);
   const files = parseFiles(task.files);
   const field = (label: string, value: string) => `- ${label}：${value || "（未填写）"}`;
+  const optional = (value?: string | null) =>
+    String(value ?? "").trim() || "（未指定：按仓库约定和 WA 最佳实践处理）";
 
   return [
     `# 任务 #${id}`,
@@ -89,13 +91,13 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     task.goal || "（未填写）",
     "",
     "## 产出物",
-    task.deliverable || "（未填写）",
+    optional(task.deliverable),
     "",
     "## 约束",
-    task.constraints || "（未填写）",
+    optional(task.constraints),
     "",
     "## 验收",
-    task.acceptance || "（未填写）",
+    optional(task.acceptance),
     "",
     "## 关联文件",
     ...(files.length ? files.map((f) => `- ${f}`) : ["- （没有指定）"]),
@@ -105,10 +107,17 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     "",
     ...(business ? [business, ""] : []),
     ...(shared ? [
-      "## 汇报文件",
+      "## 开工前",
       "",
-      `执行完把这次任务的汇报写成 markdown，固定落到 \`$RB_SHARED_DIR/task-${id}.md\`（宿主路径 \`${shared}/task-${id}.md\`，沙盒里就是 \`/work/shared/task-${id}.md\`）。`,
-      "汇报里写清楚：做了什么、结果如何、验证过什么、还有哪些没做。不要把 token 写进去。",
+      `先读 WA 通用最佳实践：\`$RB_SHARED_DIR/WA-BEST-PRACTICES.md\`（宿主路径 \`${shared}/WA-BEST-PRACTICES.md\`）。`,
+      `再到 shared 里搜同主题旧交接：\`rg -l "关键词" "$RB_SHARED_DIR" -g 'task-*.md'\`（同时覆盖 handoffs/ 和老位置）。`,
+      "旧交接只当线索，先核实再复用；没有相关上下文就直接按任务做。",
+      "",
+      "## 交接文档",
+      "",
+      `本次任务的关键上下文写到 \`$RB_SHARED_DIR/handoffs/task-${id}.md\`（宿主路径 \`${shared}/handoffs/task-${id}.md\`，覆盖写）。`,
+      "写清楚：做了什么、关键决定与原因、验证过什么、产出路径、遗留/风险、给下一个任务的线索；不要把 token 写进去。",
+      "交接文件不是完成信号，完成/失败仍要调 complete / fail。",
       "如果执行器被限制只能写工作目录，就先在工作目录写一份，再在 `complete` 的 artifact 里给出可读路径。",
       "",
     ] : []),
@@ -158,7 +167,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     "",
     "## 执行要求",
     "",
-    "- 开始执行时先调用一次 progress，`stage=working`。",
+    "- 开始执行时先读 WA 最佳实践和 `handoffs/` 里的同主题旧交接，再调用一次 progress（`stage=working`）。",
     "- 每次被启动或恢复执行都重新 progress 一次；结束时重新回传本次结果（即使上一轮已经完成过）。",
     "- 完成或失败必须回传：调用 complete 或 fail，不要只写文件就结束。",
     "- 不要编结果：没验证过的不报成完成，没测过的不报指标。",

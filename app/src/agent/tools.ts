@@ -798,7 +798,7 @@ export function createTools(d: ToolDeps) {
 
   const TASK_HELP = [
     "task 的用法（action 必填）：",
-    "  create  name goal work_dir executor? model? deliverable? constraints? acceptance? files? start_at?  建任务（等审批通过后执行）",
+    "  create  goal work_dir name? executor? model? start_at?             建任务（等审批通过后执行）",
     "  list    status? limit?                                              看任务",
     "  get     id                                                          看一条（带最近 3 条事件）",
     "  updates id limit?                                                   看任务池最近事件（带时间戳）",
@@ -810,6 +810,7 @@ export function createTools(d: ToolDeps) {
     "",
     "create 的 name 可选：给了就用它当短标签（# 自动补），不给就用系统返回的任务号。",
     "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
+    "deliverable / constraints / acceptance / files 只有用户明确说了才填；别替 WA 写实现计划或验收清单，它自己会读仓库约定、WA-BEST-PRACTICES.md 和 handoffs/ 里的旧交接。",
     "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
     "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
     "",
@@ -831,7 +832,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name 可选，建完系统返回任务号。可补 executor / model / deliverable / constraints / acceptance / files / objects / relations / forbidden / start_at；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name / executor / model / start_at 可选。deliverable / constraints / acceptance / files 只有用户明确说了才填，别替 WA 编实现计划；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -1182,7 +1183,14 @@ export function createTools(d: ToolDeps) {
             pendingId = r.id;
             if (r.decision !== "approved") {
               const why = r.decision === "timeout" ? "没等到批准" : "主人说不行";
-              return txt(`${why}，我没跑（${v.why}）。`, { ok: false, denied: true, decision: r.decision });
+              // 审批被拒＝本轮强制收手：不换命令重试，不把同一条指令拆成别的写法再问。
+              // halt 由引擎读到后 abort 当前会话回合。
+              return {
+                ...txt(`${why}，我没跑（${v.why}）。本轮到此为止，别再换条命令重试。`, {
+                  ok: false, denied: true, decision: r.decision, halt: `approval-${r.decision}`,
+                }),
+                terminate: true,
+              };
             }
           }
         }

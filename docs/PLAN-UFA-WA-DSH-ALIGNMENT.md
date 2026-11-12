@@ -53,7 +53,7 @@ IM 消息
               ↑ relay（push，持久队列）
 WA 执行（外部 opencode/mimo 或未来的 in-process session）
   → 在 task.work_dir 干活
-  → 写 runtime/shared/task-<id>.md
+  → 写 runtime/shared/handoffs/task-<id>.md
   → POST complete（result 摘要 + artifact 指向文件）
   → 触发 task-updated → UFA 读文件、挑值得说的转述
 ```
@@ -97,7 +97,7 @@ WA 执行（外部 opencode/mimo 或未来的 in-process session）
 
 ### P1：汇报闭环（已完成）
 
-- `task-updated`：读 `tasks` + `runtime/shared/task-<id>.md` → 拼 UFA prompt → `engine.run` → `chat.send` 转述。
+- `task-updated`：读 `tasks` + `runtime/shared/handoffs/task-<id>.md`（旧位置兼容） → 拼 UFA prompt → `engine.run` → `chat.send` 转述。
 - 任务事件 tick 与审批触发的 `task-updated` 共用同一条转述链路；有终态任务才转述，否则照旧走原未读池逻辑。
 - **防洪水（push ≠ 每条一推）**：
   - 源头批处理：`markPendingTick` 是单向闩锁，窗口内 N 个完成只置一次 pending；`takePendingTick` + `listTasksUpdatedSince` 一次取全。
@@ -138,7 +138,7 @@ WA 执行（外部 opencode/mimo 或未来的 in-process session）
 
 - [x] UFA 工具集符合选定 profile：没有 `write_file`；`terminal` 只以 host + 审批形式存在（WA 落地后再移除）。
 - [x] UFA `read_file` 不能读 runtime 根之外。
-- [x] 任务完成 → `runtime/shared/task-<id>.md` 存在 → UFA 转述一次。
+- [x] 任务完成 → `runtime/shared/handoffs/task-<id>.md` 存在 → UFA 转述一次。
 - [ ] WA 长任务不阻塞 UFA 回复（P2）。
 - [x] 重复 complete / 重启不会重复转述（游标存 kv）。
 - [ ] 回滚开关可回到单 session 全量工具（当前靠 revert 本组改动；未加 config 开关）。
@@ -159,5 +159,5 @@ WA 执行（外部 opencode/mimo 或未来的 in-process session）
 1. WA 继续用外部 `opencode`/`mimo`，P2 再评估 in-process。
 2. UFA 不给 `write_file`（已实现）；任务描述走 tasks 表。
 3. UFA `read_file` 只读 runtime 根（已实现）；`terminal` 暂时保留。
-4. 汇报文件 `shared/task-<id>.md` 覆盖写（已按这个读）。
+4. 汇报文件 `shared/handoffs/task-<id>.md` 覆盖写（已按这个读）。
 5. 30s 窗口本轮不做，先保留现有 tick/去抖节奏（P2 再动）。

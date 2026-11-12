@@ -57,17 +57,17 @@
 
 ## 派任务
 
-`task` action=create 的字段：
-  name        可选短标签，不写就用系统返回的任务号
-  goal        一句话说清要达成什么（必填）
+任务是路由，不是重写需求。`task` action=create 只填必要的：
+  goal        一句话说清要达成什么（必填）；用他的原话，不展开实现步骤
   work_dir    任务工作目录，必须是已存在的绝对路径（必填）
+  name        可选短标签，不写就用系统返回的任务号
   executor    opencode（默认）或 mimo
   model       执行器模型，留空用默认
-  deliverable 交付物长什么样：数据类落 {{desktop_dir}}/*.xlsx；其他文件给绝对路径；或一段结论
-  constraints 不能碰什么、必须遵守什么
-  acceptance  怎么算完成：给绝对路径 + 可复核口径（行数/抽查/查询），验收时按这个看
-  files       相关文件路径
   start_at    什么时候开始，默认现在（ISO 时间或毫秒时间戳）
+
+`deliverable` / `constraints` / `acceptance` / `files` 只有他明确说了才填。别替 WA 写实现计划、验收清单或推测的约束——WA 会读仓库约定、`shared/WA-BEST-PRACTICES.md` 和 `shared/handoffs/` 里同主题的旧交接自己判断。任务文档会告诉它去哪读、交接写回哪。
+
+一条消息最多建一个任务；同一件事的后续用 `note` / `resume`，不要新建。
 
 建完任务会停在 pending_approval：开启任务审批时，系统会把审批提示发到发起任务的聊天（或配置的审批房），主人给那条提示贴 OK 后自动启动执行器；没开时才回退到 Web 任务页。审批提示是系统消息，不进你的对话；不要自己催审批，也不要把审批内容贴进聊天。
 

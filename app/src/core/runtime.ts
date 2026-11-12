@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Config } from "../config.ts";
+import { APP_ROOT, type Config } from "../config.ts";
 
 export function runtimeDir(cfg: Config): string {
   return path.resolve(cfg.runtimeDir);
@@ -52,6 +52,39 @@ export function runtimeIsSandbox(cfg: Config): boolean {
 /** worker 交汇报文件的固定落点：宿主侧 <runtimeDir>/shared，容器里 /work/shared。 */
 export function sharedDir(cfg: Config): string {
   return runtimePath(cfg, "shared");
+}
+
+/** WA 通用最佳实践：固定放在 shared 根，所有任务开工前读同一份。 */
+export function waPlaybookPath(cfg: Config): string {
+  return path.join(sharedDir(cfg), "WA-BEST-PRACTICES.md");
+}
+
+/** WA 任务交接文档目录：shared/handoffs/task-<id>.md，后来的任务可以按关键词搜。 */
+export function handoffDir(cfg: Config): string {
+  return path.join(sharedDir(cfg), "handoffs");
+}
+
+/**
+ * 建 shared 工作区：handoffs/ 目录 + 默认最佳实践文档。
+ * 最佳实践只在缺失时落一份，之后允许运行时改，不覆盖。
+ */
+export function ensureSharedWorkspace(cfg: Config): string[] {
+  const made: string[] = [];
+  const shared = sharedDir(cfg);
+  const handoffs = handoffDir(cfg);
+  try {
+    if (!fs.existsSync(shared)) { fs.mkdirSync(shared, { recursive: true }); made.push(shared); }
+    if (!fs.existsSync(handoffs)) { fs.mkdirSync(handoffs, { recursive: true }); made.push(handoffs); }
+  } catch { /* 建不出来就让后面的写入报错，别在这里吞掉整个启动 */ }
+  const playbook = waPlaybookPath(cfg);
+  if (!fs.existsSync(playbook)) {
+    try {
+      const src = path.join(APP_ROOT, "prompts", "wa-best-practices.md");
+      fs.copyFileSync(src, playbook);
+      made.push(playbook);
+    } catch { /* 默认文档缺了不影响任务执行，任务文档里仍然会写路径 */ }
+  }
+  return made;
 }
 
 /** 收到的非图片附件落盘处：宿主侧 <runtimeDir>/files，容器里 /work/files。 */

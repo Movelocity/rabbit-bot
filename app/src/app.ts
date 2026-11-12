@@ -35,7 +35,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
-import { businessDir, runtimeDir, sharedDir } from "./core/runtime.ts";
+import { businessDir, ensureSharedWorkspace, runtimeDir, sharedDir } from "./core/runtime.ts";
 import { ensureBusinessSeeded } from "./ops/business-map.ts";
 import { render } from "./agent/template.ts";
 import {
@@ -92,13 +92,12 @@ function clipText(s: string, n: number): string {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
-/** 读 worker 落在 runtime/shared 的汇报文件；没有就回空串，不打断转述。 */
+/** 读 worker 落在 runtime/shared/handoffs 的交接；旧位置 task-<id>.md 也兼容。 */
 function readTaskReport(dir: string, id: number): string {
-  try {
-    return fs.readFileSync(path.join(dir, `task-${id}.md`), "utf8").trim();
-  } catch {
-    return "";
+  for (const file of [path.join(dir, "handoffs", `task-${id}.md`), path.join(dir, `task-${id}.md`)]) {
+    try { return fs.readFileSync(file, "utf8").trim(); } catch { /* 试下一个位置 */ }
   }
+  return "";
 }
 
 /**
@@ -152,6 +151,8 @@ export class App {
     this.store.backfillUsageEventsFromWakeLog();
     // 业务地图：老库第一次启动从 runtime/business 文件导一次，之后只读 SQLite
     try { ensureBusinessSeeded(this.store, businessDir(cfg)); } catch (e) { this.log.warn(`业务地图导入失败：${(e as Error).message}`); }
+    // WA 共用工作区：handoffs/ + 默认最佳实践（缺失才落，已有不覆盖）
+    try { ensureSharedWorkspace(cfg); } catch (e) { this.log.warn(`shared 工作区初始化失败：${(e as Error).message}`); }
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.queue = new RunQueue((w) => this.handleWake(w));

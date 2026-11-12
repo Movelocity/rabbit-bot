@@ -50,12 +50,14 @@ test("safe 档：直接跑，不惊动审批", async () => {
   assert.equal(asked.length, 0);
 });
 
-test("ask 档被拒：不执行，目录还在", async () => {
+test("ask 档被拒：不执行，目录还在，并通知引擎打断本轮", async () => {
   const { dir, run, asked } = setup("rejected");
   fs.mkdirSync(path.join(dir, "build"));
   const r = await run("rm -rf build");
   assert.equal(asked.length, 1);
   assert.match(r.text, /主人说不行/);
+  assert.match(r.text, /本轮到此为止/);
+  assert.equal(r.details.halt, "approval-rejected", "被拒后要让引擎强制收手，不能换命令重试");
   assert.equal(fs.existsSync(path.join(dir, "build")), true, "被拒了还删掉了，闸门形同虚设");
 });
 
@@ -75,6 +77,7 @@ test("超时：不执行", async () => {
   fs.mkdirSync(path.join(dir, "build"));
   const r = await run("rm -rf build");
   assert.match(r.text, /没等到批准/);
+  assert.equal(r.details.halt, "approval-timeout");
   assert.equal(fs.existsSync(path.join(dir, "build")), true);
 });
 

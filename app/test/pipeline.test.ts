@@ -521,10 +521,10 @@ test("任务完成 → 任务 tick 只转述一次，多任务合并成一条", 
   const poolId = saved.pool_id;
   t.app.hub.takeUnread([poolId]);
 
-  fs.mkdirSync(path.join(t.cfg.runtimeDir, "shared"), { recursive: true });
+  fs.mkdirSync(path.join(t.cfg.runtimeDir, "shared", "handoffs"), { recursive: true });
   for (let i = 0; i < 3; i++) {
     const task = createTask(t.app.store, { userId: "u1", poolId, name: `#活${i}`, goal: `目标${i}`, work_dir: process.cwd() });
-    fs.writeFileSync(path.join(t.cfg.runtimeDir, "shared", `task-${task.id}.md`), `汇报正文 ${i}`, "utf8");
+    fs.writeFileSync(path.join(t.cfg.runtimeDir, "shared", "handoffs", `task-${task.id}.md`), `汇报正文 ${i}`, "utf8");
     updateTask(t.app.store, task.id, { status: "done", result: `结果${i}` });
     appendTaskEvent(t.app.store, task.id, { text: "任务完成", sender: "wa-1", senderName: "WA", ts: at });
   }

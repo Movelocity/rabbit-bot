@@ -74,14 +74,17 @@ test("shared/files 固定落在运行时目录下", () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("任务文档带汇报文件落点", () => {
+test("任务文档带最佳实践和交接文档落点", () => {
   const shared = "/tmp/rb-runtime/shared";
   const task = {
     id: 7, name: "#demo", goal: "做点事", deliverable: "", constraints: "", acceptance: "",
     files: "[]", work_dir: "/tmp/work", executor: "opencode", session_id: "",
   } as any;
   const doc = renderTaskDoc(task, { sharedDir: shared });
-  assert.match(doc, /## 汇报文件/);
-  assert.match(doc, /shared\/task-7\.md/);
+  assert.match(doc, /## 开工前/);
+  assert.match(doc, /WA-BEST-PRACTICES\.md/);
+  assert.match(doc, /handoffs/);
+  assert.match(doc, /shared\/handoffs\/task-7\.md/);
   assert.match(doc, /RB_SHARED_DIR/);
+  assert.match(doc, /未指定：按仓库约定和 WA 最佳实践处理/);
 });

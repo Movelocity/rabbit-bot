@@ -264,6 +264,10 @@ export class PiEngine implements AgentEngine {
       else if (ev.type === "tool_execution_end") {
         const r = preview(ev.result);
         out.toolCalls.push({ name: ev.toolName, args: pendingArgs.get(ev.toolCallId), result: r, isError: ev.isError });
+        // 宿主命令审批被拒 / 超时：工具带 halt 回来，立刻打断本轮。
+        // 不能让模型换个写法继续试，那等于审批形同虚设。
+        const halt = (ev.result as { details?: { halt?: unknown } } | undefined)?.details?.halt;
+        if (typeof halt === "string" && halt) abort(halt);
       } else if (ev.type === "message_end" && ev.message?.role === "assistant") {
         out.llmCalls++;
         const u = ev.message.usage;
