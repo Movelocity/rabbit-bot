@@ -14,6 +14,7 @@ import {
   useReactFlow,
   type Edge,
   type EdgeProps,
+  type MiniMapNodeProps,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
@@ -28,6 +29,11 @@ import {
 } from "../lib/format.ts";
 import { cx } from "../lib/cx.ts";
 import { ALL_GRAPHS, DEFAULT_GRAPH, collectGraphIds, filterByGraph } from "../lib/business-graph.ts";
+import {
+  BUSINESS_NODE_SIZE,
+  layoutBusinessGraph,
+  type BusinessLayoutNode,
+} from "../lib/business-layout.ts";
 import type {
   BusinessCategory,
   BusinessData,
@@ -461,13 +467,9 @@ function BusinessDetail({
   );
 }
 
-interface GraphNode {
-  id: string;
+interface GraphNode extends BusinessLayoutNode {
   name: string;
-  type: string;
   search: string;
-  x: number;
-  y: number;
 }
 
 interface BusinessNodeData extends Record<string, unknown> {
@@ -486,155 +488,17 @@ interface GraphFocusRequest {
   nonce: number;
 }
 
-const NODE_SIZE = 96;
+const NODE_SIZE = BUSINESS_NODE_SIZE;
 const NODE_RADIUS = NODE_SIZE / 2;
 const ARROW_GAP = 12;
+const EDGE_BEND_STEP = 42;
 
-const TREE_GAP_X = 145;
-const TREE_GAP_Y = 175;
-
-interface TreeComponent {
-  ids: string[];
-  xs: Map<string, number>;
-  depths: Map<string, number>;
-  spanX: number;
-  spanY: number;
-  offsetX: number;
-  offsetY: number;
+interface BusinessEdgeData extends Record<string, unknown> {
+  bend: number;
+  selfLoop: boolean;
 }
 
-function layoutGraph(
-  nodes: GraphNode[],
-  edges: BusinessEdge[],
-  width: number,
-  _height: number,
-): void {
-  if (!nodes.length) return;
-
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const adjacency = new Map<string, Set<string>>();
-  for (const node of nodes) adjacency.set(node.id, new Set());
-  for (const edge of edges) {
-    if (edge.from === edge.to) continue;
-    const from = adjacency.get(edge.from);
-    const to = adjacency.get(edge.to);
-    if (!from || !to) continue;
-    from.add(edge.to);
-    to.add(edge.from);
-  }
-
-  const visited = new Set<string>();
-  const components: string[][] = [];
-  for (const node of nodes) {
-    if (visited.has(node.id)) continue;
-    const members: string[] = [];
-    const queue = [node.id];
-    visited.add(node.id);
-    while (queue.length) {
-      const id = queue.shift()!;
-      members.push(id);
-      for (const next of adjacency.get(id) ?? []) {
-        if (visited.has(next)) continue;
-        visited.add(next);
-        queue.push(next);
-      }
-    }
-    components.push(members);
-  }
-
-  const trees: TreeComponent[] = [];
-  for (const members of components) {
-    let root = members[0];
-    let bestDegree = -1;
-    for (const id of members) {
-      const degree = adjacency.get(id)?.size ?? 0;
-      if (degree > bestDegree) {
-        bestDegree = degree;
-        root = id;
-      }
-    }
-
-    const children = new Map<string, string[]>();
-    const depths = new Map<string, number>();
-    const ids: string[] = [];
-    const queue = [root];
-    const seen = new Set([root]);
-    depths.set(root, 0);
-    while (queue.length) {
-      const id = queue.shift()!;
-      ids.push(id);
-      children.set(id, []);
-      for (const next of adjacency.get(id) ?? []) {
-        if (seen.has(next)) continue;
-        seen.add(next);
-        depths.set(next, (depths.get(id) ?? 0) + 1);
-        children.get(id)!.push(next);
-        queue.push(next);
-      }
-    }
-
-    const xs = new Map<string, number>();
-    let cursor = 0;
-    const assign = (id: string): number => {
-      const kids = children.get(id) ?? [];
-      if (!kids.length) {
-        const x = cursor * TREE_GAP_X;
-        cursor += 1;
-        xs.set(id, x);
-        return x;
-      }
-      let first = 0;
-      let last = 0;
-      kids.forEach((kid, index) => {
-        const x = assign(kid);
-        if (index === 0) first = x;
-        last = x;
-      });
-      const x = (first + last) / 2;
-      xs.set(id, x);
-      return x;
-    };
-    assign(root);
-
-    let maxDepth = 0;
-    for (const id of ids) maxDepth = Math.max(maxDepth, depths.get(id) ?? 0);
-    trees.push({
-      ids,
-      xs,
-      depths,
-      spanX: Math.max(0, cursor - 1) * TREE_GAP_X,
-      spanY: maxDepth * TREE_GAP_Y,
-      offsetX: 0,
-      offsetY: 0,
-    });
-  }
-
-  const targetWidth = Math.max(width, TREE_GAP_X * 4);
-  const ordered = [...trees].sort((a, b) => b.spanX - a.spanX || b.spanY - a.spanY);
-  let cursorX = 0;
-  let cursorY = 0;
-  let rowHeight = 0;
-  for (const tree of ordered) {
-    if (cursorX > 0 && cursorX + tree.spanX > targetWidth) {
-      cursorX = 0;
-      cursorY += rowHeight + TREE_GAP_Y;
-      rowHeight = 0;
-    }
-    tree.offsetX = cursorX;
-    tree.offsetY = cursorY;
-    cursorX += tree.spanX + TREE_GAP_X;
-    rowHeight = Math.max(rowHeight, tree.spanY);
-  }
-
-  for (const tree of ordered) {
-    for (const id of tree.ids) {
-      const node = byId.get(id);
-      if (!node) continue;
-      node.x = tree.offsetX + (tree.xs.get(id) ?? 0) - NODE_RADIUS;
-      node.y = tree.offsetY + (tree.depths.get(id) ?? 0) * TREE_GAP_Y - NODE_RADIUS;
-    }
-  }
-}
+type BusinessFlowEdge = Edge<BusinessEdgeData, "business">;
 
 function BusinessNodeView({ data }: NodeProps<BusinessFlowNode>) {
   return (
@@ -672,6 +536,47 @@ function BusinessNodeView({ data }: NodeProps<BusinessFlowNode>) {
 
 const NODE_TYPES = { business: BusinessNodeView };
 
+function MiniMapCircleNode({
+  x,
+  y,
+  width,
+  height,
+  color,
+  strokeColor,
+  strokeWidth,
+  className,
+}: MiniMapNodeProps) {
+  const radius = Math.min(width, height) / 2;
+  return (
+    <circle
+      cx={x + width / 2}
+      cy={y + height / 2}
+      r={radius}
+      fill={color}
+      stroke={strokeColor}
+      strokeWidth={strokeWidth}
+      className={className}
+    />
+  );
+}
+
+function EdgeLabel({ x, y, children }: { x: number; y: number; children: ReactNode }) {
+  return (
+    <EdgeLabelRenderer>
+      <div
+        style={{
+          position: "absolute",
+          transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+          pointerEvents: "none",
+        }}
+        className="rounded-[4px] border border-border/60 bg-surface/90 px-1 py-px text-[11px] leading-tight text-muted shadow-sm"
+      >
+        {children}
+      </div>
+    </EdgeLabelRenderer>
+  );
+}
+
 function BusinessEdgeView({
   sourceX,
   sourceY,
@@ -680,39 +585,69 @@ function BusinessEdgeView({
   style,
   label,
   markerEnd,
-}: EdgeProps) {
+  data,
+}: EdgeProps<BusinessFlowEdge>) {
+  if (data?.selfLoop) {
+    const startX = sourceX + NODE_RADIUS * 0.55;
+    const startY = sourceY - NODE_RADIUS * 0.66;
+    const endX = sourceX - NODE_RADIUS * 0.55;
+    const endY = sourceY - NODE_RADIUS * 0.66;
+    return (
+      <>
+        <path
+          d={`M ${startX},${startY} C ${sourceX + NODE_RADIUS * 1.8},${sourceY - NODE_RADIUS * 2.4} ${sourceX - NODE_RADIUS * 1.8},${sourceY - NODE_RADIUS * 2.4} ${endX},${endY}`}
+          fill="none"
+          style={style}
+          markerEnd={markerEnd}
+        />
+        {label && (
+          <EdgeLabel x={sourceX} y={sourceY - NODE_RADIUS * 1.9}>
+            {label}
+          </EdgeLabel>
+        )}
+      </>
+    );
+  }
+
   const dx = targetX - sourceX;
   const dy = targetY - sourceY;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1) return null;
-  const ux = dx / dist;
-  const uy = dy / dist;
-  const shrink = Math.min(NODE_RADIUS + ARROW_GAP, dist * 0.8);
-  const endX = targetX - ux * shrink;
-  const endY = targetY - uy * shrink;
-  const midX = (sourceX + endX) / 2;
-  const midY = (sourceY + endY) / 2;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) return null;
+
+  const baseAngle = Math.atan2(dy, dx);
+  const portOffset = Math.max(-0.85, Math.min(0.85, (data?.bend ?? 0) / 150));
+  const maxAnchor = Math.max(0, (distance - 6) / 2);
+  const sourceRadius = Math.min(NODE_RADIUS, maxAnchor);
+  const targetRadius = Math.min(NODE_RADIUS + ARROW_GAP, maxAnchor);
+  const sourceAngle = baseAngle + portOffset;
+  const targetAngle = baseAngle + Math.PI - portOffset;
+  const startX = sourceX + Math.cos(sourceAngle) * sourceRadius;
+  const startY = sourceY + Math.sin(sourceAngle) * sourceRadius;
+  const endX = targetX + Math.cos(targetAngle) * targetRadius;
+  const endY = targetY + Math.sin(targetAngle) * targetRadius;
+
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const bend = data?.bend ?? 0;
+  const midX = (startX + endX) / 2;
+  const midY = (startY + endY) / 2;
+  const controlX = midX - uy * bend;
+  const controlY = midY + ux * bend;
+  const labelX = (startX + 2 * controlX + endX) / 4;
+  const labelY = (startY + 2 * controlY + endY) / 4;
+
   return (
     <>
       <path
-        d={`M ${sourceX},${sourceY} L ${endX},${endY}`}
+        d={`M ${startX},${startY} Q ${controlX},${controlY} ${endX},${endY}`}
         fill="none"
         style={style}
         markerEnd={markerEnd}
       />
       {label && (
-        <EdgeLabelRenderer>
-          <div
-            style={{
-              position: "absolute",
-              transform: `translate(-50%, -50%) translate(${midX}px, ${midY}px)`,
-              pointerEvents: "none",
-            }}
-            className="rounded-[4px] border border-border/60 bg-surface/90 px-1 py-px text-[11px] leading-tight text-muted shadow-sm"
-          >
-            {label}
-          </div>
-        </EdgeLabelRenderer>
+        <EdgeLabel x={labelX} y={labelY}>
+          {label}
+        </EdgeLabel>
       )}
     </>
   );
@@ -754,10 +689,7 @@ function BusinessGraphInner({
       x: 0,
       y: 0,
     }));
-    const size = Math.max(1, nodes.length);
-    const width = Math.min(3600, Math.max(1100, Math.sqrt(size * 96000)));
-    const height = Math.max(620, width / 2);
-    layoutGraph(nodes, edges, width, height);
+    layoutBusinessGraph(nodes, edges);
     return { objects, edges, nodes, nodeById: new Map(nodes.map((n) => [n.id, n])) };
   }, [data]);
 
@@ -801,46 +733,64 @@ function BusinessGraphInner({
     [graph, data, typeColors, query, selectedId, neighbors],
   );
 
-  const edges = useMemo<Edge[]>(
-    () =>
-      graph.edges.map((edge, index) => {
-        const source = graph.nodeById.get(edge.from);
-        const target = graph.nodeById.get(edge.to);
-        const hot = !!selectedId && (edge.from === selectedId || edge.to === selectedId);
-        const dim =
-          !!query &&
-          !hot &&
-          !(source?.search.includes(query) || target?.search.includes(query));
-        const color = hot
-          ? "var(--rb-accent)"
-          : "color-mix(in srgb, var(--rb-muted) 45%, transparent)";
-        return {
-          id: `${edge.from}->${edge.to}:${index}`,
-          source: edge.from,
-          target: edge.to,
-          type: "business",
-          selectable: false,
-          focusable: false,
-          interactionWidth: 0,
-          markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color },
-          style: {
-            stroke: color,
-            strokeWidth: hot ? 2 : 1.2,
-            opacity: dim ? 0.12 : 1,
-          },
-          label:
-            graph.edges.length <= 28 ? edge.relation_name || edge.relation : undefined,
-        };
-      }),
-    [graph, selectedId, query],
-  );
+  const edges = useMemo<BusinessFlowEdge[]>(() => {
+    const pairKey = (from: string, to: string) => (from <= to ? `${from}\u0000${to}` : `${to}\u0000${from}`);
+    const pairTotals = new Map<string, number>();
+    for (const edge of graph.edges) {
+      const key = pairKey(edge.from, edge.to);
+      pairTotals.set(key, (pairTotals.get(key) ?? 0) + 1);
+    }
+    const pairSeen = new Map<string, number>();
+
+    return graph.edges.map((edge, index): BusinessFlowEdge => {
+      const source = graph.nodeById.get(edge.from);
+      const target = graph.nodeById.get(edge.to);
+      const hot = !!selectedId && (edge.from === selectedId || edge.to === selectedId);
+      const dim =
+        !!query &&
+        !hot &&
+        !(source?.search.includes(query) || target?.search.includes(query));
+      const color = hot
+        ? "var(--rb-accent)"
+        : "color-mix(in srgb, var(--rb-muted) 45%, transparent)";
+      const key = pairKey(edge.from, edge.to);
+      const ordinal = pairSeen.get(key) ?? 0;
+      pairSeen.set(key, ordinal + 1);
+      const total = pairTotals.get(key) ?? 1;
+      const reverse = edge.from > edge.to;
+      const bend =
+        (ordinal - (total - 1) / 2) * EDGE_BEND_STEP * (reverse ? -1 : 1);
+
+      return {
+        id: `${edge.from}->${edge.to}:${index}`,
+        source: edge.from,
+        target: edge.to,
+        type: "business",
+        selectable: false,
+        focusable: false,
+        interactionWidth: 0,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color },
+        style: {
+          stroke: color,
+          strokeWidth: hot ? 2 : 1.2,
+          opacity: dim ? 0.12 : 1,
+        },
+        label:
+          graph.edges.length <= 28 ? edge.relation_name || edge.relation : undefined,
+        data: {
+          bend,
+          selfLoop: edge.from === edge.to,
+        },
+      };
+    });
+  }, [graph, selectedId, query]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (selectedId && graph.nodeById.has(selectedId)) {
         centerOn(selectedId, 0.9, 0);
       } else {
-        void fitView({ padding: 0.16, duration: 0, minZoom: 0.8, maxZoom: 1.15 });
+        void fitView({ padding: 0.16, duration: 0, minZoom: 0.12, maxZoom: 1.15 });
       }
     }, 60);
     return () => window.clearTimeout(timer);
@@ -884,7 +834,7 @@ function BusinessGraphInner({
                 duration: 0,
               });
             } else {
-              void instance.fitView({ padding: 0.16, minZoom: 0.8, maxZoom: 1.15 });
+              void instance.fitView({ padding: 0.16, minZoom: 0.12, maxZoom: 1.15 });
             }
           }}
           onNodeClick={(_, node) => onSelect("objects", node.id)}
@@ -903,6 +853,7 @@ function BusinessGraphInner({
             zoomable
             ariaLabel="关系图导航小窗：拖动可平移画布"
             nodeColor={(node) => (node.data as BusinessNodeData).color}
+            nodeComponent={MiniMapCircleNode}
             nodeStrokeWidth={0}
             maskStrokeColor="var(--rb-accent)"
             maskStrokeWidth={1.5}
@@ -911,7 +862,7 @@ function BusinessGraphInner({
             <button
               type="button"
               className="rounded-full border border-border bg-surface/95 px-2.5 py-1 text-[11px] text-muted shadow-[var(--rb-shadow)] backdrop-blur transition hover:text-text"
-              onClick={() => void fitView({ padding: 0.16, duration: 450, minZoom: 0.8, maxZoom: 1.15 })}
+              onClick={() => void fitView({ padding: 0.16, duration: 450, minZoom: 0.12, maxZoom: 1.15 })}
             >
               适应画布
             </button>
