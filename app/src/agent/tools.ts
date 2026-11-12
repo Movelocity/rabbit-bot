@@ -1,6 +1,6 @@
 /** Agent 的自定义工具（pi customTools）。send 是唯一的输出通道。 */
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
 import type { Hub } from "../core/hub.ts";

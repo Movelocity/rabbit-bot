@@ -47,6 +47,12 @@ export const PRICES: Record<string, ModelPrice> = {
     miss: { peak: 0.3, off: 0.15 },
     out: { peak: 1.2, off: 0.6 },
   },
+  // OpenRouter 标价，2026-11-12 抓：in $0.825 / out $4.125 / cache read $0.083（无峰谷）
+  'google/gemini-3.8-flash': {
+    hit: { peak: 0.083, off: 0.083 },
+    miss: { peak: 0.825, off: 0.825 },
+    out: { peak: 4.125, off: 4.125 },
+  },
   'deepseek-v4-pro': {
     hit: { peak: 0.044, off: 0.022 },
     miss: { peak: 1.32, off: 0.66 },
