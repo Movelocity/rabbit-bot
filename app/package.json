@@ -20,7 +20,8 @@
     "web:dev": "npm --prefix webapp run dev",
     "web:build": "npm --prefix webapp run build",
     "web:typecheck": "npm --prefix webapp run typecheck",
-    "idle": "node scripts/idle.mjs"
+    "idle": "node scripts/idle.mjs",
+    "pm": "tsx scripts/pm-audit.ts"
   },
   "keywords": [],
   "author": "",

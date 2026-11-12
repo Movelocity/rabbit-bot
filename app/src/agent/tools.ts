@@ -42,6 +42,7 @@ import {
 } from "../core/dispatch.ts";
 import { resolveApiToken } from "../api-token.ts";
 import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
+import { auditTasks, type PmTaskRow } from "../core/pm.ts";
 import { findPaths, formatPath, impactOf, loadBusinessMap, renderIndex, resolveObjects, showObject } from "../ops/business-map.ts";
 import { lintBusinessMap } from "../ops/business-lint.ts";
 
@@ -1256,6 +1257,64 @@ export function createTools(d: ToolDeps) {
     "  help                     看这份说明",
   ].join("\n");
 
+  // 项目体检（PM 判定器）：确定性判定，交给上层做解释与取舍。
+  const pm = defineTool({
+    name: "pm",
+    label: "pm",
+    executionMode: "sequential",
+    description:
+      "项目体检：把任务表算成「在轨 / 延期 / 卡住 / 未验」，只给可复核的判定和建议动作，不做解释。"
+      + "action: audit（默认，全部任务的异常项）/ task（看单个任务，要 id）/ help。"
+      + "判据是确定性的：有没有验收、租约是否过期、静默多久、有没有交接文档、开了几天、有没有落盘。",
+    parameters: Type.Object({
+      action: Type.Optional(Type.String({ description: "audit / task / help" })),
+      id: Type.Optional(Type.Number({ description: "task 用：任务 id" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "audit").trim().toLowerCase();
+      const SQL = `SELECT id, name, goal, acceptance, status, doc_path, result, artifact, note,
+                          lease_until, created_at, updated_at, end_at
+                     FROM tasks`;
+      try {
+        if (action === "help") {
+          return txt(
+            "pm audit — 全部任务的异常项\n"
+            + "pm task id=12 — 单个任务\n"
+            + "规则：未定验收（红）/ 租约过期失联（红）/ 静默超 2 小时（黄）/ 无交接文档（黄）/ "
+            + "开超 7 天未收口（红）/ 有结论没落盘（黄）/ 标完成没写结果（黄）。\n"
+            + "只报事实与建议动作；要拍板的事按 reporting 技能的四段结构写。",
+            { ok: true },
+          );
+        }
+        if (action === "task") {
+          if (p.id === undefined) return txt("pm task 要 id。", { ok: false });
+          const row = d.store.db.prepare(`${SQL} WHERE id = ?`).get(Number(p.id)) as PmTaskRow | undefined;
+          if (!row) return txt(`没有 #${p.id} 这个任务。`, { ok: false });
+          const rep = auditTasks([row], { now: Date.now() });
+          return txt(
+            `#${row.id} ${row.status} · ${row.name || row.goal.slice(0, 24)}\n`
+            + (rep.findings.length
+              ? rep.findings.map((f) => `${f.level === "red" ? "红" : "黄"} ${f.message} → ${f.action}`).join("\n")
+              : "无异常项"),
+            { ok: true, findings: rep.findings },
+          );
+        }
+        const rows = d.store.db.prepare(`${SQL} ORDER BY id DESC LIMIT 200`).all() as PmTaskRow[];
+        const rep = auditTasks(rows, { now: Date.now() });
+        const lines = [`结论：${rep.headline}`];
+        for (const level of ["red", "yellow"] as const) {
+          for (const f of rep.findings.filter((x) => x.level === level)) {
+            lines.push(`${level === "red" ? "红" : "黄"} ${f.message} → ${f.action}`);
+          }
+        }
+        if (!rep.findings.length) lines.push("无异常项。");
+        return txt(lines.join("\n"), { ok: true, headline: rep.headline, red: rep.red, yellow: rep.yellow });
+      } catch (e) {
+        return txt(`项目体检失败：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
   const mapTool = defineTool({
     name: "map",
     label: "map",
@@ -1412,7 +1471,7 @@ export function createTools(d: ToolDeps) {
   // UFA：对话、记忆/知识、日程、审批、任务、读文件、map、terminal、rb。
   // 目标看板已下线；提示词在沙盒卷里，直接改，不再走 edit_prompt。
   const ufaTools = [
-    chat, memory, workingMemory, knowledge, schedule, approval, task, readFile, editFile, mapTool,
+    chat, memory, workingMemory, knowledge, schedule, approval, task, pm, readFile, editFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

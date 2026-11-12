@@ -33,6 +33,7 @@ import {
 } from "./core/approvals.ts";
 import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
 import { taskStats } from "./ops/task-stats.ts";
+import { auditTasks, type PmTaskRow } from "./core/pm.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
 import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
@@ -958,6 +959,27 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             })));
           }
           throw new HttpError(404, "用法：GET /v1/skills");
+        }
+        case "pm": {
+          if (parts.length === 3 && parts[2] === "audit" && method === "GET") {
+            const rows = d.store.db
+              .prepare(
+                `SELECT id, name, goal, acceptance, status, doc_path, result, artifact, note,
+                        lease_until, created_at, updated_at, end_at
+                   FROM tasks ORDER BY id DESC LIMIT 200`,
+              )
+              .all() as PmTaskRow[];
+            const report = auditTasks(rows, { now: Date.now() });
+            return reply(200, {
+              headline: report.headline,
+              red: report.red,
+              yellow: report.yellow,
+              findings: report.findings,
+              tasks: rows.length,
+              checked_at: new Date().toISOString(),
+            });
+          }
+          throw new HttpError(404, "用法：GET /v1/pm/audit");
         }
         case "business": {
           if (parts.length === 2 && method === "GET") {
