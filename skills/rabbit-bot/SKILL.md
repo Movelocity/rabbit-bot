@@ -23,8 +23,9 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 - 运行时目录：`~/.config/rabbit-bot/runtime`（`RABBIT_BOT_RUNTIME` 可改）
 - 业务地图：`<runtime>/business/`，不是仓库里的 `app/`
 - 任务：`tasks` 表；worker 汇报在 `<runtime>/shared/task-<id>.md`
-- UFA：只读查地图（`map` 工具），不直接写 business
-- WA：执行任务，可用 `write_file` / `terminal` 改 business；高风险改动先报影响面等确认
+- **UFA ＝ 主 agent**，也就是 rabbit-bot 这个进程本身（用户看到的话都是它说的）；只读查地图（`map` 工具），不直接写 business
+- **WA ＝ 本机 `opencode`**（任务表 `executor` 字段默认值，见 `app/src/core/dispatch.ts`）；执行任务，可用 `write_file` / `terminal` 改 business，高风险改动先报影响面等确认
+- 两者不同进程、不共享上下文，交接只有任务文档 `.ufa/tasks/task-<id>.md` 和面板事件
 
 ## 路由
 

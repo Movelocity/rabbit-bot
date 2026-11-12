@@ -18,6 +18,17 @@
 
 **一句话**：UFA 保证「跟你聊天的是个人」，WA 保证「事情真的做完了」。
 
+### 这两个名字在代码里是谁（别对着抽象名词写提示词）
+
+- **UFA ＝ 主 agent**，就是 rabbit-bot 自己这个进程：跑 `app/`，占一个 Matrix / 飞书身份，用户看到的所有话都是它说的。
+  它的人设在 `app/config/persona.md`（运行时优先 `runtime/prompt/persona.md`），工具在 `app/src/agent/tools.ts`。
+- **WA ＝ 本机的 `opencode`**。任务表里的 `executor` 字段只有两个合法值（`app/src/core/dispatch.ts`：
+  `export type Executor = "opencode" | "mimo"`），**默认 `opencode`**；`mimo` 是同一角色的备用 CLI。
+  WA 起的是一个一次性进程，工作目录 = 任务的 `work_dir`，产物落在任务文档和 `shared/`。
+- 所以「UFA 派活给 WA」翻译过来是：**花小鱼调 `task` 工具建任务 → 审批通过后本机 opencode 起来干活 → 回报进任务池**。
+  UFA 和 WA 不在同一个进程里，也不共享上下文：交接只有任务文档（`.ufa/tasks/task-<id>.md`）和面板事件。
+
+
 ### 为什么不能合成一个
 
 2026-09 斯坦福医学院在 Nature 上的一项研究提供了一个现成的类比：人脑不是单一器官，而是**两套神经系统**——前脑/中脑由 Otx2 祖细胞发育、后脑/脑干由 Gbx2 祖细胞发育——在数亿年里各自独立演化，最后被装进同一个颅骨。
