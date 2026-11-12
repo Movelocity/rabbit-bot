@@ -6,6 +6,7 @@
     "postinstall": "bash ../scripts/install-skills.sh",
     "build": "tsc -p tsconfig.json",
     "ctl": "tsx src/ctl.ts",
+    "map": "tsx scripts/map.ts",
     "demo": "tsx src/sim.ts --demo",
     "doctor": "bash scripts/doctor.sh",
     "inject": "bash scripts/inject.sh",

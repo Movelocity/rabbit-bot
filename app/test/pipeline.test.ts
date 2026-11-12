@@ -437,7 +437,7 @@ test("谈资：工作场景不再翻话题库，条目也不进提示词", async
   });
   const tickPrompt = seen[seen.length - 1] ?? "";
   // 唤醒消息这层：只有信号和数据，不再重复贴话题库说明
-  assert.match(tickPrompt, /【这一轮：tick】/);
+  assert.match(tickPrompt, /当前时间/);
   assert.match(tickPrompt, /scene-tick\.md/, "要指路");
   assert.doesNotMatch(tickPrompt, /冰箱里的钱拿去充原神/);
   assert.doesNotMatch(tickPrompt, new RegExp(`#${id}`), "不再有 id，也不再有 rb topic-used 记账");

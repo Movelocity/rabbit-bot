@@ -25,7 +25,7 @@ function mkStore() {
 test("tick 剧本：路由指向 scene-tick，只报正事、不为存在感开口", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map() });
-  assert.match(p, /【这一轮：tick】/, "第一行要给信号");
+  assert.match(p, /^【test】/, "第一行给唤醒原因");
   assert.match(p, /read_file prompt\/scene-tick\.md/, "要指路，不然她不知道读哪份");
 
   const script = render("scene-tick", {});
@@ -41,7 +41,7 @@ test("tick 剧本：路由指向 scene-tick，只报正事、不为存在感开�
 test("message 剧本：路由指向 scene-message，先判断需求再回", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("message"), now: Date.now(), unread: [], context: new Map() });
-  assert.match(p, /【这一轮：message】/);
+  assert.match(p, /^【test】/);
   assert.match(p, /read_file prompt\/scene-message\.md/);
 
   const script = render("scene-message", {});
@@ -67,7 +67,7 @@ test("schedule 剧本：路由指向 scene-schedule，并从共用日程池读�
   wake.pools = new Set([poolId]);
   const unread = s.unread(poolId);
   const p = wakePrompt(s, { wake, now, unread, context: new Map() });
-  assert.match(p, /【这一轮：schedule】/);
+  assert.match(p, /^【test】/);
   assert.match(p, /read_file prompt\/scene-schedule\.md/);
   assert.match(p, /日程/);
   assert.match(p, /提醒他周五下班前交周报/, "日程原文要进提示词");

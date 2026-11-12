@@ -15,6 +15,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 |---|---|---|---|
 | `ufa-business-map` | UFA | 查业务地图、解释关系、算影响面、判断该不该派活 | `ufa-business-map/SKILL.md` |
 | `wa-business-map` | WA | 新增/修改业务地图、校验、汇报 | `wa-business-map/SKILL.md` |
+| `business-relation-modeling` | UFA / WA / 人 | 设计/清洗/评审业务关系图，判断图是否健康，把文档或代码事实转成业务对象和关系 | `business-relation-modeling/SKILL.md` |
 | `reporting` | UFA / WA | 写汇报、验收产出、他问「做完了没 / 结果在哪」 | `reporting/SKILL.md` |
 
 ## 项目坐标
@@ -30,6 +31,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 ## 路由
 
 - 业务关系/对象/影响面 → UFA 读 `ufa-business-map/SKILL.md`；WA 读 `wa-business-map/SKILL.md`
+- 设计/清洗/评审关系图，或判断图是否太碎 → 读 `business-relation-modeling/SKILL.md`
 - 人设/提示词 → 读 `app/README.md` 的「定制它」；运行时优先，仓库默认份在 `app/prompts/` 和 `app/config/persona.md`
 - 写汇报 / 验收 → 读 `reporting/SKILL.md`（`app/prompts/system.md` 里只留四段结构和五条硬规则）
 - 任务/审批/worker → 读 `app/prompts/system.md`、`docs/SPEC-*`
@@ -37,7 +39,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 
 ## 硬规则
 
-- 子技能按 `ufa-` / `wa-` 前缀区分读者；不要拿 `wa-` 的写流程给 UFA 用。
+- 读写流程按 `ufa-` / `wa-` 前缀区分读者；跨角色方法（如 `reporting`、`business-relation-modeling`）不分前缀。不要拿 `wa-` 的写流程给 UFA 用。
 - 不猜关系。没有证据的对象/关系不进地图；拿不准就列「待确认」。
 - 不在 UFA 里直接改 business；要改就建任务交给 WA。
 - 不把密钥、token、密码写进业务地图；`source` 可以写路径或 URL。

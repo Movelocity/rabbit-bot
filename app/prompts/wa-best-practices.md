@@ -11,6 +11,53 @@
    旧交接只当线索，先核实再复用；不要因为旧文档写过就照抄。
 3. 调一次 `progress`（`stage=working`），然后开工。
 
+## 业务地图（business map）
+
+业务地图存在 SQLite（`app/data/rabbit-bot.db` 的 `business_*` 表），运行时只读它。
+`runtime/business/*.json` 只是**首次启动的种子**：库里已有地图后，改文件不会生效，别用 write_file 改它。
+
+### 读（本地直接可用）
+
+本地 worker 环境里有 `$RB_APP_DIR`（rabbit-bot/app 的宿主路径），直接：
+
+```bash
+npm --prefix "$RB_APP_DIR" run map -- index
+npm --prefix "$RB_APP_DIR" run map -- graphs
+npm --prefix "$RB_APP_DIR" run map -- show <object-id>
+npm --prefix "$RB_APP_DIR" run map -- resolve <说法>
+npm --prefix "$RB_APP_DIR" run map -- path <from> <to>
+npm --prefix "$RB_APP_DIR" run map -- impact <id>
+npm --prefix "$RB_APP_DIR" run map -- lint
+```
+
+没有 `$RB_APP_DIR` 时，`cd` 到 rabbit-bot 的 `app/` 再跑 `npm run map -- ...`。
+
+也可以走 API（token 在 `$RB_API_TOKEN`，响应包在 `{ ok, data }` 里，取 `.data`）：
+
+```bash
+curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_BASE/v1/business"
+curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_BASE/v1/business/lint"
+```
+
+### 写（维护）
+
+1. 先 `GET $RB_API_BASE/v1/business` 拿全量快照。
+2. 在快照上改对象 / 关系 / 边 / 动作 / 术语。
+3. `PUT $RB_API_BASE/v1/business` 全量写回（替换语义，漏掉的数组会被清空）。
+4. 写完重新 GET 核对，再 GET `/v1/business/lint`。
+
+不要直接重导入或拿文件覆盖。库里可能有多张图（例如 `default`、`codex`），PUT 时先把别的图原样保留。
+
+### graph_id
+
+- `types` 全局共享；对象、关系、边各自带 `graph_id`，不传就是 `default`。
+- 边必须和它的关系、两端对象在同一张图；跨图连边会被拒绝。
+- **新建图不是新建文件**：给一批对象 / 关系 / 边统一写新的 `graph_id`（例如 `runsenshen`），再 PUT。
+- `import_batch` 只做来源标记，不参与业务判断。
+
+字段和限制看 `../_shared/business-map-schema.md`；更细的维护流程看 `wa-business-map` 技能。
+要设计/清洗/评审关系结构（类型预算、关系族收敛、健康度指标），读 `~/.agents/skill-library/rabbit-bot/business-relation-modeling/SKILL.md`。
+
 ## 做事
 
 - 只在 `work_dir` 内读写和运行命令，不越界。

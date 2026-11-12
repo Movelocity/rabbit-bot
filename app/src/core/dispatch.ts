@@ -392,7 +392,13 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
       cwd: workDir,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, RB_API_BASE: opts.apiBase, RB_API_TOKEN: opts.token, ...(opts.sharedDir ? { RB_SHARED_DIR: opts.sharedDir } : {}) },
+      env: {
+        ...process.env,
+        RB_API_BASE: opts.apiBase,
+        RB_API_TOKEN: opts.token,
+        RB_APP_DIR: APP_ROOT,
+        ...(opts.sharedDir ? { RB_SHARED_DIR: opts.sharedDir } : {}),
+      },
     });
   } catch (e) {
     out.end();
