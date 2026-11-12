@@ -8,9 +8,19 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 
 /** 假 Hub：记下每次 send 的内容，永远成功。 */
-function setup(opts: { wake?: string; reasons?: string[] } = {}) {
+function setup(opts: {
+  wake?: string;
+  reasons?: string[];
+  primaryPoolId?: string | null;
+  pools?: { externalId: string; kind: "private" | "group"; title?: string }[];
+} = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-send-"));
   const cfg = { ...loadConfig(), dataDir };
+  if (opts.primaryPoolId !== undefined) {
+    cfg.sendReview = { ...(cfg.sendReview ?? {}), primaryPoolId: opts.primaryPoolId } as any;
+  }
+  const store = new Store(":memory:");
+  for (const p of opts.pools ?? []) store.upsertPool("feishu", p.externalId, p.kind, p.title ?? "");
   const sent: string[] = [];
   const hub = {
     send: async (_pool: string, content: string) => {
@@ -19,7 +29,7 @@ function setup(opts: { wake?: string; reasons?: string[] } = {}) {
     },
   };
   const tools = createTools({
-    store: new Store(":memory:"),
+    store,
     hub: hub as any,
     cfg,
     now: () => Date.now(),
@@ -27,7 +37,7 @@ function setup(opts: { wake?: string; reasons?: string[] } = {}) {
     currentWake: () => (opts.wake ? { type: opts.wake, reasons: opts.reasons } : null),
   });
   const send = (tools as any[]).find((t) => t.name === "chat");
-  return { send, sent };
+  return { send, sent, store };
 }
 
 test("send：条数不设代码上限（交给提示词），连发 5 条都放行", async () => {
@@ -67,4 +77,50 @@ test("send：看门狗放行的那一轮不许往聊天池发消息", async () =
   assert.equal(r.details.ok, false);
   assert.equal(r.details.blocked, "watchdog");
   assert.equal(sent.length, 0);
+});
+
+test("send：任务汇报只能发主聊天，发群聊被拦", async () => {
+  const { send, sent } = setup({
+    wake: "tick",
+    reasons: ["任务事件 batch: 有未读"],
+    primaryPoolId: "feishu:main",
+    pools: [
+      { externalId: "main", kind: "private", title: "主对话" },
+      { externalId: "proj", kind: "group", title: "项目组" },
+    ],
+  });
+  const bad = await send.execute("c", { action: "send", pool: "p2", content: "#80 完成了" });
+  assert.equal(bad.details.ok, false);
+  assert.equal(bad.details.blocked, "main-pool-only");
+  assert.equal(sent.length, 0);
+
+  const ok = await send.execute("c", { action: "send", pool: "p1", content: "#80 完成了" });
+  assert.equal(ok.details.ok, true, JSON.stringify(ok.details));
+  assert.equal(sent.length, 1);
+});
+
+test("send：任务汇报没设主聊天时 fail-closed，不往群聊发", async () => {
+  const { send, sent } = setup({
+    wake: "tick",
+    reasons: ["任务事件 batch: 有未读"],
+    pools: [{ externalId: "proj", kind: "group", title: "项目组" }],
+  });
+  const r = await send.execute("c", { action: "send", pool: "p1", content: "#80 完成了" });
+  assert.equal(r.details.ok, false);
+  assert.equal(r.details.blocked, "main-pool-unset");
+  assert.equal(sent.length, 0);
+});
+
+test("send：普通群聊消息（非任务汇报）仍可直接发群", async () => {
+  const { send, sent } = setup({
+    wake: "message",
+    primaryPoolId: "feishu:main",
+    pools: [
+      { externalId: "main", kind: "private", title: "主对话" },
+      { externalId: "proj", kind: "group", title: "项目组" },
+    ],
+  });
+  const r = await send.execute("c", { action: "send", pool: "p2", content: "收到，我看一下" });
+  assert.equal(r.details.ok, true, JSON.stringify(r.details));
+  assert.equal(sent.length, 1);
 });

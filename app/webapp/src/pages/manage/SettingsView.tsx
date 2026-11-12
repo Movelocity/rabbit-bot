@@ -345,7 +345,7 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
         <CardBody>
           <p className="mb-3 text-sm text-muted">
             agent 发出的消息先在审批房预览，主人贴 OK / 👍 才真正发到聊天；贴 No / 👎 或超时就不发。
-            按会话的开关在「会话」页顶部：主对话默认直接发，需要审的群单独打开。默认关闭。
+            按会话的开关在「会话」页顶部：主聊天（main chat）默认直接发，任务汇报也只发主聊天；需要审的群单独打开。默认关闭。
           </p>
           {!sendReviewReady && (
             <p className="mb-3 text-sm text-bad">

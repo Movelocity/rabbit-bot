@@ -229,7 +229,7 @@ export class Hub {
         platform: pool.platform,
         chatId: pool.external_id,
         poolRef: pool.pool_id,
-        poolTitle: pool.title,
+        poolTitle: this.store.poolDisplayTitle(pool),
         kind: pool.kind,
         content,
         deliver: async () => {

@@ -26,6 +26,7 @@ import {
 import { addMemory, closeMemory, searchMemories, traceMemory, updateMemory } from "../ops/memories.ts";
 import { addKnowledge, archiveKnowledge, getKnowledge, searchKnowledge, updateKnowledge } from "../ops/knowledge.ts";
 import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
+import { mainPoolId } from "../ops/send-review-settings.ts";
 import { createSchedule, formatSchedule, isScheduleStatus, type ScheduleInput } from "../core/schedules.ts";
 import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
@@ -182,8 +183,33 @@ export function createTools(d: ToolDeps) {
               const why = coerciveHit(p.content);
               if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
             }
-            // 风格闸：客服腔、七天内的原样重复，提示词管不住，只有代码管得住（拦下来让她重写）
+            const wake = d.currentWake?.();
+            // 任务汇报只能进主聊天：任务事件唤醒时，她容易把「润森盛」这类项目汇报顺手发进项目群。
+            // 提示词管不住（群规则在 message 场景，tick 只读 scene-tick），这里用代码兜底。
+            const isTaskReport = !!wake && (
+              wake.type === "task-updated"
+              || (wake.reasons ?? []).some((r) => r.startsWith("任务事件"))
+            );
             const poolRow = d.store.resolvePool(p.pool);
+            if (isTaskReport) {
+              const mainId = mainPoolId(d.cfg);
+              const main = mainId ? d.store.getPool(mainId) : null;
+              if (!main) {
+                return txt(
+                  "任务汇报只能发主聊天，但现在还没设主聊天。这轮先 chat action=skip；让主人去「会话」页把主聊天设好。",
+                  { ok: false, blocked: "main-pool-unset" },
+                );
+              }
+              if (!poolRow || poolRow.pool_id !== main.pool_id) {
+                const alias = d.store.poolAlias(main.pool_id);
+                return txt(
+                  `任务汇报只能发主聊天 ${alias}「${d.store.poolDisplayTitle(main) || "-"}」，不能发到 ${p.pool ?? "别的池"}。`
+                  + `改发 ${alias}，或者这轮 skip。`,
+                  { ok: false, blocked: "main-pool-only" },
+                );
+              }
+            }
+            // 风格闸：客服腔、七天内的原样重复，提示词管不住，只有代码管得住（拦下来让她重写）
             if (poolRow) {
               const recentSelf = d.store.messagesForReflection(poolRow.pool_id, 60)
                 .filter((m) => m.from_self)
@@ -260,10 +286,12 @@ export function createTools(d: ToolDeps) {
           }
 
           case "list": {
-            const pools = listPools(d.store, { includeArchived: !!p.archived });
+            const pools = listPools(d.store, { includeArchived: !!p.archived, mainPoolId: mainPoolId(d.cfg) });
             if (!pools.length) return txt("（还没有任何池）", { ok: true, count: 0 });
             const kindLabel = (k: string) => k === "group" ? "群" : k === "task" ? "任务" : k === "private" ? "私聊" : k;
-            const lines = pools.map((x: any) => `[${x.alias}]${x.archived ? "[已归档]" : ""} ${kindLabel(x.kind)} ${x.title}　最后 ${x.last_msg_local ?? "—"}　共 ${x.total} 条`);
+            const lines = pools.map((x: any) =>
+              `[${x.alias}]${x.is_main ? "[主聊天]" : ""}${x.archived ? "[已归档]" : ""} `
+              + `${kindLabel(x.kind)} ${x.title}　最后 ${x.last_msg_local ?? "—"}　共 ${x.total} 条`);
             return txt(lines.join("\n"), { ok: true, count: pools.length });
           }
 

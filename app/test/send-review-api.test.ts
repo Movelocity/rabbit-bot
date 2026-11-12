@@ -88,6 +88,15 @@ test("PUT /v1/send-review：保存并立即改 cfg，按池覆盖 / 主对话可
   assert.deepEqual(saved.overrides, { "feishu:g1": true, "feishu:g2": false });
 });
 
+test("GET /v1/pools：主聊天带 is_main，其他池不带", async () => {
+  store.upsertPool("feishu", "g2", "private", "另一个会话");
+  const r = await call("/v1/pools");
+  assert.equal(r.status, 200);
+  const rows = r.body.data as any[];
+  assert.equal(rows.find((x) => x.pool_id === "feishu:g1")?.is_main, true);
+  assert.equal(rows.find((x) => x.pool_id === "feishu:g2")?.is_main, false);
+});
+
 test("PUT /v1/send-review：主对话池不存在时 400", async () => {
   const r = await call("/v1/send-review", {
     method: "PUT",

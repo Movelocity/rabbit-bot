@@ -47,6 +47,7 @@ const TAB_HINTS: Record<string, string> = {
 const MANAGE_HINTS: Record<string, string> = {
   usage: "",
   "task-stats": "已完成任务 · 耗时 / token / 费用",
+  "llm-logs": "按会话查看实际请求 / 响应 · 默认只加载最近一段",
   users: "别名优先于通讯录名字",
   persona: "人设与提示词 · 保存后下一轮生效",
   schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",

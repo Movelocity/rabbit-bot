@@ -4,6 +4,8 @@ export interface Pool {
   kind: string;
   title: string;
   archived: boolean;
+  /** 主聊天（main chat）：任务汇报只发这里，审批消息也发到这里 */
+  is_main: boolean;
   last_msg_at: number | null;
   last_msg_local: string | null;
   total: number;
@@ -441,4 +443,63 @@ export type BusinessCategory = "objects" | "relations" | "actions" | "terms" | "
 export interface BusinessSelection {
   kind: BusinessCategory;
   id: string;
+}
+
+export interface LlmSessionSummary {
+  id: string;
+  started_at: number | null;
+  updated_at: number;
+  size: number;
+  messages: number;
+  model: string;
+  provider: string;
+  preview: string;
+  pools: string[];
+}
+
+export interface LlmToolCall {
+  id?: string;
+  name: string;
+  args: string;
+  args_truncated?: boolean;
+}
+
+export interface LlmUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoning?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+
+export interface LlmLogMessage {
+  index: number;
+  ts: number | null;
+  role: string;
+  text: string;
+  truncated?: boolean;
+  tool_calls?: LlmToolCall[];
+  tool_name?: string;
+  tool_call_id?: string;
+  is_error?: boolean;
+  model?: string;
+  provider?: string;
+  stop_reason?: string;
+  duration_ms?: number;
+  usage?: LlmUsage;
+}
+
+export interface LlmSessionDetail {
+  id: string;
+  started_at: number | null;
+  updated_at: number;
+  size: number;
+  model: string;
+  provider: string;
+  pools: string[];
+  total: number;
+  next_before: number | null;
+  messages: LlmLogMessage[];
 }

@@ -366,6 +366,21 @@ export class Store {
     const r = this.db.prepare("SELECT pool_id,platform,external_id,kind,title,archived FROM pools WHERE pool_id=?").get(poolId);
     return r ? rowToPool(r) : undefined;
   }
+  /**
+   * 池在界面和提示词里的名字：私聊优先用对方的显示名（人工别名 > 自动名），
+   * 没聊过或没有名字时才退回池标题（通常是「私聊」）。
+   */
+  poolDisplayTitle(p: Pool): string {
+    if (p.kind === "private") {
+      const row = this.db.prepare(
+        `SELECT platform, sender_id FROM messages
+         WHERE pool_id=? AND from_self=0 AND internal=0
+         ORDER BY ts DESC, seq DESC LIMIT 1`).get(p.pool_id) as any;
+      const name = row ? this.userDisplayName(row.platform, row.sender_id) : "";
+      if (name) return name;
+    }
+    return String(p.title ?? "").trim();
+  }
   /** 短别名 p<rowid>，给 LLM 用以节省 token */
   poolAlias(poolId: string): string {
     const r = this.db.prepare("SELECT rowid FROM pools WHERE pool_id=?").get(poolId) as any;

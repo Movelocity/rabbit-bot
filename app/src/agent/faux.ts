@@ -50,14 +50,13 @@ function respond(context: any): any {
       const pools = [...new Set([...msgs.map(textOf).join("\n").matchAll(/\[(p\d+) /g)].map((x) => x[1]))];
       return fauxAssistantMessage(`交接文档（桩）\n- 涉及池：${pools.join(",") || "无"}\n- 共 ${msgs.length} 条上下文消息\n- 无未完成承诺`);
     }
-    // 任务汇报：按池发一条摘要，内容带任务数，方便 e2e 断言「合并成一条」
+    // 任务汇报：只发主聊天，多个来源合并成一条，内容带任务数，方便 e2e 断言「合并成一条」
     if (t.includes("【任务汇报】")) {
-      const calls: any[] = [];
-      for (const m of t.matchAll(/^- 池 (p\d+).*?（(\d+) 个任务）/gm)) {
-        calls.push(fauxToolCall("chat", { action: "send", pool: m[1], content: `任务结束：${m[2]} 个` }));
-      }
-      if (!calls.length) return fauxAssistantMessage("没有值得说的。");
-      return fauxAssistantMessage(calls);
+      const main = /只发主聊天 (p\d+)/.exec(t)?.[1];
+      const sources = [...t.matchAll(/^- 来源池 (p\d+).*?（(\d+) 个任务/gm)];
+      if (!main || !sources.length) return fauxAssistantMessage("没有值得说的。");
+      const total = sources.reduce((n, m) => n + Number(m[2]), 0);
+      return fauxAssistantMessage(fauxToolCall("chat", { action: "send", pool: main, content: `任务结束：${total} 个` }));
     }
     const calls: any[] = [];
     const unread = t.split("未读消息：\n")[1] ?? "";

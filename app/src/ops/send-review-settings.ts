@@ -46,6 +46,11 @@ export function effectiveSendReviewSettings(cfg: Config): SendReviewSettings {
   };
 }
 
+/** 主聊天（main chat）：任务汇报等主动消息的唯一落点；复用 sendReview.primaryPoolId。 */
+export function mainPoolId(cfg: Config): string | null {
+  return effectiveSendReviewSettings(cfg).primaryPoolId;
+}
+
 /** 纯函数：这个池要不要审核。主对话永远免审；总开关关掉时一律直接发。 */
 export function reviewRequiredFor(settings: SendReviewSettings, poolId: string): boolean {
   if (!settings.enabled) return false;

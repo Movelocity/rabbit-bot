@@ -519,6 +519,7 @@ test("任务完成 → 任务 tick 只转述一次，多任务合并成一条", 
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   })!;
   const poolId = saved.pool_id;
+  t.cfg.sendReview = { ...(t.cfg.sendReview ?? {}), primaryPoolId: poolId } as any;
   t.app.hub.takeUnread([poolId]);
 
   fs.mkdirSync(path.join(t.cfg.runtimeDir, "shared", "handoffs"), { recursive: true });
@@ -553,6 +554,7 @@ test("任务汇报冷却：5 分钟内不重复打扰，游标保留到下一轮
     reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
   })!;
   const poolId = saved.pool_id;
+  t.cfg.sendReview = { ...(t.cfg.sendReview ?? {}), primaryPoolId: poolId } as any;
   t.app.hub.takeUnread([poolId]);
 
   const mk = (i: number) => {

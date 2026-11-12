@@ -3,13 +3,17 @@ import type { Store } from "../core/db.ts";
 import { fmtLocal } from "../core/time.ts";
 import { clampInt, resolvePool } from "./common.ts";
 
-export function listPools(store: Store, opts: { includeArchived?: boolean } = {}) {
-  return store.listPools(opts).map((p) => ({
+export function listPools(
+  store: Store,
+  opts: { includeArchived?: boolean; mainPoolId?: string | null } = {},
+) {
+  return store.listPools({ includeArchived: opts.includeArchived }).map((p) => ({
     alias: store.poolAlias(p.pool_id),
     pool_id: p.pool_id,
     kind: p.kind,
-    title: p.title ?? "",
+    title: store.poolDisplayTitle(p),
     archived: p.archived,
+    is_main: !!opts.mainPoolId && p.pool_id === opts.mainPoolId,
     last_msg_at: p.last_msg_at || null,
     last_msg_local: p.last_msg_at ? fmtLocal(p.last_msg_at) : null,
     total: store.poolSpan(p.pool_id).total,

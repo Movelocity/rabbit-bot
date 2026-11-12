@@ -7,10 +7,12 @@ import { UsageView } from "./manage/UsageView.tsx";
 import { TaskStatsView } from "./manage/TaskStatsView.tsx";
 import { SkillsView } from "./manage/SkillsView.tsx";
 import { SchedulesView } from "./manage/SchedulesView.tsx";
+import { LlmLogsView } from "./manage/LlmLogsView.tsx";
 
 const LABELS: Record<ManageView, string> = {
   usage: "用量",
   "task-stats": "任务统计",
+  "llm-logs": "模型日志",
   persona: "提示词编辑",
   users: "用户",
   schedules: "日程",
@@ -48,6 +50,7 @@ export function ManagePage({
       <div className="min-h-0 overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
         {view === "usage" && <UsageView reloadSignal={reloadSignal} />}
         {view === "task-stats" && <TaskStatsView reloadSignal={reloadSignal} />}
+        {view === "llm-logs" && <LlmLogsView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
         {view === "schedules" && <SchedulesView reloadSignal={reloadSignal} />}

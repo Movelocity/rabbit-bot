@@ -15,6 +15,7 @@ import { APP_ROOT, type Config } from "./config.ts";
 import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { archivePool, listPools, readPool, searchPool } from "./ops/pools.ts";
+import { listLlmSessions, readLlmSession } from "./ops/llm-logs.ts";
 import {
   addGoals, addProgress, archiveBoard, checkGoal, createBoard, getBoard, listBoards, updateBoard,
   BOARD_STATUSES, type BoardStatus,
@@ -54,7 +55,7 @@ import {
   applyWatchdogSettings, effectiveWatchdogSettings, saveWatchdogSettings, validateWatchdogSettings,
 } from "./ops/watchdog-settings.ts";
 import {
-  applySendReviewSettings, effectiveSendReviewSettings, saveSendReviewSettings, validateSendReviewSettings,
+  applySendReviewSettings, effectiveSendReviewSettings, mainPoolId, saveSendReviewSettings, validateSendReviewSettings,
 } from "./ops/send-review-settings.ts";
 import { resolveSendReviewConfig, sendReviewReady } from "./core/send-review.ts";
 import type { Scheduler } from "./core/scheduler.ts";
@@ -252,7 +253,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
         case "pools": {
           if (parts.length === 2 && method === "GET") {
             const inc = url.searchParams.get("archived");
-            return reply(200, listPools(d.store, { includeArchived: inc === "1" || inc === "true" }));
+            return reply(200, listPools(d.store, {
+              includeArchived: inc === "1" || inc === "true",
+              mainPoolId: mainPoolId(d.cfg),
+            }));
           }
           if (parts.length === 4 && parts[3] === "archive" && (method === "POST" || method === "PUT")) {
             const archived = body.archived === undefined ? true : !!body.archived;
@@ -271,6 +275,20 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             ));
           }
           throw new HttpError(404, "用法：GET /v1/pools?archived=1、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=、POST /v1/pools/:ref/archive");
+        }
+        case "llm-logs": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, listLlmSessions(d.cfg, { limit: qInt(url.searchParams.get("limit")) }));
+          }
+          if (parts.length === 3 && method === "GET") {
+            const log = readLlmSession(d.cfg, decodeURIComponent(parts[2]), {
+              limit: qInt(url.searchParams.get("limit")),
+              before: qInt(url.searchParams.get("before")),
+            });
+            if (!log) throw new HttpError(404, "没有这个会话日志");
+            return reply(200, log);
+          }
+          throw new HttpError(404, "用法：GET /v1/llm-logs?limit=30、GET /v1/llm-logs/:id?limit=40&before=N");
         }
         case "users": {
           if (parts.length === 2 && method === "GET") return reply(200, d.store.listUsers());

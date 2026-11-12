@@ -265,11 +265,11 @@ export function ChatPage({
         setSendReview(saved);
         setStatus({
           text: makePrimary
-            ? "已设为主对话：它发送的消息永不审批，审批消息也发到这里"
-            : "已取消主对话",
+            ? "已设为主聊天：任务汇报只发这里，它发送的消息永不审批，审批消息也发到这里"
+            : "已取消主聊天",
         });
       } catch (e) {
-        setStatus({ text: `设置主对话失败：${friendlyError(e)}`, error: true });
+        setStatus({ text: `设置主聊天失败：${friendlyError(e)}`, error: true });
       } finally {
         setReviewSaving(false);
       }
@@ -326,8 +326,18 @@ export function ChatPage({
                 }}
               >
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="truncate text-sm font-semibold">
-                    {p.title || "（无标题）"}
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    <span className="truncate text-sm font-semibold">
+                      {p.title || "（无标题）"}
+                    </span>
+                    {p.is_main && (
+                      <span
+                        className="flex-none rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted"
+                        title="主聊天：任务汇报只发这里，审批消息也发到这里"
+                      >
+                        主聊天
+                      </span>
+                    )}
                   </span>
                   <span className="flex-none text-[11px] text-muted">
                     {kindLabel(p.kind)}
@@ -377,9 +387,9 @@ export function ChatPage({
               {isPrimary ? (
                 <span
                   className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
-                  title="主对话永远免审批，审批消息也发到这里"
+                  title="主聊天：任务汇报只发这里，且永远免审批"
                 >
-                  发送免审批
+                  主聊天 · 免审批
                 </span>
               ) : (
                 <Segmented
@@ -398,11 +408,11 @@ export function ChatPage({
                 disabled={reviewSaving}
                 aria-pressed={isPrimary}
                 title={isPrimary
-                  ? "主对话永远免审批，审批消息也发到这里；点此取消"
-                  : "设为主对话：永不审批，并接收审批消息"}
+                  ? "主聊天：任务汇报只发这里、永不审批；点此取消"
+                  : "设为主聊天：任务汇报只发这里，永不审批，并接收审批消息"}
                 onClick={() => void setPrimaryPool(!isPrimary)}
               >
-                {isPrimary ? "主对话 ✓" : "设为主对话"}
+                {isPrimary ? "主聊天 ✓" : "设为主聊天"}
               </Button>
             </div>
           )}

@@ -38,7 +38,7 @@ export function poolLabel(store: Store, p: Pool): string {
     : p.kind === "task" ? "任务"
     : p.kind === "schedule" ? "日程"
     : "群聊";
-  return `${store.poolAlias(p.pool_id)} ${p.platform}${kind}「${p.title || "-"}」`;
+  return `${store.poolAlias(p.pool_id)} ${p.platform}${kind}「${store.poolDisplayTitle(p) || "-"}」`;
 }
 
 export function fmtMsg(store: Store, m: StoredMessage, withSeq = true): string {
@@ -71,6 +71,8 @@ export interface WakePromptInput {
   handoff?: string | null;
   /** 可聊的谈资（只在主动 tick 时给，有人说话时不需要） */
   topics?: { id: number; kind: string; content: string; source?: string }[];
+  /** 主聊天（main chat）：任务汇报只能发到这里 */
+  mainPool?: string | null;
 }
 
 export function wakePrompt(store: Store, x: WakePromptInput): string {
@@ -104,6 +106,9 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
 
   // 状态不写成模板片段，直接拼成几行数据：文案（怎么读这些数）在 scene-*.md 里
   const state: string[] = ["## 状态"];
+  if (x.mainPool) {
+    state.push(`- 主聊天：${store.poolAlias(x.mainPool)}（任务汇报只发这里，不发群聊）`);
+  }
   state.push(
     `- 上次主动：${last ? `${fmtAgo(x.now - last.ts)}${last.why ? `（当时说的理由：${last.why}）` : ""}` : "（这是第一次主动开口）"}`,
   );

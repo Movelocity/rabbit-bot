@@ -14,6 +14,7 @@ export type Tab = (typeof TABS)[number];
 export const MANAGE_VIEWS = [
   "usage",
   "task-stats",
+  "llm-logs",
   "persona",
   "users",
   "schedules",

@@ -32,7 +32,7 @@ import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
 import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
 import { SendReviewGate, resolveSendReviewConfig } from "./core/send-review.ts";
-import { effectiveSendReviewSettings, reviewRequiredFor } from "./ops/send-review-settings.ts";
+import { effectiveSendReviewSettings, mainPoolId, reviewRequiredFor } from "./ops/send-review-settings.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -982,16 +982,23 @@ export class App {
       byPool.set(t.pool_id, list);
     }
 
+    const mainId = mainPoolId(cfg);
+    const mainAlias = mainId ? this.store.poolAlias(mainId) : null;
     const lines: string[] = [
-      "【任务汇报】下面这些任务刚刚结束，挑值得说的转述给对应的人。",
-      "规则：只转述 done/failed/blocked；每个池只 send 一条，多个任务合并；最多列 10 个，其余写「还有 N 个」。",
-      "不要复述汇报全文，不要提 token；这一批都不值得说就 skip。pool 原样用下面给出的别名。",
+      "【任务汇报】下面这些任务刚刚结束，挑值得说的转述给主聊天。",
+      mainAlias
+        ? `规则：只转述 done/failed/blocked；全部汇报只发主聊天 ${mainAlias}，不要发任务来源池或群聊；这一批合并成一条，最多列 10 个，其余写「还有 N 个」。`
+        : "规则：主聊天还没设，这批先别发聊天消息；只在任务里记一笔，等主人设好主聊天再汇报。",
+      "不要复述汇报全文，不要提 token；这一批都不值得说就 skip。",
       "",
     ];
     for (const [pid, list] of byPool) {
       const pool = this.store.getPool(pid);
       const alias = this.store.poolAlias(pid);
-      lines.push(`- 池 ${alias}${pool ? `「${pool.title}」` : ""}（${list.length} 个任务）`);
+      lines.push(
+        `- 来源池 ${alias}${pool ? `「${this.store.poolDisplayTitle(pool)}」` : ""}（${list.length} 个任务；`
+        + `只是出处，汇报目标仍是主聊天 ${mainAlias ?? "未设，先别发"}）`,
+      );
       for (const t of list.slice(0, TASK_RELAY_MAX_LISTED)) {
         lines.push(`  - ${taskDisplayName(t)}：${t.status}`);
         if (t.result?.trim()) lines.push(`    结果：${clipText(t.result, 200)}`);
@@ -1146,7 +1153,9 @@ export class App {
     const handoff = this.engine.takePendingHandoff();
     entry.handoffIncluded = !!handoff;
     // 话题库已经搬进沙盒（/work/topics），她自己去读，这里不再查库。
-    const prompt = wakePrompt(this.store, { wake: w, now: t0, unread, context, handoff, topics: [] });
+    const prompt = wakePrompt(this.store, {
+      wake: w, now: t0, unread, context, handoff, topics: [], mainPool: mainPoolId(cfg),
+    });
     for (const pid of involved) this.engine.seenPools.add(pid);
     entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
     entry.promptChars = prompt.length;
