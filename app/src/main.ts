@@ -31,7 +31,7 @@ async function main() {
   const sharedMade = ensureSharedWorkspace(cfg);
   if (sharedMade.length) log.info(`shared 工作区已补齐：${sharedMade.join("、")}`);
   log.info(`人设与提示词取自 ${useRuntimePrompts(cfg)}`);
-  log.info(`沙盒根：${cfg.exec.dir}（/work），worker 汇报落点：${sharedDir(cfg)}`);
+  log.info(`沙盒根：${cfg.exec.dir}（/work），worker 交接/产出落点：${sharedDir(cfg)}`);
   // host 模式下没有 volume 挂载：exec.dir 不在运行时目录时，把 prompt/ topics/ 换成软链，
   // 否则她读的是运行时、写的是 exec.dir 里的陈旧副本，很快就分叉
   const linked = ensureHostSandboxLinks(cfg);

@@ -58,6 +58,14 @@ test("容器里能跑命令，写 /work 会落到宿主沙盒目录", { skip }, 
   assert.equal(fs.readFileSync(path.join(workspace, "out.txt"), "utf8").trim(), "from-sbx");
 });
 
+test("容器内 cwd 生效，常用 shell 语法可跑", { skip }, async () => {
+  fs.mkdirSync(path.join(workspace, "sub"), { recursive: true });
+  const r = await runShell("pwd && [[ 1 == 1 ]] && echo bash-ok", { ...opts, hostCwd: "/work/sub" });
+  assert.equal(r.ok, true, r.output);
+  assert.match(r.output, /\/work\/sub/);
+  assert.match(r.output, /bash-ok/);
+});
+
 test("宿主机的路径在容器里不存在", { skip }, async () => {
   const r = await runShell("ls /Users 2>&1 | head -1", opts);
   assert.match(r.output, /No such file or directory/);

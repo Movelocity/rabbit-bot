@@ -22,6 +22,8 @@ test("审批被拒后引擎中止本轮，不再执行后续终端调用", async
   });
   cfg.exec.shell.mode = "host";
   cfg.exec.shell.host = { cwd: cfg.exec.dir, inheritEnv: false };
+  // host 模式下 terminal 是否出现在工具集里看 cfg.approval.enabled；测试显式打开，别依赖本机 local.json
+  cfg.approval = { ...cfg.approval, enabled: true };
 
   const asked: string[] = [];
   const gate = {

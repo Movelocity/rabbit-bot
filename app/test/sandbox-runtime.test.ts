@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/config.ts";
-import { runtimeOverlays, sharedDir, filesDir, runtimeIsSandbox } from "../src/core/runtime.ts";
+import { runtimeOverlays, sharedDir, filesDir, runtimeIsSandbox, handoffDir, outputsDir, projectsDir } from "../src/core/runtime.ts";
 import { renderTaskDoc } from "../src/core/dispatch.ts";
 
 function cfgFor(dir: string, extra: Record<string, unknown> = {}) {
@@ -70,6 +70,9 @@ test("shared/files 固定落在运行时目录下", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-rt-"));
   const cfg = cfgFor(dir);
   assert.equal(sharedDir(cfg), path.join(dir, "shared"));
+  assert.equal(handoffDir(cfg), path.join(dir, "shared", "handoffs"));
+  assert.equal(outputsDir(cfg), path.join(dir, "shared", "outputs"));
+  assert.equal(projectsDir(cfg), path.join(dir, "shared", "projects"));
   assert.equal(filesDir(cfg), path.join(dir, "files"));
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -85,6 +88,7 @@ test("任务文档带最佳实践和交接文档落点", () => {
   assert.match(doc, /WA-BEST-PRACTICES\.md/);
   assert.match(doc, /handoffs/);
   assert.match(doc, /shared\/handoffs\/task-7\.md/);
+  assert.match(doc, /shared\/outputs\/task-7/);
   assert.match(doc, /RB_SHARED_DIR/);
   assert.match(doc, /未指定：按仓库约定和 WA 最佳实践处理/);
 });

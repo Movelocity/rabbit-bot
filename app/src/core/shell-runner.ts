@@ -235,7 +235,7 @@ export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<
   return { ok: true, message: "created" };
 }
 
-/** 在沙盒容器里跑一段 shell（sh -lc）。命令字符串不进宿主 shell，走 execFile 参数传递。 */
+/** 在沙盒容器里跑一段 shell（bash -lc）；cwd 是容器内路径。命令字符串不进宿主 shell，走 execFile 参数传递。 */
 export async function runInDocker(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
   const trimmed = checkCmd(cmd);
 
@@ -243,8 +243,17 @@ export async function runInDocker(cmd: string, opts: ShellRunnerOptions): Promis
   if (!ready.ok) throw new Error(ready.message);
 
   // 超时交给容器里的 timeout：只杀 docker CLI 的话，容器里的进程会继续跑成孤儿。
+  // cwd 用 docker exec -w 传容器内路径（不是宿主路径）。镜像有 bash 就用 bash，老镜像退回 sh。
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
-  const r = await run("docker", ["exec", opts.container, "timeout", "-s", "KILL", String(secs), "sh", "-lc", trimmed], opts.timeoutMs + 5000);
+  const exec = (shell: "bash" | "sh") => run("docker", [
+    "exec",
+    ...(opts.hostCwd ? ["-w", opts.hostCwd] : []),
+    opts.container,
+    "timeout", "-s", "KILL", String(secs),
+    shell, "-lc", trimmed,
+  ], opts.timeoutMs + 5000);
+  let r = await exec("bash");
+  if (r.code === 127 && /bash/i.test(r.err)) r = await exec("sh");
   const timedOut = r.code === 137 || r.code === 124;
   return {
     ok: r.code === 0,

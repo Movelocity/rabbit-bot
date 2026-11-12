@@ -139,7 +139,7 @@ test("task：缺参、非法 status、不存在 id 都明确报错，不抛崩",
 
 test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批；WA 始终有", () => {
   const ufa = setup().tools.map((t: any) => t.name);
-  for (const name of ["chat", "memory", "knowledge", "plan", "approval", "task", "read_file", "rb"]) {
+  for (const name of ["chat", "memory", "knowledge", "approval", "task", "read_file", "edit_file", "rb"]) {
     assert.ok(ufa.includes(name), `UFA 少了 ${name}：${ufa.join(",")}`);
   }
   assert.ok(!ufa.includes("write_file"), `UFA 不该有 write_file：${ufa.join(",")}`);
@@ -150,7 +150,7 @@ test("工具集按 profile 分：UFA 沙盒始终有 terminal，host 需审批�
 
   const wa = setup("wa").tools.map((t: any) => t.name);
   assert.deepEqual([...wa].sort(), ["knowledge", "rb", "read_file", "terminal", "write_file"]);
-  for (const name of ["chat", "memory", "plan", "approval", "task"]) {
+  for (const name of ["chat", "memory", "approval", "task"]) {
     assert.ok(!wa.includes(name), `WA 不该有 ${name}`);
   }
 });

@@ -122,7 +122,7 @@ export interface Config {
       /** 额外注入容器/宿主 shell 的环境变量（自动带 RB_API_URL / RB_API_TOKEN） */
       env?: Record<string, string>;
       /** 仅 mode=host 生效 */
-      host?: { cwd?: string; inheritEnv?: boolean };
+      host?: { cwd?: string; inheritEnv?: boolean; /** read_file scope=host 的预置白名单根目录 */ readRoots?: string[] };
     };
   };
   /**

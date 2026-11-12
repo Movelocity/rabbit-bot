@@ -4,7 +4,7 @@
 >
 > 状态：只做方案，不改代码。待拍板项见第 7 节。
 >
-> **前提更新（评审后）**：已决定关闭沙盒，`exec.shell.mode = "host"` + `approval.enabled = true`，脚本直接在宿主机执行。因此本计划不再讨论容器、挂载、只读绑定；`runtime/shared` 继续作为 WA 汇报落点（它是运行时目录，与沙盒无关）。
+> **前提更新（2026-11-12）**：UFA 回归 Docker 沙盒，`exec.shell.mode = "docker"`，容器里 `/work` 就是 `runtimeDir`；UFA 对 `/work` 有完整读写权限，不需要运行时审批，宿主其他路径不可见。WA 仍在宿主执行项目任务，交接写 `shared/handoffs/task-<id>.md`，最终产出复制到 `shared/outputs/task-<id>/` 供 UFA 在沙盒里验收。
 >
 > **执行进度（2026-11-10）**：P0 工具集拆分、P1 汇报闭环、P3 工具边界已完成，`npm run typecheck` + 493 tests 全绿。P2（双引擎/30s 窗口）与 P4（删旧模型）未开始。
 
@@ -76,8 +76,8 @@ WA 执行（外部 opencode/mimo 或未来的 in-process session）
 | # | 问题 | 建议 | 理由 |
 | --- | --- | --- | --- |
 | D1 | WA 保持外部进程还是改 in-process PiEngine？ | **先保持外部** | 隔离好、现有 e2e 已覆盖；改 in-process 要自己做工具隔离和审批，收益不确定 |
-| D2 | UFA 是否给 `terminal`？ | **单会话阶段先保留（host + 审批）；WA 落地后再移到 WA** | 你现在就是要它在宿主跑脚本，直接砍掉会让 bot 失去执行能力。边界靠审批，不靠工具缺失 |
-| D3 | UFA 是否给 `write_file`？ | **不给**（任务描述走 tasks 表） | ARCH 写「UFA 可写文件」与「不干重活」冲突；建议以 tasks 表为唯一交接面 |
+| D2 | UFA 是否给 `terminal`？ | **给；只跑在 Docker 沙盒里，`/work` = runtime，无审批** | UFA 需要维护自己的提示词/技能/共享产出；沙盒外不可见，边界靠容器而不是审批 |
+| D3 | UFA 是否给 `write_file`？ | **不给**；需要写 `/work` 时用 terminal | 普通文件写入仍走工具层更安全；项目文件交给 WA |
 | D4 | UFA `read_file` 能读哪？ | **只读 runtime 根**（prompt/topics/skills/shared/files） | dsh 的 read-only host FS 是给 coding agent 的；聊天 bot 放开任意宿主路径收益低、风险高 |
 | D5 | 汇报写文件还是只写 DB？ | **文件为正文，DB 存摘要 + artifact 路径** | 大文本不进 SQLite/上下文；UFA 需要时按路径读 |
 | D6 | 转述哪些状态？ | **只转述 `done`/`failed`/`blocked`**，`progress` 不进 UFA | 避免刷屏；progress 留在任务池 |

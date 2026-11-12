@@ -43,9 +43,16 @@
 
 短而可检索；不要贴大段日志。交接文件不是完成信号，`complete` 才是。
 
+## 产出落点
+
+- 最终交付物复制或导出到 `$RB_SHARED_DIR/outputs/task-<id>/`，不要只留在工作目录。
+- UFA 在沙盒里通过 `/work/shared/outputs/` 验收。
+- `artifact` 填 shared 产出路径；工作目录里的原始路径写进交接文档。
+- 数据类产出（xlsx/csv）尤其要放这里，否则 UFA 看不到，等于没交付。
+
 ## 汇报口径
 
 - `result`：用户能看懂的结果，一两句。
-- `artifact`：可打开的文件绝对路径或链接。
+- `artifact`：`$RB_SHARED_DIR/outputs/task-<id>/...` 的路径。
 - `blocked`：卡在哪、试过什么、缺什么、需要谁做什么。
 - 技术细节留在交接文件，IM 里只给结论和可复核的线索。

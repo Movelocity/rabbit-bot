@@ -14,7 +14,7 @@ import { resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
 import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
-import { listPrompts, readPrompt, writePrompt } from "../ops/runtime-files.ts";
+import { hostReadAllowed, rememberHostReadRoot } from "../core/host-read.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -26,12 +26,6 @@ import {
 import { addMemory, closeMemory, searchMemories, traceMemory, updateMemory } from "../ops/memories.ts";
 import { addKnowledge, archiveKnowledge, getKnowledge, searchKnowledge, updateKnowledge } from "../ops/knowledge.ts";
 import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
-import {
-  addGoals, addProgress, archiveBoard, checkGoal, createBoard, getBoard, listBoards, updateBoard,
-  BOARD_STATUSES, type BoardStatus,
-} from "../core/board.ts";
-import { formatBoard } from "../ops/board.ts";
-import { boardDir } from "../core/runtime.ts";
 import { createSchedule, formatSchedule, isScheduleStatus, type ScheduleInput } from "../core/schedules.ts";
 import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
@@ -521,136 +515,6 @@ export function createTools(d: ToolDeps) {
   });
 
   /**
-   * 计划看板：一条计划一个 md，md 是唯一真相。
-   * 不排时间、不到点唤醒——这里只管目标、背景和进展。
-   */
-  const PLAN_HELP = [
-    "plan 的用法（action 必填，id 是 list/show 里的 slug）：",
-    "  create    title background? goals?      新建一条计划；goals 是目标清单（数组或换行分隔）",
-    "  list      status?                      看计划，默认 active；status=all 看全部未归档",
-    "  show      id                           看一条（背景、目标、进展）",
-    "  goal-add  id goal|goals                加目标",
-    "  goal-check id goal done?               勾选目标（goal 给序号 1、2…或文字；done=false 取消勾选）",
-    "  progress  id note                      追加一条进展",
-    "  status    id status                    active / done；archive 单独归档",
-    "  archive   id                           归档（移到 board/archive/，不再出现在默认列表）",
-    "  help                                   看这份说明",
-    "",
-    "他说「要做某件事」「先列个计划」，或同时有多个并行任务/目标，就 create 并把背景写清楚；中途有新进展用 progress，完成一项就 goal-check。",
-    "同一个项目/事情尽量用同一条计划，别每聊一次就新建一条。",
-  ].join("\n");
-
-  const goalList = (p: any): string[] => {
-    if (Array.isArray(p.goals)) return p.goals.map((x: unknown) => String(x).trim()).filter(Boolean);
-    if (typeof p.goals === "string") return p.goals.split(/\n|;|；/).map((x: string) => x.trim()).filter(Boolean);
-    if (typeof p.goal === "string" && p.goal.trim()) return [p.goal.trim()];
-    return [];
-  };
-
-  const plan = defineTool({
-    name: "plan",
-    label: "plan",
-    executionMode: "sequential",
-    description:
-      "计划看板（md 文件，不排时间、不到点唤醒）。action 决定做什么："
-      + "create（新建，必填 title，background 写清为什么/范围/约束，goals 是目标清单）/ "
-      + "list（看计划，默认 active）/ show（看一条）/ goal-add（加目标）/ "
-      + "goal-check（勾选已完成的目标，或 done=false 取消）/ progress（追加进展）/ "
-      + "status（active / done）/ archive（归档）/ help。"
-      + "他说要做某件事、先列个计划，或同时推进多个任务/并行目标，就 create；中途有进展用 progress，完成一项就 goal-check。"
-      + "同一件事用同一条计划，别重复新建。",
-    parameters: Type.Object({
-      action: Type.String({ description: "create / list / show / goal-add / goal-check / progress / status / archive / help" }),
-      id: Type.Optional(Type.String({ description: "show、goal-add、goal-check、progress、status、archive 用：计划的 slug" })),
-      title: Type.Optional(Type.String({ description: "create 用：计划标题，一句话" })),
-      background: Type.Optional(Type.String({ description: "create 用：背景——为什么做、范围、约束、相关链接" })),
-      goals: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "create / goal-add 用：目标清单" })),
-      goal: Type.Optional(Type.String({ description: "goal-add / goal-check 用：单条目标；goal-check 也可给序号" })),
-      done: Type.Optional(Type.Boolean({ description: "goal-check 用：true 勾选（默认）/ false 取消" })),
-      note: Type.Optional(Type.String({ description: "progress 用：这次进展" })),
-      status: Type.Optional(Type.String({ description: "status / list 用：active / done / archived / all" })),
-    }),
-    async execute(_id, p) {
-      const action = String(p.action ?? "").trim().toLowerCase();
-      const dir = boardDir(d.cfg);
-      try {
-        switch (action) {
-          case "help":
-            return txt(PLAN_HELP, { ok: true });
-          case "create": {
-            if (!p.title?.trim()) return txt("create 要 title（计划标题）。", { ok: false });
-            const existing = listBoards(dir).find((b) => b.title.trim() === p.title!.trim());
-            if (existing) {
-              return txt(`已经有一条同名计划「${existing.title}」（${existing.slug}），先更新那条，别重复建。`, { ok: true, id: existing.slug, duplicate: true });
-            }
-            const b = createBoard(dir, {
-              title: p.title,
-              background: p.background,
-              goals: goalList(p),
-              pool: d.primaryPool?.() ?? null,
-            }, d.now());
-            return txt(`建好了「${b.title}」（id=${b.slug}），目标 ${b.goals.length} 条。`, { ok: true, plan: formatBoard(b) });
-          }
-          case "list": {
-            const want = String(p.status ?? "active").trim().toLowerCase();
-            const status = want === "all" ? "all" : (BOARD_STATUSES.includes(want as BoardStatus) ? want as BoardStatus : "active");
-            const list = listBoards(dir, status);
-            if (!list.length) return txt(`没有 ${status === "all" ? "" : `${status} `}计划。`, { ok: true, count: 0 });
-            const text = list.map((b) => {
-              const done = b.goals.filter((g) => g.done).length;
-              return `${b.slug}  ${b.title}（${b.status}，目标 ${done}/${b.goals.length}，进展 ${b.progress.length}）`;
-            }).join("\n");
-            return txt(text, { ok: true, count: list.length, plans: list.map(formatBoard) });
-          }
-          case "show": {
-            if (!p.id?.trim()) return txt("show 要 id。", { ok: false });
-            const b = getBoard(dir, p.id.trim());
-            if (!b) return txt(`没有计划 ${p.id}。`, { ok: false });
-            return txt(JSON.stringify(formatBoard(b), null, 2), { ok: true, plan: formatBoard(b) });
-          }
-          case "goal-add": {
-            if (!p.id?.trim()) return txt("goal-add 要 id。", { ok: false });
-            const goals = goalList(p);
-            if (!goals.length) return txt("goal-add 要 goal 或 goals。", { ok: false });
-            const b = addGoals(dir, p.id.trim(), goals, d.now());
-            return txt(`加好了，现在 ${b.goals.length} 条目标（${b.goals.filter((g) => g.done).length} 条已完成）。`, { ok: true, plan: formatBoard(b) });
-          }
-          case "goal-check": {
-            if (!p.id?.trim()) return txt("goal-check 要 id。", { ok: false });
-            if (p.goal === undefined || !String(p.goal).trim()) return txt("goal-check 要 goal（序号或文字）。", { ok: false });
-            const b = checkGoal(dir, p.id.trim(), String(p.goal).trim(), p.done !== false, d.now());
-            return txt(`已${p.done === false ? "取消勾选" : "勾选"}。目标 ${b.goals.filter((g) => g.done).length}/${b.goals.length} 完成。`, { ok: true, plan: formatBoard(b) });
-          }
-          case "progress": {
-            if (!p.id?.trim()) return txt("progress 要 id。", { ok: false });
-            if (!p.note?.trim()) return txt("progress 要 note（这次进展）。", { ok: false });
-            const b = addProgress(dir, p.id.trim(), p.note, d.now());
-            return txt(`进展记下了（共 ${b.progress.length} 条）。`, { ok: true, plan: formatBoard(b) });
-          }
-          case "status": {
-            if (!p.id?.trim()) return txt("status 要 id。", { ok: false });
-            const want = String(p.status ?? "").trim().toLowerCase();
-            if (!BOARD_STATUSES.includes(want as BoardStatus) || want === "archived") {
-              return txt(`status 只能是 active / done；要归档用 action=archive。`, { ok: false });
-            }
-            const b = updateBoard(dir, p.id.trim(), { status: want as BoardStatus }, d.now());
-            return txt(`「${b.title}」标成 ${b.status} 了。`, { ok: true, plan: formatBoard(b) });
-          }
-          case "archive": {
-            if (!p.id?.trim()) return txt("archive 要 id。", { ok: false });
-            const b = archiveBoard(dir, p.id.trim(), d.now());
-            return txt(`已归档「${b.title}」。`, { ok: true, plan: formatBoard(b) });
-          }
-          default:
-            return txt(`没有 action=「${p.action}」这个动作。\n${PLAN_HELP}`, { ok: false });
-        }
-      } catch (e) {
-        return txt(`没成：${(e as Error).message}`, { ok: false });
-      }
-    },
-  });
-
-  /**
    * 日程：到点唤醒自己，并把 content 原话带进提示词。
    * 和 plan 分开：plan 是目标看板，不排时间；日程只管「什么时候叫你、叫你做什么」。
    */
@@ -1055,19 +919,52 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      `读工作区里的文件（只读；相对路径）。${topicsNote}提示词在 prompt/，技能在 skills/<name>/SKILL.md；别人写的技能库挂成 shared-skills/<name>/SKILL.md（只读）；执行器交上来的汇报在 shared/。要改 prompt/ 下的提示词用 edit_prompt（system.md 除外）。`
-      + "文件太长会被截断，截断时会告诉你。",
+      `读文件。默认 scope=sandbox，读 /work（runtime）里的 prompt/、skills/、shared/；`
+      + "scope=host 读宿主机，只有白名单根目录直接可读，白名单外会发审批申请，批准后自动加入白名单。"
+      + "文件太长会被截断，截断时会告诉你。提示词在沙盒里的 prompt/*.md，直接改。",
     parameters: Type.Object({
-      path: Type.String({ description: `相对路径，例如 ${examples.readPath}` }),
+      path: Type.String({ description: `路径；sandbox 用相对路径，例如 ${examples.readPath}；host 用绝对路径或 ~/...` }),
+      scope: Type.Optional(Type.String({ description: "sandbox（默认）/ host" })),
     }),
     async execute(_id, p) {
-      const rel = String(p.path ?? "");
-      if (!topicsOn && (rel === "topics" || rel.startsWith("topics/"))) {
+      const raw = String(p.path ?? "").trim();
+      const scope = String(p.scope ?? "sandbox").trim().toLowerCase();
+      if (scope === "host") {
+        if (!raw || (!raw.startsWith("~") && !path.isAbsolute(raw))) {
+          return txt("scope=host 要绝对路径或 ~/...", { ok: false });
+        }
+        const target = path.resolve(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw);
+        if (!hostReadAllowed(d.cfg, target)) {
+          if (!d.approval?.enabled) {
+            return txt(`宿主读取不在白名单：${target}。审批没开，先让主人把根目录加到 exec.shell.host.readRoots。`, { ok: false, needAllow: true });
+          }
+          const r = await d.approval.request({ cmd: target, cwd: path.dirname(target), why: "读取宿主文件（批准后加入白名单）" });
+          if (r.decision !== "approved") {
+            return txt(`宿主读取没批（${r.decision}），没读：${target}`, { ok: false, denied: true });
+          }
+          rememberHostReadRoot(d.cfg, target);
+        }
+        try {
+          const st = fs.statSync(target);
+          if (st.isDirectory()) return txt(`这是目录：${target}（用 terminal 列目录）`, { ok: false });
+          if (st.size > d.cfg.exec.maxFileBytes) return txt(`文件太大：${st.size} 字节（上限 ${d.cfg.exec.maxFileBytes}）`, { ok: false });
+          const buf = fs.readFileSync(target);
+          if (buf.includes(0)) return txt(`不是文本文件：${target}`, { ok: false });
+          const max = d.cfg.exec.maxReadChars;
+          let content = buf.toString("utf8");
+          if (content.length > max) content = `${content.slice(0, max)}\n…（已截断，共 ${content.length} 字）`;
+          return txt(content.trim() || "（文件是空的）", { ok: true, path: target, scope: "host" });
+        } catch (e) {
+          return txt(`读不了：${(e as Error).message}`, { ok: false });
+        }
+      }
+      if (scope !== "sandbox") return txt("scope 只能是 sandbox / host", { ok: false });
+      if (!topicsOn && (raw === "topics" || raw.startsWith("topics/"))) {
         return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
       }
       try {
-        const r = readSandboxFile(d.cfg, rel, d.readRoot);
-        return txt(String(r.content ?? "").trim() || "（文件是空的）", { ok: true, path: r.path });
+        const r = readSandboxFile(d.cfg, raw, d.readRoot);
+        return txt(String(r.content ?? "").trim() || "（文件是空的）", { ok: true, path: r.path, scope: "sandbox" });
       } catch (e) {
         return txt(`读不了：${(e as Error).message}`, { ok: false });
       }
@@ -1099,54 +996,46 @@ export function createTools(d: ToolDeps) {
     },
   });
 
-  // 自编辑提示词：prompt/*.md 可以改，system.md 是总纲，留给主人。
-  const editPrompt = defineTool({
-    name: "edit_prompt",
-    label: "edit_prompt",
+  // 沙盒内结构化编辑：写文件 / 唯一替换。只碰 /work，不碰宿主。
+  const editFile = defineTool({
+    name: "edit_file",
+    label: "edit_file",
     executionMode: "sequential",
     description:
-      "改你自己的提示词（prompt/<name>.md），改完下一轮生效。system.md 是总纲，不能自改，只能让主人在管理台改。"
-      + "action=list 看有哪些；read 读当前版本；replace 用 old→new 改一段（old 必须唯一命中）；write 整份覆盖。",
+      "编辑沙盒里的文本文件（只碰 /work）。action=write 整份覆盖；action=replace 用 old→new 改一段（old 必须唯一命中）。"
+      + "改提示词、技能、shared/projects 下的文件都用它，别用 terminal 拼 heredoc。",
     parameters: Type.Object({
-      action: Type.String({ description: "list / read / replace / write" }),
-      name: Type.Optional(Type.String({ description: "提示词名，不带 .md，例如 scene-message" })),
+      path: Type.String({ description: "沙盒相对路径，例如 prompt/scene-message.md" }),
+      action: Type.String({ description: "write / replace" }),
+      content: Type.Optional(Type.String({ description: "write 用：完整新内容" })),
       old: Type.Optional(Type.String({ description: "replace 用：要被替换的原文（必须唯一命中）" })),
       new: Type.Optional(Type.String({ description: "replace 用：替换后的文本" })),
-      content: Type.Optional(Type.String({ description: "write 用：整份新内容" })),
     }),
     async execute(_id, p) {
-      const action = String(p.action ?? "").trim();
-      if (action === "list") {
-        const rows = listPrompts(d.cfg);
-        return txt(rows.map((r) => `${r.name}（${r.source}）`).join("\n"), { ok: true });
+      const rel = String(p.path ?? "").trim();
+      if (!rel) return txt("给 path。", { ok: false });
+      if (!topicsOn && (rel === "topics" || rel.startsWith("topics/"))) {
+        return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
       }
-      const name = String(p.name ?? "").trim().replace(/^prompt\//, "").replace(/\.md$/, "");
-      if (!name) return txt("要给提示词名，例如 scene-message", { ok: false });
-      if (name === "system") {
-        return txt("system.md 是总纲，不能自改；把要改的句子告诉主人，让他在管理台改。", { ok: false });
-      }
+      const action = String(p.action ?? "").trim().toLowerCase();
       try {
-        if (action === "read") {
-          const r = readPrompt(d.cfg, name);
-          return txt(r.content.trim() || "（文件是空的）", { ok: true, path: r.path, name });
+        if (action === "write") {
+          if (typeof p.content !== "string") return txt("write 要给 content。", { ok: false });
+          const r = writeSandboxFile(d.cfg, rel, p.content, d.readRoot);
+          return txt(`写了 ${r.path}（${r.bytes} 字节）。`, { ok: true, path: r.path });
         }
         if (action === "replace") {
           const oldText = String(p.old ?? "");
           const newText = String(p.new ?? "");
-          if (!oldText.trim()) return txt("replace 要给 old", { ok: false });
-          const cur = readPrompt(d.cfg, name).content;
+          if (!oldText.trim()) return txt("replace 要给 old。", { ok: false });
+          const cur = readSandboxFile(d.cfg, rel, d.readRoot).content;
           const hits = cur.split(oldText).length - 1;
           if (hits === 0) return txt(`没找到这段原文：${oldText.slice(0, 80)}`, { ok: false });
-          if (hits > 1) return txt(`这段原文出现 ${hits} 次，不唯一；把上下文带长一点`, { ok: false });
-          const saved = writePrompt(d.cfg, name, cur.replace(oldText, newText));
-          return txt(`改了 prompt/${name}.md，下一轮生效。`, { ok: true, path: saved.path, name });
+          if (hits > 1) return txt(`这段原文出现 ${hits} 次，不唯一；把上下文带长一点。`, { ok: false });
+          const r = writeSandboxFile(d.cfg, rel, cur.replace(oldText, newText), d.readRoot);
+          return txt(`改了 ${r.path}。`, { ok: true, path: r.path });
         }
-        if (action === "write") {
-          if (typeof p.content !== "string") return txt("write 要给 content", { ok: false });
-          const saved = writePrompt(d.cfg, name, p.content);
-          return txt(`写了 prompt/${name}.md（${p.content.length} 字），下一轮生效。`, { ok: true, path: saved.path, name });
-        }
-        return txt("action 只能是 list / read / replace / write", { ok: false });
+        return txt("action 只能是 write / replace。", { ok: false });
       } catch (e) {
         return txt(`没改成：${(e as Error).message}`, { ok: false });
       }
@@ -1174,7 +1063,7 @@ export function createTools(d: ToolDeps) {
     parameters: Type.Object({
       cmd: Type.String({ description: `完整命令行，例如 ${examples.shell}` }),
       timeout_sec: Type.Optional(Type.Number({ description: `超时秒数；UFA 最多 ${shellMaxSec}，WA 最多 600` })),
-      cwd: Type.Optional(Type.String({ description: "在这条命令的工作目录里跑（绝对路径）；不填就是沙盒目录" })),
+      cwd: Type.Optional(Type.String({ description: "工作目录；sandbox 用容器内 /work/...，host 用宿主绝对路径；不填就是沙盒根" })),
     }),
     async execute(_id, p) {
       const cmd = String(p.cmd ?? "");
@@ -1212,8 +1101,12 @@ export function createTools(d: ToolDeps) {
           }
         }
         const t0 = Date.now();
-        // 输出超限时落盘，别让模型只看到开头几百字还以为命令没跑完整
-        const overflowFile = path.join(d.cfg.dataDir, "tool-output", `term-${Date.now()}.log`);
+        // 输出超限时落盘，别让模型只看到开头几百字还以为命令没跑完整。
+        // sandbox 模式落到 /work/shared/tool-output，UFA 才读得到全文。
+        const overflowName = `term-${Date.now()}.log`;
+        const overflowFile = d.cfg.exec.shell.mode === "docker"
+          ? path.join(d.cfg.exec.dir, "shared", "tool-output", overflowName)
+          : path.join(d.cfg.dataDir, "tool-output", overflowName);
         const timeoutSec = shellTimeoutSec(d.profile, d.cfg, p.timeout_sec);
         const r = await execShell(d.cfg, cmd, timeoutSec, {
           cwd: p.cwd ? String(p.cwd) : undefined,
@@ -1223,7 +1116,10 @@ export function createTools(d: ToolDeps) {
         if (d.cfg.exec.shell.mode === "host" && d.approval) {
           d.approval.reportDone((pendingId ?? 0), { ok: !!r.ok, code: Number(r.code ?? 0), ms: Date.now() - t0 });
         }
-        const out = String(r.output ?? "").trim();
+        let out = String(r.output ?? "").trim();
+        if (d.cfg.exec.shell.mode === "docker") {
+          out = out.split(overflowFile).join(path.posix.join("/work", "shared", "tool-output", overflowName));
+        }
         return txt(out || `（命令跑完了，没有输出；退出码 ${r.code}）`, { ok: r.ok, code: r.code });
       } catch (e) {
         return txt(`跑不了：${(e as Error).message}`, { ok: false });
@@ -1358,8 +1254,8 @@ export function createTools(d: ToolDeps) {
       const moved: Record<string, string> = {
         "mem-add": "memory action=add",
         "mem-close": "memory action=expire",
-        "plan-add": "plan action=add",
-        "plan-update": "plan action=done",
+        "plan-add": "shared/projects/<slug>/plan.md（直接改文件）",
+        "plan-update": "shared/projects/<slug>/plan.md（直接改文件）",
         sb: "read_file / write_file / terminal",
       };
       if (moved[parts[0]]) {
@@ -1395,9 +1291,10 @@ export function createTools(d: ToolDeps) {
   // 沙盒本身就是边界，不用审批；宿主机裸跑才必须审批。
   const ufaHasTerminal = d.cfg.exec.shell.mode === "docker"
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
-  // UFA 只读 + 任务面板：不写普通文件（交接走 tasks 表），但可以改自己的提示词（system.md 除外）；terminal 按 host+审批开关。
+  // UFA：对话、记忆/知识、日程、审批、任务、读文件、map、terminal、rb。
+  // 目标看板已下线；提示词在沙盒卷里，直接改，不再走 edit_prompt。
   const ufaTools = [
-    chat, memory, knowledge, plan, schedule, approval, task, readFile, editPrompt, mapTool,
+    chat, memory, knowledge, schedule, approval, task, readFile, editFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];

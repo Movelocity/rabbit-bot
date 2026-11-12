@@ -42,7 +42,8 @@ export function shellRunnerOptions(cfg: Config, timeoutMs?: number): SandboxArgv
     network: sc.network,
     volumes: withRuntimeVolumes(cfg),
     workdir: "/work",
-    hostCwd: sc.host?.cwd,
+    // hostCwd 只对 host 模式有意义；docker 模式由 terminal 的 cwd 参数传容器内路径
+    hostCwd: (sc.mode ?? "docker") === "host" ? sc.host?.cwd : undefined,
     hostInheritEnv: sc.host?.inheritEnv,
     env: cfg.api?.enabled === false ? { ...sc.env } : { ...sc.env, ...apiEnv(cfg, resolveApiToken(cfg)) },
     hostPrefix: [process.execPath, path.join(APP_ROOT, "docker", "rb.mjs")],

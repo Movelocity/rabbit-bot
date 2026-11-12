@@ -64,6 +64,16 @@ export function handoffDir(cfg: Config): string {
   return path.join(sharedDir(cfg), "handoffs");
 }
 
+/** WA 最终产出目录：shared/outputs/task-<id>/，UFA 在沙盒里直接验收。 */
+export function outputsDir(cfg: Config): string {
+  return path.join(sharedDir(cfg), "outputs");
+}
+
+/** 项目上下文目录：shared/projects/<slug>/，替代目标看板。 */
+export function projectsDir(cfg: Config): string {
+  return path.join(sharedDir(cfg), "projects");
+}
+
 /**
  * 建 shared 工作区：handoffs/ 目录 + 默认最佳实践文档。
  * 最佳实践只在缺失时落一份，之后允许运行时改，不覆盖。
@@ -72,9 +82,13 @@ export function ensureSharedWorkspace(cfg: Config): string[] {
   const made: string[] = [];
   const shared = sharedDir(cfg);
   const handoffs = handoffDir(cfg);
+  const outputs = outputsDir(cfg);
+  const projects = projectsDir(cfg);
   try {
     if (!fs.existsSync(shared)) { fs.mkdirSync(shared, { recursive: true }); made.push(shared); }
     if (!fs.existsSync(handoffs)) { fs.mkdirSync(handoffs, { recursive: true }); made.push(handoffs); }
+    if (!fs.existsSync(outputs)) { fs.mkdirSync(outputs, { recursive: true }); made.push(outputs); }
+    if (!fs.existsSync(projects)) { fs.mkdirSync(projects, { recursive: true }); made.push(projects); }
   } catch { /* 建不出来就让后面的写入报错，别在这里吞掉整个启动 */ }
   const playbook = waPlaybookPath(cfg);
   if (!fs.existsSync(playbook)) {

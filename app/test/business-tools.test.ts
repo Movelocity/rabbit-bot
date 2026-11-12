@@ -1,4 +1,4 @@
-/** 记忆与计划：二级入口工具（memory / plan），以及 rb 只留运维。 */
+/** 记忆与知识：二级入口工具，以及 rb 只留运维。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -9,8 +9,6 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { searchMemories } from "../src/ops/memories.ts";
 import { createApproval, getApproval } from "../src/core/approvals.ts";
-import { getBoard, listBoards } from "../src/core/board.ts";
-import { boardDir } from "../src/core/runtime.ts";
 
 function setup(opts: { withUser?: boolean } = {}) {
   const cfg = loadConfig({ runtimeDir: fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-bt-")) });
@@ -106,20 +104,6 @@ test("memory expire：按 id 关，不校验 user", async () => {
   assert.ok(store.getMemory(id)?.valid_to, "按 id 关掉了");
 });
 
-test("plan create / goal-check：计划落到 md，目标能勾", async () => {
-  const { cfg, get } = setup();
-  const a = await run(get("plan"), {
-    action: "create", title: "出门别忘带钥匙", background: "他总把钥匙落桌上", goals: ["出门前看桌上", "路上别丢"],
-  });
-  assert.equal(a.details?.ok, true, JSON.stringify(a));
-  const slug = a.details?.plan?.slug;
-  assert.ok(slug, "create 要返回 slug");
-  assert.equal(listBoards(boardDir(cfg), "all").length, 1, "计划要真的写成文件");
-  const b = await run(get("plan"), { action: "goal-check", id: slug, goal: "1" });
-  assert.equal(b.details?.ok, true, JSON.stringify(b));
-  assert.equal(getBoard(boardDir(cfg), slug)!.goals[0].done, true);
-});
-
 test("没有对应池时明确报错，别写到一个空池里", async () => {
   const { get } = setup({ withUser: false });
   const r = await run(get("memory"), { action: "add", content: "x" });
@@ -129,7 +113,7 @@ test("没有对应池时明确报错，别写到一个空池里", async () => {
 
 test("rb 不再接受业务写入，改成指向对应工具", async () => {
   const { get, calls } = setup();
-  for (const [cmd, tool] of [["mem-add", "memory"], ["mem-close", "memory"], ["plan-add", "plan"], ["plan-update", "plan"]]) {
+  for (const [cmd, tool] of [["mem-add", "memory"], ["mem-close", "memory"]]) {
     const r = await run(get("rb"), { args: `${cmd} --user u1 --content x --pool p1` });
     assert.equal(r.details?.ok, false, `${cmd} 该被挡下`);
     assert.match(String(r.details?.useTool), new RegExp(tool), `${cmd} 该指向 ${tool}`);
@@ -271,15 +255,6 @@ test("memory：search 能按关键词翻，recent 给最近的", async () => {
   assert.doesNotMatch(text, /Cursor/);
   const recent: any = await get("memory").execute("id", { action: "recent", limit: 5 });
   assert.equal(recent.details?.count, 2);
-});
-
-test("plan：list 给得出刚建的，help 列出看板动作", async () => {
-  const { get } = setup();
-  await get("plan").execute("id", { action: "create", title: "提醒他开会", goals: ["会前十分钟提醒"] });
-  const l: any = await get("plan").execute("id", { action: "list" });
-  assert.match(l.content.map((c: any) => c.text ?? "").join(""), /提醒他开会/);
-  const h: any = await get("plan").execute("id", { action: "help" });
-  assert.match(h.content.map((c: any) => c.text ?? "").join(""), /create[\s\S]*goal-check[\s\S]*progress/);
 });
 
 test("terminal：WA 始终有，描述里说清列目录也走它", async () => {
