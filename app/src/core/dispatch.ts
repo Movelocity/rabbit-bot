@@ -110,6 +110,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
       "## 开工前",
       "",
       `先读 WA 通用最佳实践：\`$RB_SHARED_DIR/WA-BEST-PRACTICES.md\`（宿主路径 \`${shared}/WA-BEST-PRACTICES.md\`）。`,
+      `跨任务工作记忆：\`$RB_MEMORY_FILE\`（宿主路径 \`${path.join(path.dirname(shared), "memory.md")}\`）。开工前读一遍；有会跨任务复用的约定、坑、决策就追加一条。不要写密钥和隐私，不要重写别人的条目。`,
       `再到 shared 里搜同主题旧交接：\`rg -l "关键词" "$RB_SHARED_DIR" -g 'task-*.md'\`（同时覆盖 handoffs/ 和老位置）。`,
       "旧交接只当线索，先核实再复用；没有相关上下文就直接按任务做。",
       "",
@@ -397,7 +398,10 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
         RB_API_BASE: opts.apiBase,
         RB_API_TOKEN: opts.token,
         RB_APP_DIR: APP_ROOT,
-        ...(opts.sharedDir ? { RB_SHARED_DIR: opts.sharedDir } : {}),
+        ...(opts.sharedDir ? {
+          RB_SHARED_DIR: opts.sharedDir,
+          RB_MEMORY_FILE: path.join(path.dirname(opts.sharedDir), "memory.md"),
+        } : {}),
       },
     });
   } catch (e) {

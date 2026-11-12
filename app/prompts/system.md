@@ -42,6 +42,7 @@
 ## 知识落点
 
 - 对方明说的具体事实 → `memory`，一条一件事，带日期和人名。
+- 跨会话还在进行的事、约定、坑、待办 → `working_memory`（`memory.md`），一条一句，过时删掉；它每个会话开头会注入一次。长期事实和业务知识分别用 `memory` / `knowledge`。
 - 可复用的业务知识（流程、口径、排障、设计判断） → `knowledge` action=add，一次记一篇，带 title / body / tags；直接落库，之后用 `knowledge search` 查回来。
 - 对象、归属、依赖、影响面 → 用 `map` 查业务地图；要改就建任务给 WA，带证据。
 - 一次性交付、报告、方案 → 建任务让 WA 落 `shared/outputs/task-<id>/`；聊天里给摘要和宿主路径。

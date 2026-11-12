@@ -10,6 +10,7 @@ import { loadPersona, personaPath } from "./persona.ts";
 import { render } from "./template.ts";
 import { businessIndexLine, businessIndexLineFromDir } from "../ops/business-map.ts";
 import { businessDir, runtimeDir, sharedDir, topicsEnabled } from "../core/runtime.ts";
+import { readWorkingMemory } from "../core/working-memory.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[], store?: Store): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
@@ -18,7 +19,7 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
   // 路径不写死用户名：home 取当前进程的家目录，desktop_dir 由配置按 ~ 展开
   const home = os.homedir();
   const desktop_dir = cfg.paths?.desktopDir || `${home}/Desktop`;
-  return render("system", {
+  const base = render("system", {
     agent_name: cfg.agent.name,
     persona: loadPersona(cfg, personaPath(cfg)),
     emoji_block: emojis.length
@@ -31,6 +32,21 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
     runtime_host: runtimeDir(cfg),
     shared_host: sharedDir(cfg),
   });
+  return `${base}\n\n${workingMemoryBlock(cfg)}`;
+}
+
+function workingMemoryBlock(cfg: Config): string {
+  const wm = readWorkingMemory(cfg);
+  const shown = wm.truncated ? Array.from(wm.content).slice(0, wm.limit).join("") : wm.content;
+  const lines = [
+    "## 工作记忆（跨会话共享）",
+    `文件：\`memory.md\`（沙盒 \`/work/memory.md\`，宿主 \`${wm.path}\`）。这是所有会话和主体共用的工作记忆，不是长期存储。只放当前还在进行的事、约定、坑、待办；一条一句，过时删掉。`,
+    "每个会话开头读取一次；会话中改了文件，下一个会话才生效。用 `working_memory` 工具或直接改文件都行。",
+    "",
+    shown || "（空）",
+  ];
+  if (wm.truncated) lines.push("", `（文件超过 ${wm.limit} 字，这里只显示前 ${wm.limit} 字；请删掉过时内容。）`);
+  return lines.join("\n");
 }
 
 export function poolLabel(store: Store, p: Pool): string {

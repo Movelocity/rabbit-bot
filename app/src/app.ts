@@ -39,6 +39,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { StoredMessage, Wake } from "./types.ts";
 import { resolvePrimaryPool } from "./core/primary-pool.ts";
 import { businessDir, ensureSharedWorkspace, runtimeDir, sharedDir } from "./core/runtime.ts";
+import { ensureWorkingMemory } from "./core/working-memory.ts";
 import { ensureBusinessSeeded } from "./ops/business-map.ts";
 import { render } from "./agent/template.ts";
 import {
@@ -183,6 +184,11 @@ export class App {
     try { ensureBusinessSeeded(this.store, businessDir(cfg)); } catch (e) { this.log.warn(`业务地图导入失败：${(e as Error).message}`); }
     // WA 共用工作区：handoffs/ + 默认最佳实践（缺失才落，已有不覆盖）
     try { ensureSharedWorkspace(cfg); } catch (e) { this.log.warn(`shared 工作区初始化失败：${(e as Error).message}`); }
+    // 跨会话工作记忆：运行时根目录的 memory.md，所有主体共用
+    try {
+      const file = ensureWorkingMemory(cfg);
+      this.log.info(`工作记忆：${file}`);
+    } catch (e) { this.log.warn(`工作记忆初始化失败：${(e as Error).message}`); }
     this.emoji = EmojiTable.load(cfg.emoji.table, cfg.emoji.map);
     this.hub = new Hub(this.store, cfg, this.log, this.emoji);
     this.queue = new RunQueue((w) => this.handleWake(w));

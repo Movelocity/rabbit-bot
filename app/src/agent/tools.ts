@@ -14,6 +14,10 @@ import { resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
 import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
+import {
+  addWorkingMemory, readWorkingMemory, removeWorkingMemory, replaceWorkingMemory,
+  WORKING_MEMORY_MAX_CHARS,
+} from "../core/working-memory.ts";
 import { hostReadAllowed, rememberHostReadRoot } from "../core/host-read.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
@@ -458,6 +462,67 @@ export function createTools(d: ToolDeps) {
           }
           default:
             return txt(`没有 action=「${p.action}」这个动作。\n${MEMORY_HELP}`, { ok: false });
+        }
+      } catch (e) {
+        return txt(`没成：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
+  const WORKING_MEMORY_HELP = [
+    "working_memory 的用法（action 必填）：",
+    "  read                              看当前工作记忆全文",
+    "  add     content                   追加一条",
+    "  replace old content               把包含 old 的那一行改成 content",
+    "  remove  old                       删掉包含 old 的那一行（必须唯一）",
+    "  help                              看这份说明",
+    "",
+    `工作记忆是跨会话共享的 memory.md（上限 ${WORKING_MEMORY_MAX_CHARS} 字），每个会话开头注入一次。`,
+    "记还在进行的事、约定、坑、待办；一条一句，过时删掉。不要写密钥、隐私和聊天事实（聊天事实用 memory）。",
+  ].join("\n");
+
+  const workingMemory = defineTool({
+    name: "working_memory",
+    label: "working_memory",
+    executionMode: "sequential",
+    description:
+      "跨会话共享的工作记忆文件 memory.md。action 决定做什么："
+      + "read（看全文）/ add（追加一条）/ replace（用 old 定位并改那一行）/ remove（删掉含 old 的那一行，old 要唯一）/ help。"
+      + `记还在进行的事、约定、坑、待办，一条一句，过时删掉；上限 ${WORKING_MEMORY_MAX_CHARS} 字。`
+      + "聊天里的具体事实用 memory，不要写进这里。",
+    parameters: Type.Object({
+      action: Type.String({ description: "read / add / replace / remove / help" }),
+      content: Type.Optional(Type.String({ description: "add、replace 用：新内容" })),
+      old: Type.Optional(Type.String({ description: "replace、remove 用：定位旧内容的一小段文字" })),
+    }),
+    async execute(_id, p) {
+      const action = String(p.action ?? "").trim().toLowerCase();
+      try {
+        switch (action) {
+          case "help":
+            return txt(WORKING_MEMORY_HELP, { ok: true });
+          case "read": {
+            const wm = readWorkingMemory(d.cfg);
+            return txt(wm.content ? `${wm.content}\n\n（${wm.chars}/${wm.limit} 字）` : "（工作记忆是空的）", {
+              ok: true, chars: wm.chars, limit: wm.limit,
+            });
+          }
+          case "add": {
+            const wm = addWorkingMemory(d.cfg, p.content ?? "");
+            return txt(`已写入工作记忆（${wm.chars}/${wm.limit} 字）。`, { ok: true, chars: wm.chars });
+          }
+          case "replace": {
+            if (!p.old) return txt("replace 要 old（定位旧内容的一小段文字）。", { ok: false });
+            const wm = replaceWorkingMemory(d.cfg, p.old, p.content ?? "");
+            return txt(`已替换（${wm.chars}/${wm.limit} 字）。`, { ok: true, chars: wm.chars });
+          }
+          case "remove": {
+            if (!p.old) return txt("remove 要 old（定位旧内容的一小段文字）。", { ok: false });
+            const r = removeWorkingMemory(d.cfg, p.old);
+            return txt(`已删掉 ${r.removed} 行（剩 ${r.state.chars}/${r.state.limit} 字）。`, { ok: true, chars: r.state.chars });
+          }
+          default:
+            return txt(`没有 action=「${p.action}」这个动作。\n${WORKING_MEMORY_HELP}`, { ok: false });
         }
       } catch (e) {
         return txt(`没成：${(e as Error).message}`, { ok: false });
@@ -1347,7 +1412,7 @@ export function createTools(d: ToolDeps) {
   // UFA：对话、记忆/知识、日程、审批、任务、读文件、map、terminal、rb。
   // 目标看板已下线；提示词在沙盒卷里，直接改，不再走 edit_prompt。
   const ufaTools = [
-    chat, memory, knowledge, schedule, approval, task, readFile, editFile, mapTool,
+    chat, memory, workingMemory, knowledge, schedule, approval, task, readFile, editFile, mapTool,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];
