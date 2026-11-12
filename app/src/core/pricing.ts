@@ -53,6 +53,12 @@ export const PRICES: Record<string, ModelPrice> = {
     miss: { peak: 0.825, off: 0.825 },
     out: { peak: 4.125, off: 4.125 },
   },
+  // OpenRouter 标价，2026-11-12 抓：in $2 / out $10 / cache read $0.1（无峰谷）
+  'google/gemini-4-argon': {
+    hit: { peak: 0.1, off: 0.1 },
+    miss: { peak: 2, off: 2 },
+    out: { peak: 10, off: 10 },
+  },
   'deepseek-v4-pro': {
     hit: { peak: 0.044, off: 0.022 },
     miss: { peak: 1.32, off: 0.66 },
