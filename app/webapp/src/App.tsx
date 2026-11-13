@@ -40,7 +40,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
 
 const TAB_HINTS: Record<string, string> = {
   tasks: "飞书审批为主 · Web 备用",
-  outputs: "任务最终交付物 · Markdown / CSV 预览",
+  outputs: "任务最终交付物 · Markdown / CSV / HTML 预览",
   approvals: "只读 · 审批请在飞书里完成",
   plans: "md 看板 · 目标可在 Web 或 IM 勾选",
   memories: "可直接改正文或删除 · 新增/过期走 IM",

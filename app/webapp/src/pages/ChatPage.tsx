@@ -409,6 +409,14 @@ export function ChatPage({
                               主
                             </Chip>
                           )}
+                          {Number(p.unread) > 0 && (
+                            <span
+                              className="ml-auto grid h-[16px] min-w-[16px] flex-none place-items-center rounded-full bg-clay px-1 text-[10px] font-semibold tabular-nums text-white"
+                              aria-label={`${p.unread} 条未读`}
+                            >
+                              {Number(p.unread) > 99 ? "99+" : p.unread}
+                            </span>
+                          )}
                         </span>
                         <span className="mt-1 flex items-center gap-1.5 text-[10.5px] text-muted">
                           <code className="truncate font-mono text-[10px] text-faint">

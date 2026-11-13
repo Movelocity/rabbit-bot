@@ -118,6 +118,23 @@ function FilePreview({ file }: { file: OutputFile }) {
       </div>
     );
   }
+  if (ext === "html" || ext === "htm") {
+    return (
+      <div>
+        {header}
+        <p className="mb-2 text-[11.5px] text-muted">
+          iframe 沙箱预览：脚本在隔离环境里运行，不影响管理台。
+        </p>
+        <iframe
+          title={`HTML 预览：${file.name}`}
+          sandbox="allow-scripts allow-forms allow-popups"
+          referrerPolicy="no-referrer"
+          srcDoc={file.content}
+          className="h-[calc(100dvh-260px)] min-h-[320px] w-full rounded-[12px] border border-border bg-white"
+        />
+      </div>
+    );
+  }
   return (
     <div>
       {header}
@@ -398,7 +415,7 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
       <section className="rb-thin-scroll min-w-0 flex-1 overflow-y-auto bg-bg px-[clamp(14px,3vw,32px)] pb-12 pt-4">
         <div className="mx-auto w-full max-w-[880px]">
           {!selected ? (
-            <Empty>选择左侧文件预览。支持 Markdown、CSV / TSV 和纯文本。</Empty>
+            <Empty>选择左侧文件预览。支持 Markdown、CSV / TSV、HTML 和纯文本。</Empty>
           ) : (
             <>
               <header className="mb-3.5 flex flex-wrap items-start gap-3 border-b border-border pb-2.5">

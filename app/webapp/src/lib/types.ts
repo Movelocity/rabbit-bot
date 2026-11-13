@@ -9,6 +9,8 @@ export interface Pool {
   last_msg_at: number | null;
   last_msg_local: string | null;
   total: number;
+  /** 后端尚未提供；接口带上该字段后会话列表自动显示未读角标 */
+  unread?: number | null;
 }
 
 export interface PoolMessage {
