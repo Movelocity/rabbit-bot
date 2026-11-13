@@ -4,26 +4,55 @@
 
 设计原则：调度、去重、游标、预算这些**全是确定性代码**；模型只负责一件事——说话。
 
-## 快速开始
+## 部署
+
+前置：Node ≥ 22.19、npm；用 Docker 沙盒时再准备 Docker（`exec.shell.mode=docker`）。密钥和凭据只放仓库外的 env 文件，不要写进 `config/*.json`。
+
+### 1. 装依赖并构建
+
+首次部署或 `package-lock.json` 变化后：
 
 ```bash
-npm install
+npm install --no-audit --no-fund
 npm run build
+```
 
-mkdir -p ~/.config/rabbit-bot && cat > ~/.config/rabbit-bot/env <<'EOF'
+原生模块没装上时按 [DEPLOY.local.md](DEPLOY.local.md) 的「依赖安装的坑」补 `better-sqlite3`。
+
+### 2. 写环境变量
+
+放仓库外，权限 600，`scripts/run.sh` 启动时 source：
+
+```bash
+mkdir -p ~/.config/rabbit-bot
+cat > ~/.config/rabbit-bot/env <<'EOF'
 DEEPSEEK_API_KEY=...
-# 至少启用一个真实适配器：飞书用 FEISHU_*，Matrix 用 MATRIX_TOKEN
 FEISHU_APP_ID=...
 FEISHU_APP_SECRET=...
-# 启用 Matrix 时再填：
-# MATRIX_TOKEN=...
-RABBIT_BOT_INJECT_TOKEN=$(openssl rand -hex 24)   # 本地注入口用，必须设
+# 启用 Matrix 时再填：MATRIX_TOKEN=...
+RABBIT_BOT_INJECT_TOKEN=...
 EOF
 chmod 600 ~/.config/rabbit-bot/env
-
-pm2 start ecosystem.config.cjs     # 用 pm2，别同时手工 run.sh（会起两个进程抢消息）
-npm run doctor                     # 体检：进程 / 锁 / 注入口 / 沙盒 / 唤醒分布
 ```
+
+### 3. 启动并体检
+
+```bash
+pm2 start ecosystem.config.cjs   # 唯一入口；别同时手工 run.sh，会抢消息
+pm2 save                         # 记录进程列表，开机自启靠它
+npm run doctor                   # 进程 / 锁 / 注入口 / 沙盒 / 唤醒分布
+```
+
+### 4. 升级或改完代码
+
+```bash
+npm install --no-audit --no-fund   # 依赖有变时
+npm run build                      # 后端改动必须
+npm run web:build                  # 前端改动必须
+pm2 restart rabbit-bot
+```
+
+只改 `config/prompt/*.md` 或 `persona.md` 不用 `build`，`pm2 restart` 即可。
 
 适配器在 `config/default.json` / `config/local.json` 的 `adapters.feishu.enabled`、`adapters.matrix.enabled` 里开关（默认飞书开、Matrix 关），至少启用一个真实适配器。
 飞书启用但缺 `FEISHU_*`、或 Matrix 启用但缺 `MATRIX_TOKEN`，都会 `exit 2` 不启动（`run.sh` 预检）；已经有实例在跑会 `exit 3`。
@@ -82,9 +111,13 @@ RABBIT_BOT_SKIP_SKILLS=1 npm install       # 安装时跳过
 ## Web 管理台
 
 正式服务启动后，同一个端口也提供本地网页管理台：打开 `http://127.0.0.1:3738/`，
-输入 API token 即可。token 默认在 `app/data/run/api.token`，也可以用环境变量
-`RABBIT_BOT_API_TOKEN`（≥16 位）。页面本身不需要登录就能打开，但所有数据接口都要
-Bearer token，token 不对会明确提示。
+输入 10 位登录密钥即可。密钥默认在 `app/data/run/api.token`（首次启动自动生成，权限 0600），
+也可以用环境变量 `RABBIT_BOT_API_TOKEN` 覆盖（≥10 位）。页面本身不需要登录就能打开，
+但所有数据接口都要 Bearer token，token 不对会明确提示。
+
+忘记了或想换密钥：删掉 `app/data/run/api.token` 后 `pm2 restart rabbit-bot`，会重新生成
+10 位密钥；旧的网页会话随即失效，需要重新输入。旧版本留下的 64 位 token 文件也会在
+重启时自动换成 10 位。
 
 **聊天收发走已启用的 IM（飞书 / Matrix）；任务审批在任务发起的 IM 聊天或固定审批房完成。Web 是可选的本地管理台，负责人格、提示词、记忆和只读面板。**
 

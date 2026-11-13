@@ -12,7 +12,7 @@
 | `RB_API_URL` | `http://host.docker.internal:3738` | `http://127.0.0.1:3738` |
 | `RB_API_TOKEN` | `data/run/api.token` 的内容（或 `RABBIT_BOT_API_TOKEN`） | 同左 |
 
-token 优先取环境变量 `RABBIT_BOT_API_TOKEN`（≥16 位）；没有就自动生成 32 字节写到 `data/run/api.token`（0600）。token 变了，`ensureSandboxContainer()` 会重建容器，把新值注入进去。
+token 优先取环境变量 `RABBIT_BOT_API_TOKEN`（≥10 位）；没有就自动生成 10 位（去掉了 0/O/1/I/l）写到 `data/run/api.token`（0600）。旧版本留下的 64 位文件会在下次读取时重生成。token 变了，`ensureSandboxContainer()` 会重建容器，把新值注入进去。
 
 手动拿 token：
 

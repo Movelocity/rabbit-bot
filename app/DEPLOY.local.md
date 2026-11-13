@@ -13,6 +13,7 @@
 | 应用根 | `~/projects/rabbit-bot/app` |
 | 运行时 | Node 26.7.0（homebrew，`engines` 要求 ≥22.19）、npm 11.19 |
 | 凭据 | `~/.config/rabbit-bot/env`（600，仓库外，run.sh 启动时 source） |
+| 网页登录密钥 | `app/data/run/api.token`（10 位，首次启动自动生成，0600；也可用 `RABBIT_BOT_API_TOKEN` 覆盖） |
 | 数据 | `app/data/rabbit-bot.db`（SQLite，WAL；含 pools/messages/plans/memories/handoffs） |
 | 日志 | `app/logs/pm2.out.log`、`app/logs/pm2.err.log`（应用自身日志打到 stdout，另有 `app/logs/app.log`） |
 
@@ -31,15 +32,20 @@ pm2 restart rabbit-bot
 - `ecosystem.config.cjs`：`stop_exit_codes: [2]` —— 凭据/配置缺失时退出码 2，不重启（避免 30s 崩溃循环）。
 - `scripts/run.sh fg` 负责：source env → preflight 校验凭据 → `exec node dist/main.js`。
 - 实测：`kill -9` 后约 4 秒自动回来，长连接重建。
+- 网页登录密钥：首次启动在 `data/run/api.token` 生成 10 位（去掉 0/O/1/I/l）；旧版 64 位文件重启时自动换成 10 位。要强制换新：删文件后 `pm2 restart rabbit-bot`，已登录页面需重新输入。
 
-### 改代码之后（2026-10-29 踩过）
+### 升级 / 改完代码（清单）
 
-**`pm2 restart` 不编译。** 跑的是 `dist/main.js`，改 `src/*.ts` 之后必须：
+按改动范围选最小的一列执行，最后统一 `pm2 restart rabbit-bot`：
 
-```bash
-npm run build && pm2 restart rabbit-bot
-```
+| 改动 | 命令 |
+|---|---|
+| 只改 `config/prompt/*.md`、`persona.md` | `pm2 restart rabbit-bot` |
+| 后端 `src/**` | `npm run build && pm2 restart rabbit-bot` |
+| 前端 `webapp/src/**` | `npm run web:build && pm2 restart rabbit-bot` |
+| 依赖有变（`package-lock.json`） | `npm install --no-audit --no-fund && npm run build`（前端再 `npm run web:build`） |
 
+**`pm2 restart` 不编译。** 跑的是 `dist/main.js`，改 `src/*.ts` 之后必须 `npm run build`。
 漏 `build` 的现象很阴：进程照常 online、飞书长连接照常建立、日志没有崩溃，只有走到改动那条路径才报错。
 10-29 那次改了 `prompt.ts` 和 `part-tide.md` 却只 restart —— 模板是运行时热读的（新的），
 代码是旧 dist（没有那个变量），于是从 15:46 起每次唤醒都抛 `模板 part-tide.md 缺少变量`，
