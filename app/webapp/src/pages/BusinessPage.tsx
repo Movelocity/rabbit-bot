@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Background,
   BackgroundVariant,
   Controls,
   EdgeLabelRenderer,
+  getViewportForBounds,
   Handle,
   MarkerType,
   MiniMap,
@@ -17,6 +26,7 @@ import {
   type MiniMapNodeProps,
   type Node,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useApi } from "../lib/api-context.tsx";
@@ -74,6 +84,31 @@ const TYPE_COLORS = [
   "#b45309",
   "#0f766e",
 ];
+
+const GRAPH_RECENT_KEY = "rb.business.recentGraphs";
+const GRAPH_TAG_CLASS =
+  "flex-none max-w-[132px] truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] transition";
+
+function loadRecentGraphs(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(GRAPH_RECENT_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentGraphs(ids: string[]): void {
+  try {
+    window.localStorage.setItem(GRAPH_RECENT_KEY, JSON.stringify(ids));
+  } catch {
+    /* 隐私模式等写不进去就只保存在内存 */
+  }
+}
 
 function useIsWide(px: number): boolean {
   const [wide, setWide] = useState(
@@ -680,6 +715,13 @@ function BusinessGraphInner({
 }) {
   const { fitView, setCenter } = useReactFlow();
   const selectedId = selection?.kind === "objects" ? selection.id : null;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewportNonce = useRef(0);
+  const [viewportState, setViewportState] = useState<{
+    graph: object;
+    viewport: Viewport;
+    nonce: number;
+  } | null>(null);
 
   const graph = useMemo(() => {
     const objects = data.objects.slice(0, 160);
@@ -703,7 +745,7 @@ function BusinessGraphInner({
     (id: string, zoom: number, duration: number) => {
       const node = graph.nodeById.get(id);
       if (!node) return;
-      void setCenter(node.x + NODE_RADIUS, node.y + NODE_RADIUS, { zoom, duration });
+      return setCenter(node.x + NODE_RADIUS, node.y + NODE_RADIUS, { zoom, duration });
     },
     [graph, setCenter],
   );
@@ -791,16 +833,38 @@ function BusinessGraphInner({
     });
   }, [graph, selectedId, query]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (selectedId && graph.nodeById.has(selectedId)) {
-        centerOn(selectedId, 0.9, 0);
-      } else {
-        void fitView({ padding: 0.16, duration: 0, minZoom: 0.12, maxZoom: 1.15 });
-      }
-    }, 60);
-    return () => window.clearTimeout(timer);
-  }, [graph, centerOn, fitView]);
+  // 渲染前按容器尺寸算好视口，React Flow 第一帧就直接画在居中位置，不会先按旧视口出现再跳
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of graph.nodes) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + NODE_SIZE);
+      maxY = Math.max(maxY, n.y + NODE_SIZE);
+    }
+    if (!Number.isFinite(minX)) return;
+    const bounds = {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+    const viewport = getViewportForBounds(
+      bounds,
+      el.clientWidth,
+      el.clientHeight,
+      0.12,
+      1.15,
+      0.16,
+    );
+    viewportNonce.current += 1;
+    setViewportState({ graph, viewport, nonce: viewportNonce.current });
+  }, [graph]);
 
   useEffect(() => {
     if (!focusRequest || !graph.nodeById.has(focusRequest.id)) return;
@@ -820,8 +884,14 @@ function BusinessGraphInner({
   };
 
   return (
-    <div className="rb-flow h-[clamp(460px,64vh,760px)] overflow-hidden bg-surface min-[1100px]:h-full">
-      <ReactFlow
+    <div
+      ref={containerRef}
+      className="rb-flow h-[clamp(460px,64vh,760px)] overflow-hidden bg-surface min-[1100px]:h-full"
+    >
+      {viewportState?.graph === graph ? (
+        <ReactFlow
+          key={viewportState.nonce}
+          defaultViewport={viewportState.viewport}
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
@@ -832,17 +902,6 @@ function BusinessGraphInner({
           nodesConnectable={false}
           edgesFocusable={false}
           zoomOnDoubleClick={false}
-          onInit={(instance) => {
-            if (selectedId && graph.nodeById.has(selectedId)) {
-              const node = graph.nodeById.get(selectedId)!;
-              void instance.setCenter(node.x + NODE_RADIUS, node.y + NODE_RADIUS, {
-                zoom: 0.9,
-                duration: 0,
-              });
-            } else {
-              void instance.fitView({ padding: 0.16, minZoom: 0.12, maxZoom: 1.15 });
-            }
-          }}
           onNodeClick={(_, node) => onSelect("objects", node.id)}
           onNodeDoubleClick={(_, node) => {
             centerOn(node.id, 1.15, 450);
@@ -882,6 +941,7 @@ function BusinessGraphInner({
             </button>
           </Panel>
         </ReactFlow>
+      ) : null}
     </div>
   );
 }
@@ -912,6 +972,10 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<BusinessCategory>("objects");
   const [graphId, setGraphId] = useState<string>(DEFAULT_GRAPH);
+  const [recentGraphs, setRecentGraphs] = useState<string[]>(loadRecentGraphs);
+  const [fitCount, setFitCount] = useState(0);
+  const tagsWrapRef = useRef<HTMLDivElement>(null);
+  const tagsMeasureRef = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<BusinessSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<GraphFocusRequest | null>(null);
@@ -966,6 +1030,46 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
     ],
     [graphIds],
   );
+  const graphLabels = useMemo(
+    () => new Map(graphOptions.map((o) => [o.value, o.label])),
+    [graphOptions],
+  );
+  // 标签放最近用过的图谱做快捷入口，一行放不下就不显示（全部图谱始终从右侧下拉选）
+  const tagOrder = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of [...recentGraphs, activeGraph]) {
+      if (id === ALL_GRAPHS || !graphIds.includes(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }, [graphIds, activeGraph, recentGraphs]);
+  const visibleTags = tagOrder.slice(0, fitCount);
+
+  useLayoutEffect(() => {
+    const wrap = tagsWrapRef.current;
+    const measure = tagsMeasureRef.current;
+    if (!wrap || !measure) return;
+    const compute = () => {
+      const available = wrap.clientWidth;
+      let used = 0;
+      let count = 0;
+      for (const child of Array.from(measure.children) as HTMLElement[]) {
+        const width = child.getBoundingClientRect().width;
+        const gap = count > 0 ? 4 : 0;
+        if (used + gap + width > available) break;
+        used += gap + width;
+        count += 1;
+      }
+      setFitCount((prev) => (prev === count ? prev : count));
+    };
+    compute();
+    const observer = new ResizeObserver(compute);
+    observer.observe(wrap);
+    observer.observe(measure);
+    return () => observer.disconnect();
+  }, [tagOrder]);
   const view = useMemo(
     () => (data ? filterByGraph(data, activeGraph) : null),
     [data, activeGraph],
@@ -1029,6 +1133,15 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
 
   const chooseGraph = useCallback((id: string) => {
     setGraphId(id);
+    if (id !== ALL_GRAPHS) {
+      setRecentGraphs((prev) => {
+        // 已经在标签里的图谱不调整顺序，避免点一下就跑最左边
+        if (prev.includes(id)) return prev;
+        const next = [id, ...prev];
+        saveRecentGraphs(next);
+        return next;
+      });
+    }
     setSelectedId(null);
     setDetail(null);
     setFocusRequest(null);
@@ -1165,21 +1278,36 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
       </aside>
 
       <section className="relative flex min-h-0 min-w-0 flex-col bg-bg">
-        <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-3.5 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="m-0 text-[13px] font-semibold">知识图谱</h2>
-            <div className="w-32">
-              <Select
-                value={activeGraph}
-                onValueChange={chooseGraph}
-                options={graphOptions}
-                ariaLabel="切换图谱"
-                className="px-2 py-1 text-[11px]"
-              />
-            </div>
+        <header className="relative flex flex-none items-center gap-2 overflow-hidden border-b border-border bg-surface px-3.5 py-2">
+          <h2 className="m-0 flex-none text-[13px] font-semibold">知识图谱</h2>
+          <div
+            ref={tagsWrapRef}
+            className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden"
+          >
+            {visibleTags.map((id) => {
+              const label = graphLabels.get(id) ?? id;
+              const active = id === activeGraph;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  title={label}
+                  aria-pressed={active}
+                  className={cx(
+                    GRAPH_TAG_CLASS,
+                    active
+                      ? "border-accent/40 bg-accent-soft font-bold text-accent-ink"
+                      : "border-border bg-surface text-muted hover:text-text",
+                  )}
+                  onClick={() => chooseGraph(id)}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] tabular-nums text-muted">
+          <div className="flex flex-none items-center gap-2">
+            <span className="hidden whitespace-nowrap text-[11px] tabular-nums text-muted sm:inline">
               {view.edges.length} 条边{graphTruncated ? " · 已截断" : ""}
             </span>
             <button
@@ -1191,6 +1319,35 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
             >
               <BugIcon className="h-3.5 w-3.5" />
             </button>
+            {graphOptions.length > 1 ? (
+              <div className="w-auto max-w-[200px] flex-none">
+                <Select
+                  value={activeGraph}
+                  onValueChange={chooseGraph}
+                  options={graphOptions}
+                  placeholder="切换图谱"
+                  ariaLabel="切换图谱"
+                  nowrap
+                  className="px-2 py-1 text-[11px]"
+                />
+              </div>
+            ) : null}
+          </div>
+          <div
+            ref={tagsMeasureRef}
+            aria-hidden="true"
+            className="pointer-events-none invisible absolute left-0 top-0 flex w-max flex-nowrap items-center gap-1"
+          >
+            {tagOrder.map((id) => (
+              <button
+                key={id}
+                type="button"
+                tabIndex={-1}
+                className={cx(GRAPH_TAG_CLASS, "border-border bg-surface text-muted")}
+              >
+                {graphLabels.get(id) ?? id}
+              </button>
+            ))}
           </div>
         </header>
         <div className="min-h-0 flex-1">

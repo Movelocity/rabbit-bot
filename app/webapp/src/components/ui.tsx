@@ -175,6 +175,7 @@ export function Select({
   className,
   ariaLabel,
   disabled,
+  nowrap = false,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -183,6 +184,8 @@ export function Select({
   className?: string;
   ariaLabel?: string;
   disabled?: boolean;
+  /** 选项文字不换行，超长省略 */
+  nowrap?: boolean;
 }) {
   const radixValue = value === "" ? SELECT_EMPTY_VALUE : value;
   return (
@@ -199,7 +202,10 @@ export function Select({
           className,
         )}
       >
-        <SelectPrimitive.Value placeholder={placeholder} className="truncate" />
+        <SelectPrimitive.Value
+          placeholder={placeholder}
+          className="min-w-0 flex-1 truncate whitespace-nowrap"
+        />
         <SelectPrimitive.Icon asChild>
           <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted transition-transform group-data-[state=open]:rotate-180" />
         </SelectPrimitive.Icon>
@@ -229,7 +235,11 @@ export function Select({
                     "data-[disabled]:pointer-events-none data-[disabled]:opacity-45",
                   )}
                 >
-                  <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                  <SelectPrimitive.ItemText
+                    className={nowrap ? "min-w-0 max-w-[280px] truncate whitespace-nowrap" : undefined}
+                  >
+                    {option.label}
+                  </SelectPrimitive.ItemText>
                   <SelectPrimitive.ItemIndicator className="absolute right-2 inline-flex items-center text-accent">
                     <CheckIcon className="h-3.5 w-3.5" />
                   </SelectPrimitive.ItemIndicator>
