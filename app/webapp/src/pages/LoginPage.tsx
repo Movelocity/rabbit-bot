@@ -33,7 +33,7 @@ export function LoginPage({
         />
         <h1 className="m-0 mb-2 text-2xl font-semibold">Rabbit Bot 管理台</h1>
         <p className="m-0 text-sm text-muted">
-          输入本地 REST API token。默认从{" "}
+          输入 10 位登录密钥（本地 REST API token）。默认从{" "}
           <code className="rounded bg-surface2 px-1.5 py-px font-mono text-[0.9em]">
             app/data/run/api.token
           </code>{" "}
@@ -49,7 +49,7 @@ export function LoginPage({
             type="password"
             autoComplete="off"
             spellCheck={false}
-            placeholder="粘贴 token"
+            placeholder="粘贴 10 位密钥"
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />

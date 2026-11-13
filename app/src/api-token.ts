@@ -6,17 +6,27 @@ import type { Config } from "./config.ts";
 
 const TOKEN_ENV = "RABBIT_BOT_API_TOKEN";
 const DEFAULT_PORT = 3738;
+/** 网页登录密钥长度：10 位，去掉 0/O/1/I/l 这类容易抄错的字符。 */
+export const API_TOKEN_LENGTH = 10;
+const TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 
-/** 读 token：环境变量优先，其次 data/run/api.token，都没有就生成一个并落盘（0600）。 */
+function generateToken(): string {
+  let out = "";
+  for (let i = 0; i < API_TOKEN_LENGTH; i++) out += TOKEN_ALPHABET[crypto.randomInt(TOKEN_ALPHABET.length)];
+  return out;
+}
+
+/** 读 token：环境变量优先，其次 data/run/api.token，都没有就生成一个 10 位密钥并落盘（0600）。 */
 export function resolveApiToken(cfg: Config): string {
   const fromEnv = process.env[TOKEN_ENV];
-  if (fromEnv && fromEnv.length >= 16) return fromEnv;
+  if (fromEnv && fromEnv.length >= API_TOKEN_LENGTH) return fromEnv;
   const file = path.join(cfg.dataDir, "run", "api.token");
   try {
     const t = fs.readFileSync(file, "utf8").trim();
-    if (t.length >= 16) return t;
+    // 旧版本生成的是 64 位 hex；长度不符时重新生成，保证网页登录密钥就是 10 位
+    if (t.length === API_TOKEN_LENGTH) return t;
   } catch { /* 首次启动还没有 */ }
-  const token = crypto.randomBytes(32).toString("hex");
+  const token = generateToken();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${token}\n`, { mode: 0o600 });
   return token;

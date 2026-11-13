@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { shellRunnerOptions } from "../src/ops/exec.ts";
-import { resolveApiToken } from "../src/api-token.ts";
+import { API_TOKEN_LENGTH, resolveApiToken } from "../src/api-token.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-api-env-"));
 test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -23,7 +23,8 @@ test("docker 模式注入 host.docker.internal，token 落盘 0600", () => {
   const opts = shellRunnerOptions(cfg);
   assert.equal(opts.env?.RB_API_URL, "http://host.docker.internal:3738");
   const token = opts.env?.RB_API_TOKEN ?? "";
-  assert.equal(token.length, 64);
+  assert.equal(token.length, API_TOKEN_LENGTH);
+  assert.match(token, /^[A-HJ-NP-Za-km-z2-9]{10}$/);
 
   const file = path.join(dir, "run", "api.token");
   assert.equal(fs.readFileSync(file, "utf8").trim(), token);
