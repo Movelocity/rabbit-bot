@@ -113,7 +113,7 @@
   "exec": {
     "dir": "",
     "maxFileBytes": 262144,
-    "maxFiles": 200,
+    "maxTotalBytes": 2147483648,
     "maxReadChars": 8000,
     "shell": {
       "enabled": true,

@@ -114,7 +114,7 @@ export interface Config {
     /** 外部只读技能库（宿主机路径或 ~）：作为 shared-skills/ 暴露给 read_file */
     sharedSkillsDir?: string;
     maxFileBytes: number;
-    maxFiles: number;
+    maxTotalBytes: number;
     maxReadChars: number;
     shell: {
       enabled: boolean;
@@ -328,7 +328,7 @@ export function validateConfig(cfg: Config): void {
   const fx = cfg.limits.usdCny;
   if (fx !== undefined && !(Number.isFinite(fx) && fx > 0)) throw new Error("config: limits.usdCny 必须是正数");
   pos(cfg.exec.maxFileBytes, "exec.maxFileBytes");
-  pos(cfg.exec.maxFiles, "exec.maxFiles");
+  pos(cfg.exec.maxTotalBytes, "exec.maxTotalBytes");
   const mode = cfg.exec.shell.mode;
   if (mode !== "docker" && mode !== "host") throw new Error('config: exec.shell.mode 只能是 "docker" 或 "host"');
   if (cfg.exec.shell.enabled) {

@@ -12,7 +12,7 @@ function sbox(cfg: Config, root?: string) {
   return createSandboxFs({
     root: root ? path.resolve(root) : sc.dir,
     maxFileBytes: sc.maxFileBytes,
-    maxFiles: sc.maxFiles,
+    maxTotalBytes: sc.maxTotalBytes,
     maxReadChars: sc.maxReadChars,
     overlays: runtimeOverlays(cfg),
     trustedRoots: sharedSkillRoots(cfg),

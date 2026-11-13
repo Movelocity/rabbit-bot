@@ -24,8 +24,8 @@ export interface SandboxFsOptions {
   root: string;
   /** 单个文件上限（字节）。 */
   maxFileBytes: number;
-  /** 根目录里最多多少个文件。 */
-  maxFiles: number;
+  /** 根目录总大小上限（字节，只算普通文件）。 */
+  maxTotalBytes: number;
   /** 单次 read 返回的最大字符数（超出截断）。 */
   maxReadChars?: number;
   /**
@@ -97,15 +97,17 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
     return abs;
   };
 
-  const countFiles = (dir: string): number => {
+  const treeBytes = (dir: string): number => {
     let n = 0;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const abs = path.join(dir, e.name);
-      if (e.isDirectory()) n += countFiles(abs);
-      else if (e.isFile()) n += 1;
+      if (e.isDirectory()) n += treeBytes(abs);
+      else if (e.isFile()) n += fs.statSync(abs).size;
     }
     return n;
   };
+
+  const fmtBytes = (n: number): string => (n >= 1024 * 1024 ? `${Math.round(n / 1024 / 1024)}MB` : n >= 1024 ? `${Math.round(n / 1024)}KB` : `${n}B`);
 
   return {
     root: realRoot,
@@ -140,8 +142,10 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
       const bytes = Buffer.byteLength(text, "utf8");
       if (bytes > opts.maxFileBytes) throw new SandboxPathError(`内容太大（${bytes} 字节，上限 ${opts.maxFileBytes}）`);
       const existed = fs.existsSync(abs);
-      if (!existed && countFiles(realRoot) >= opts.maxFiles) {
-        throw new SandboxPathError(`文件数已到上限 ${opts.maxFiles}，先清点再写`);
+      const existingBytes = existed ? fs.statSync(abs).size : 0;
+      const used = treeBytes(realRoot);
+      if (used - existingBytes + bytes > opts.maxTotalBytes) {
+        throw new SandboxPathError(`沙盒总大小已到上限 ${fmtBytes(opts.maxTotalBytes)}（当前 ${fmtBytes(used)}），先清点再写`);
       }
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, text, "utf8");

@@ -6,7 +6,7 @@
  *   --read-only             根文件系统只读，只有 /work 和 /tmp(tmpfs) 可写
  *   --cap-drop ALL          丢弃全部 capability
  *   no-new-privileges       不许提权
- *   --memory 512m --pids-limit 64 --cpus 1（/tmp 是 256m 的 tmpfs，pip 装包落这里）
+ *   --memory 1g --pids-limit 64 --cpus 1（/tmp 是 2g 的 tmpfs，pip 装包落这里）
  *   只把运行时目录（默认 ~/.config/rabbit-bot/runtime）挂成 /work，宿主其余路径在容器里根本不存在
  *
  * 所以即使模型在容器里跑 `cat ~/.config/rabbit-bot/env`，它看到的是 No such file。
@@ -59,6 +59,15 @@ export interface ShellRunnerResult {
 
 const MAX_CMD_CHARS = 4000;
 const HOST_ENV_KEYS = ["PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR"];
+
+// 容器边界值只在创建时生效；打个标签，改常量后下次 ensure 会自动重建（否则旧容器一直用老限制）。
+const SANDBOX_MEMORY = "1g";
+const SANDBOX_MEMORY_SWAP = "1g";
+const SANDBOX_CPUS = "1";
+const SANDBOX_PIDS = "64";
+const SANDBOX_TMP_SIZE = "2g";
+const SANDBOX_RESOURCES_LABEL = "rabbit-bot.sandbox-resources";
+const SANDBOX_RESOURCES = `mem=${SANDBOX_MEMORY};swap=${SANDBOX_MEMORY_SWAP};cpus=${SANDBOX_CPUS};pids=${SANDBOX_PIDS};tmp=${SANDBOX_TMP_SIZE}`;
 
 interface RawResult {
   code: number;
@@ -192,12 +201,22 @@ async function mountsMatch(container: string, volumes: ShellRunnerOptions["volum
   return true;
 }
 
-/** 保证容器在跑：在跑就返回；停了就 start；不存在就按边界建一个。env 或挂载变了会重建。 */
+/** 资源边界（内存/pids/tmp）变了也要重建：这些只在 docker run 时生效，改常量不会影响已有容器。 */
+async function resourcesMatch(container: string): Promise<boolean> {
+  const r = await run("docker", ["inspect", "-f", `{{index .Config.Labels "${SANDBOX_RESOURCES_LABEL}"}}`, container], 15000);
+  return r.code === 0 && r.out.trim() === SANDBOX_RESOURCES;
+}
+
+/** 保证容器在跑：在跑就返回；停了就 start；不存在就按边界建一个。env、挂载或资源边界变了会重建。 */
 export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<{ ok: boolean; message: string }> {
   const desired = opts.env ?? {};
   const probe = await run("docker", ["inspect", "-f", "{{.State.Running}}", opts.container], 15000);
   if (probe.code === 0) {
-    if (!(await envMatches(opts.container, desired)) || !(await mountsMatch(opts.container, opts.volumes))) {
+    if (
+      !(await envMatches(opts.container, desired)) ||
+      !(await mountsMatch(opts.container, opts.volumes)) ||
+      !(await resourcesMatch(opts.container))
+    ) {
       await run("docker", ["rm", "-f", opts.container], 30000);
     } else if (probe.out.trim() === "true") return { ok: true, message: "running" };
     else {
@@ -212,13 +231,14 @@ export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<
     [
       "run", "-d",
       "--name", opts.container,
+      "--label", `${SANDBOX_RESOURCES_LABEL}=${SANDBOX_RESOURCES}`,
       "--network", opts.network,
       "--add-host", "host.docker.internal:host-gateway",
-      "--memory", "512m", "--memory-swap", "512m",
-      "--cpus", "1",
-      "--pids-limit", "64",
+      "--memory", SANDBOX_MEMORY, "--memory-swap", SANDBOX_MEMORY_SWAP,
+      "--cpus", SANDBOX_CPUS,
+      "--pids-limit", SANDBOX_PIDS,
       "--read-only",
-      "--tmpfs", "/tmp:rw,size=256m",
+      "--tmpfs", `/tmp:rw,size=${SANDBOX_TMP_SIZE}`,
       "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges",
       "--restart", "unless-stopped",
@@ -233,6 +253,21 @@ export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<
   );
   if (created.code !== 0) return { ok: false, message: `建容器失败：${created.err.trim().slice(0, 300)}` };
   return { ok: true, message: "created" };
+}
+
+/**
+ * 容器 State 还是 running、exec 却起不来：pids 计数泄漏（cgroup fork 被拒）或 runc 等不到 procReady。
+ * 这种情况 restart 不一定能清掉泄漏的计数，直接删了重建。
+ */
+const BROKEN_EXEC_RE = /procReady not received|fork rejected by pids controller/i;
+
+function execBroken(r: RawResult): boolean {
+  return BROKEN_EXEC_RE.test(`${r.out}${r.err}`);
+}
+
+async function rebuildContainer(opts: ShellRunnerOptions): Promise<boolean> {
+  await run("docker", ["rm", "-f", opts.container], 30000);
+  return (await ensureSandboxContainer(opts)).ok;
 }
 
 /** 在沙盒容器里跑一段 shell（bash -lc）；cwd 是容器内路径。命令字符串不进宿主 shell，走 execFile 参数传递。 */
@@ -252,8 +287,12 @@ export async function runInDocker(cmd: string, opts: ShellRunnerOptions): Promis
     "timeout", "-s", "KILL", String(secs),
     shell, "-lc", trimmed,
   ], opts.timeoutMs + 5000);
-  let r = await exec("bash");
-  if (r.code === 127 && /bash/i.test(r.err)) r = await exec("sh");
+  const execWithShellFallback = async (): Promise<RawResult> => {
+    const r = await exec("bash");
+    return r.code === 127 && /bash/i.test(r.err) ? exec("sh") : r;
+  };
+  let r = await execWithShellFallback();
+  if (execBroken(r) && (await rebuildContainer(opts))) r = await execWithShellFallback();
   const timedOut = r.code === 137 || r.code === 124;
   return {
     ok: r.code === 0,
@@ -330,11 +369,13 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
   if (!ready.ok) throw new Error(ready.message);
 
   const envArgs = Object.entries(opts.execEnv ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  const r = await run(
+  const exec = () => run(
     "docker",
     ["exec", ...envArgs, opts.container, "timeout", "-s", "KILL", String(secs), ...argv],
     opts.timeoutMs + 5000,
   );
+  let r = await exec();
+  if (execBroken(r) && (await rebuildContainer(opts))) r = await exec();
   const timedOut = r.code === 137 || r.code === 124;
   return {
     ok: r.code === 0,

@@ -12,7 +12,7 @@ function mk(): { fsbox: ReturnType<typeof createSandboxFs>; root: string; outsid
   fs.mkdirSync(root);
   fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, "secret.txt"), "不该被读到");
-  return { fsbox: createSandboxFs({ root, maxFileBytes: 1024, maxFiles: 3, maxReadChars: 100 }), root, outside };
+  return { fsbox: createSandboxFs({ root, maxFileBytes: 1024, maxTotalBytes: 1024, maxReadChars: 100 }), root, outside };
 }
 
 test("写、读、列，父目录自动创建", () => {
@@ -41,16 +41,18 @@ test("指向根目录外的符号链接读不到", () => {
   assert.throws(() => fsbox.write("linkdir/new.txt", "x"), SandboxPathError);
 });
 
-test("单文件大小和文件数上限生效", () => {
-  const { fsbox } = mk();
+test("单文件大小和总大小上限生效", () => {
+  const { root } = mk();
+  const fsbox = createSandboxFs({ root, maxFileBytes: 1024, maxTotalBytes: 6, maxReadChars: 100 });
   assert.throws(() => fsbox.write("big.txt", "x".repeat(2048)), SandboxPathError);
-  fsbox.write("a.txt", "1");
-  fsbox.write("b.txt", "2");
-  fsbox.write("c.txt", "3");
+  fsbox.write("a.txt", "11");
+  fsbox.write("b.txt", "22");
+  fsbox.write("c.txt", "33");
   assert.throws(() => fsbox.write("d.txt", "4"), SandboxPathError);
-  // 覆盖已有文件不算新增
-  fsbox.write("a.txt", "改过");
-  assert.equal(fsbox.read("a.txt"), "改过");
+  // 覆盖已有文件：变小可以，变大超过总额不行
+  fsbox.write("a.txt", "1");
+  assert.equal(fsbox.read("a.txt"), "1");
+  assert.throws(() => fsbox.write("a.txt", "123456789"), SandboxPathError);
 });
 
 test("读超长文件会截断", () => {
@@ -76,7 +78,7 @@ test("可信根：登记过的软链落点能读，没登记的一律拒", () =>
   fs.symlinkSync(evilDir, path.join(lib, "bad-skill"), "dir");
 
   const fsbox = createSandboxFs({
-    root, maxFileBytes: 4096, maxFiles: 10, maxReadChars: 200,
+    root, maxFileBytes: 4096, maxTotalBytes: 10240, maxReadChars: 200,
     overlays: { "shared-skills": lib },
     trustedRoots: [realSkill],
   });
