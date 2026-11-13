@@ -68,11 +68,16 @@ function withLock<T>(file: string, fn: () => T): T {
   }
 }
 
-function assertWithinLimit(text: string): void {
+export function assertWorkingMemoryText(text: string): void {
   const n = charLength(text);
   if (n > WORKING_MEMORY_MAX_CHARS) {
     throw new Error(`工作记忆超过上限（${n}/${WORKING_MEMORY_MAX_CHARS} 字），先删掉过时内容再写。`);
   }
+}
+
+/** 兼容内部旧名；写入口统一用 assertWorkingMemoryText，避免绕过 4000 字上限。 */
+function assertWithinLimit(text: string): void {
+  assertWorkingMemoryText(text);
 }
 
 function formatEntry(content: string): string {

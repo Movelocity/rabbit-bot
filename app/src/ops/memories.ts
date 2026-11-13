@@ -1,6 +1,6 @@
 /** 长期记忆：写入与检索。宿主 API 和沙盒 rb 客户端共用。 */
 import type { Store } from "../core/db.ts";
-import type { MemoryScope } from "../types.ts";
+import type { MemoryScope, Pool } from "../types.ts";
 import { clampInt, resolvePool } from "./common.ts";
 import { fmtLocal } from "../core/time.ts";
 
@@ -70,6 +70,24 @@ export function addMemory(store: Store, input: AddMemoryInput) {
     supersede = id;
   }
 
+  // 完全相同的正文不再写第二条：后台复盘和实时对话经常记重，重复条目会稀释检索结果。
+  // 只做归一化后的精确去重，不做模糊匹配——改过措辞的旧说法该由 supersede 处理。
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  if (!supersede) {
+    const dup = store.visibleMemories(user, pool, 50).find((m: any) =>
+      String(m.kind ?? "fact") === String(input.kind ?? "fact")
+      && norm(String(m.content ?? "")) === norm(content));
+    if (dup) {
+      return {
+        id: Number(dup.id),
+        scope: dup.scope as MemoryScope,
+        superseded: null,
+        source: null,
+        duplicate: true,
+      };
+    }
+  }
+
   const seqStart = parseSeq(input.source_seq);
   const seqEnd = parseSeq(input.source_seq_end) ?? seqStart;
 
@@ -87,6 +105,21 @@ export function addMemory(store: Store, input: AddMemoryInput) {
     source_seq_end: seqStart === null ? null : seqEnd,
   });
   return { id, scope, superseded: supersede, source: seqStart === null ? null : { pool: pool.pool_id, from: seqStart, to: seqEnd } };
+}
+
+/**
+ * 唤醒时注入的近期记忆索引：只给 #id + 正文首行，让模型知道有哪些旧事实、
+ * 但不把整条记忆塞满上下文。细节仍然走 memory search / trace。
+ */
+export function memoryIndexLine(store: Store, input: { user: string; pool: Pool; limit?: number }): string {
+  const rows = store.visibleMemories(input.user, input.pool, clampInt(input.limit, 1, 20, 5)) as any[];
+  if (!rows.length) return "";
+  const items = rows.map((m) => {
+    const text = String(m.content ?? "").replace(/\s+/g, " ").trim();
+    const head = text.length > 64 ? `${text.slice(0, 64)}…` : text;
+    return `#${m.id} ${head}`;
+  });
+  return `近期记忆索引（细节用 memory search/trace 查，别凭这一行猜）：\n${items.join("\n")}`;
 }
 
 export interface SearchMemoryInput {

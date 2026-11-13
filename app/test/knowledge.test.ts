@@ -7,7 +7,7 @@ import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { createTools } from "../src/agent/tools.ts";
 import {
-  addKnowledge, archiveKnowledge, getKnowledge, normalizeTags, searchKnowledge, updateKnowledge,
+  addKnowledge, archiveKnowledge, getKnowledge, knowledgeIndexLine, normalizeTags, searchKnowledge, updateKnowledge,
 } from "../src/ops/knowledge.ts";
 
 test("知识：add / get / search / update / archive", () => {
@@ -80,4 +80,16 @@ test("knowledge 工具：一次 add，不建任务也能查回来", async () => 
   assert.match(get.content.map((c: any) => c.text ?? "").join(""), /先构建镜像/);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("知识索引：只列标题和标签，归档的不出现", () => {
+  const store = new Store(":memory:");
+  addKnowledge(store, { title: "erp-gva 发版", body: "正文不该进索引", tags: "erp-gva,发版" }, 1);
+  addKnowledge(store, { title: "旧结论", body: "已被纠正", tags: "旧" }, 2);
+  archiveKnowledge(store, { id: 2 }, 3);
+  const line = knowledgeIndexLine(store);
+  assert.match(line, /erp-gva 发版 \[erp-gva,发版\]/);
+  assert.doesNotMatch(line, /正文不该进索引/, "索引不拉正文");
+  assert.doesNotMatch(line, /旧结论/, "归档知识不进索引");
+  store.close();
 });

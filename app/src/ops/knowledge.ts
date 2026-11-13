@@ -107,3 +107,20 @@ export function archiveKnowledge(store: Store, input: { id?: string | number }, 
   if (!store.retireKnowledge(id, now)) throw new Error(`没有知识 #${id}`);
   return view(store.getKnowledge(id)!);
 }
+
+/**
+ * 常驻提示用的知识索引：只列标题和标签，不拉正文。
+ * 目的不是替代 search，是让模型知道「有这些知识、该去查」，避免只写不读。
+ */
+export function knowledgeIndexLine(store: Store, limit = 12): string {
+  const rows = store.searchKnowledge({ limit });
+  if (!rows.length) return "";
+  const items = rows.map((row) => {
+    const title = String(row.title ?? "").trim();
+    let tags: string[] = [];
+    try { tags = JSON.parse(row.tags || "[]"); } catch { tags = []; }
+    const head = tags.length ? `${title} [${tags.slice(0, 3).join(",")}]` : title;
+    return head;
+  });
+  return `- 已有业务知识（用 \`knowledge\` action=search 查全文）：${items.join("；")}`;
+}

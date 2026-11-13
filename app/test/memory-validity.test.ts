@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
-import { addMemory, closeMemory, searchMemories, parseTs } from "../src/ops/memories.ts";
+import { addMemory, closeMemory, memoryIndexLine, searchMemories, parseTs } from "../src/ops/memories.ts";
 
 function setup() {
   const store = new Store(":memory:");
@@ -132,4 +132,28 @@ test("关记忆只看 id，不校验 user", () => {
   const r = closeMemory(store, { id: m.id });
   assert.equal(r.already, false);
   assert.ok(store.getMemory(m.id)?.valid_to, "关掉了");
+});
+
+test("同一正文不重复写；改过措辞仍然可以另记", () => {
+  const { store, pool } = setup();
+  const a = addMemory(store, { user: "u1", content: "他 对花生过敏", pool });
+  const same = addMemory(store, { user: "u1", content: "他  对花生过敏 ", pool });
+  assert.equal(same.duplicate, true);
+  assert.equal(same.id, a.id);
+  assert.equal(searchMemories(store, { user: "u1", pool }).length, 1, "重复内容不新增");
+  const changed = addMemory(store, { user: "u1", content: "他对花生严重过敏", pool });
+  assert.equal(changed.duplicate, undefined);
+  assert.equal(searchMemories(store, { user: "u1", pool }).length, 2, "措辞不同照常记");
+});
+
+test("近期记忆索引只给 #id + 首行，不展开全文", () => {
+  const { store, pool } = setup();
+  addMemory(store, { user: "u1", content: "他对花生过敏", pool });
+  addMemory(store, { user: "u1", content: "那个项目 → 电商 AI Agent", pool, kind: "alias" });
+  addMemory(store, { user: "u1", content: "长".repeat(80), pool });
+  const line = memoryIndexLine(store, { user: "u1", pool: store.getPool(pool)!, limit: 5 });
+  assert.match(line, /近期记忆索引/);
+  assert.match(line, /#1 他对花生过敏/);
+  assert.match(line, /…/, "超长正文被截断");
+  assert.doesNotMatch(line, /长{80}/, "不注入整段正文");
 });

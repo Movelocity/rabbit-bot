@@ -7,6 +7,7 @@ import path from "node:path";
 import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
+import { WORKING_MEMORY_MAX_CHARS } from "../src/core/working-memory.ts";
 
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-edit-file-"));
@@ -28,6 +29,24 @@ test("write：整份覆盖，落到 /work 对应文件", async () => {
     const r: any = await s.edit.execute("id", { action: "write", path: "prompt/scene-message.md", content: "新内容" });
     assert.equal(r.details.ok, true, text(r));
     assert.equal(fs.readFileSync(path.join(s.runtime, "prompt/scene-message.md"), "utf8"), "新内容");
+  } finally { cleanup(s); }
+});
+
+test("memory.md：edit_file 写入和替换都受 4000 字上限约束", async () => {
+  const s = setup();
+  try {
+    const tooLong = "长".repeat(WORKING_MEMORY_MAX_CHARS + 1);
+    const write: any = await s.edit.execute("id", { action: "write", path: "memory.md", content: tooLong });
+    assert.equal(write.details.ok, false);
+    assert.match(text(write), /超过上限/);
+
+    const ok: any = await s.edit.execute("id", { action: "write", path: "memory.md", content: "短" });
+    assert.equal(ok.details.ok, true, text(ok));
+
+    const replace: any = await s.edit.execute("id", { action: "replace", path: "memory.md", old: "短", new: tooLong });
+    assert.equal(replace.details.ok, false);
+    assert.match(text(replace), /超过上限/);
+    assert.equal(fs.readFileSync(path.join(s.runtime, "memory.md"), "utf8"), "短");
   } finally { cleanup(s); }
 });
 

@@ -485,7 +485,7 @@ test("私聊不等 tick：batchToTick 开着也走快路（他盯着屏幕等）
   await t.done();
 });
 
-test("记忆不主动注入：不灌正文/别名，只给 user_id 让她自己查", async () => {
+test("记忆只给近期索引：带 #id 和首行，细节仍让她自己查", async () => {
   const t = await setup();
   t.dm("在吗");
   await t.settle(6_000);
@@ -502,8 +502,9 @@ test("记忆不主动注入：不灌正文/别名，只给 user_id 让她自己�
   t.dm("那个项目进展怎么样");
   await t.settle(6_000);
   const p = seen[seen.length - 1] ?? "";
-  assert.doesNotMatch(p, /说法对照/, "别名不再自动注入");
-  assert.doesNotMatch(p, /他对花生过敏/, "记忆正文不再自动注入");
+  assert.doesNotMatch(p, /说法对照/, "不单独注入说法对照块");
+  assert.match(p, /近期记忆索引/, "给近期记忆索引");
+  assert.match(p, /#2 他对花生过敏/, "索引带 #id 和首行，方便决定要不要 search/trace");
   assert.ok(p.includes(`user_id=${uid}`), "仍要告诉她 user_id，方便自己用 memory search");
   await t.done();
 });

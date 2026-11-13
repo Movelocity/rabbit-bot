@@ -15,8 +15,8 @@ import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shell
 import { runSandboxArgv } from "../core/shell-runner.ts";
 import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
 import {
-  addWorkingMemory, readWorkingMemory, removeWorkingMemory, replaceWorkingMemory,
-  WORKING_MEMORY_MAX_CHARS,
+  addWorkingMemory, assertWorkingMemoryText, readWorkingMemory, removeWorkingMemory, replaceWorkingMemory,
+  WORKING_MEMORY_FILE, WORKING_MEMORY_MAX_CHARS,
 } from "../core/working-memory.ts";
 import { hostReadAllowed, rememberHostReadRoot } from "../core/host-read.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
@@ -448,6 +448,7 @@ export function createTools(d: ToolDeps) {
               source_seq: p.source_seq ?? bound.from,
               source_seq_end: p.source_seq ?? bound.to,
             });
+            if (r.duplicate) return txt(`这条已经记过（#${r.id}），没重复写。`, { ok: true, id: r.id, duplicate: true });
             return txt(
               (r.superseded ? `记下了（#${r.id}），原来 #${r.superseded} 那条已经失效。` : `记下了（#${r.id}）。`)
               + (r.source ? ` 来源 #${r.source.from}${r.source.to !== r.source.from ? `-${r.source.to}` : ""}，要回看用 trace。` : ""),
@@ -1117,6 +1118,7 @@ export function createTools(d: ToolDeps) {
         return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
       }
       try {
+        if (rel === WORKING_MEMORY_FILE) assertWorkingMemoryText(String(p.content ?? ""));
         const r = writeSandboxFile(d.cfg, rel, String(p.content ?? ""));
         return txt(`写了 ${r.path}（${r.bytes} 字节）。`, { ok: true, path: r.path });
       } catch (e) {
@@ -1150,6 +1152,7 @@ export function createTools(d: ToolDeps) {
       try {
         if (action === "write") {
           if (typeof p.content !== "string") return txt("write 要给 content。", { ok: false });
+          if (rel === WORKING_MEMORY_FILE) assertWorkingMemoryText(p.content);
           const r = writeSandboxFile(d.cfg, rel, p.content, d.readRoot);
           return txt(`写了 ${r.path}（${r.bytes} 字节）。`, { ok: true, path: r.path });
         }
@@ -1161,7 +1164,9 @@ export function createTools(d: ToolDeps) {
           const hits = cur.split(oldText).length - 1;
           if (hits === 0) return txt(`没找到这段原文：${oldText.slice(0, 80)}`, { ok: false });
           if (hits > 1) return txt(`这段原文出现 ${hits} 次，不唯一；把上下文带长一点。`, { ok: false });
-          const r = writeSandboxFile(d.cfg, rel, cur.replace(oldText, newText), d.readRoot);
+          const next = cur.replace(oldText, newText);
+          if (rel === WORKING_MEMORY_FILE) assertWorkingMemoryText(next);
+          const r = writeSandboxFile(d.cfg, rel, next, d.readRoot);
           return txt(`改了 ${r.path}。`, { ok: true, path: r.path });
         }
         return txt("action 只能是 write / replace。", { ok: false });

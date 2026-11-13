@@ -10,6 +10,8 @@ import { render } from "./template.ts";
 import { businessIndexLine, businessIndexLineFromDir } from "../ops/business-map.ts";
 import { businessDir, runtimeDir, sharedDir, topicsEnabled } from "../core/runtime.ts";
 import { readWorkingMemory } from "../core/working-memory.ts";
+import { knowledgeIndexLine } from "../ops/knowledge.ts";
+import { memoryIndexLine } from "../ops/memories.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[], store?: Store): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
@@ -25,6 +27,8 @@ export function systemPrompt(cfg: Config, emojis: string[], store?: Store): stri
       ? `；常用：${emojis.join(" ")}（微信式叫法基本都认）`
       : "（当前没有可用表情，别用）",
     business_block: store ? businessIndexLine(store) : businessIndexLineFromDir(businessDir(cfg)),
+    // 知识索引只给标题和标签：让模型知道「有这些知识该去查」，又不把正文常驻在上下文里。
+    knowledge_block: store ? knowledgeIndexLine(store) : "",
     topics_rule: topicsEnabled(cfg) ? "- `topics/` 只放闲聊谈资；业务知识用 `knowledge`。" : "",
     home,
     desktop_dir,
@@ -99,7 +103,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     const pool = store.getPool(pid)!;
     blocks.push(`近期上下文 [${poolLabel(store, pool)}]：\n` + ctx.map((m) => fmtMsg(store, m, false)).join("\n"));
   }
-  // 记忆和业务知识都不主动注入：只给 user_id 和查法，需要时让她自己用工具查。
   // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
   const people = new Map<string, { name: string; owner: boolean }>();
   for (const m of x.unread) {
@@ -107,6 +110,14 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (people.size) {
     blocks.push(`正在跟你说话的人：${[...people].map(([id, p]) => `${p.name}（user_id=${id}${p.owner ? "，主人" : ""}）`).join("、")}`);
+  }
+  // 长期记忆不整段注入：只给最近 5 条索引，细节让她自己 search / trace。
+  // 只对真人聊天池注入；任务池和日程池没有长期记忆，注入了只会添噪。
+  const memMsg = [...x.unread].reverse().find((m) => !m.from_self && m.user_id);
+  const memPool = memMsg ? store.getPool(memMsg.pool_id) : undefined;
+  if (memMsg?.user_id && memPool && !["task", "schedule"].includes(memPool.kind)) {
+    const line = memoryIndexLine(store, { user: memMsg.user_id, pool: memPool, limit: 5 });
+    if (line) blocks.push(line);
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
