@@ -1485,8 +1485,62 @@ export function createTools(d: ToolDeps) {
     || (d.cfg.exec.shell.mode === "host" && d.cfg.approval.enabled === true);
   // UFA：对话、记忆/知识、日程、审批、任务、读文件、map、terminal、rb。
   // 目标看板已下线；提示词在沙盒卷里，直接改，不再走 edit_prompt。
+  // 上传：文件在沙盒里，凭据只在框架进程的环境变量里（agent 看不到 token，也读不到宿主文件）。
+  // 返回一行短链，真实地址不进上下文。
+  const upload = defineTool({
+    name: "upload",
+    label: "upload",
+    executionMode: "sequential",
+    description:
+      "把沙盒里的文件传成一条公网短链，只返回一行 URL。"
+      + "给主人看图片/文档、把产物交给别人时用它，别把长地址贴进聊天。"
+      + "上限 50MB；桶是公共读，凭据、合同、聊天记录这类不要传。",
+    parameters: Type.Object({
+      path: Type.String({ description: "沙盒里的相对路径，例如 files/报告.pdf 或 media/shot.png" }),
+      name: Type.Optional(Type.String({ description: "上传时用的文件名，决定扩展名与 Content-Type" })),
+    }),
+    async execute(_id, p) {
+      const base = (process.env.TOS_SHORT_URL ?? "").trim().replace(/\/+$/, "");
+      const token = (process.env.TOS_SHORT_TOKEN ?? "").trim();
+      if (!base || !token) return txt("上传没配好：框架里缺 TOS_SHORT_URL / TOS_SHORT_TOKEN（告主人，别自己找凭据）", { ok: false });
+      const rel = String(p.path ?? "").trim();
+      if (!rel) return txt("缺少 path", { ok: false });
+      const root = path.resolve(d.cfg.runtimeDir);
+      const abs = path.resolve(root, rel);
+      if (abs !== root && !abs.startsWith(root + path.sep)) return txt(`路径越界：${rel}`, { ok: false });
+      let buf: Buffer;
+      try {
+        const st = fs.statSync(abs);
+        if (st.isDirectory()) return txt(`这是目录：${rel}`, { ok: false });
+        if (st.size > 50 * 1024 * 1024) return txt(`文件太大：${st.size} 字节（上限 50MB）`, { ok: false });
+        buf = fs.readFileSync(abs);
+      } catch (e) {
+        return txt(`读不了：${(e as Error).message}`, { ok: false });
+      }
+      const filename = String(p.name ?? path.basename(abs));
+      try {
+        const r = await fetch(`${base}/u`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "X-Filename": encodeURIComponent(filename),
+            "Content-Type": "application/octet-stream",
+          },
+          body: new Uint8Array(buf),
+        });
+        const body = (await r.text()).slice(0, 300);
+        if (!r.ok) return txt(`上传失败 ${r.status}：${body}`, { ok: false });
+        const out = JSON.parse(body) as { url?: string; size?: number };
+        if (!out.url) return txt(`上传返回没有 url：${body}`, { ok: false });
+        return txt(out.url, { ok: true, url: out.url, bytes: out.size });
+      } catch (e) {
+        return txt(`上传失败：${(e as Error).message}`, { ok: false });
+      }
+    },
+  });
+
   const ufaTools = [
-    chat, memory, workingMemory, knowledge, schedule, approval, task, pm, readFile, editFile, mapTool,
+    chat, memory, workingMemory, knowledge, schedule, approval, task, pm, readFile, editFile, mapTool, upload,
     ...(ufaHasTerminal ? [runShellTool] : []),
     rb,
   ];
