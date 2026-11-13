@@ -29,14 +29,16 @@ export function Drawer({
         className="absolute inset-0 bg-slate-900/40 animate-[rb-fade-in_160ms_ease-out]"
         onClick={onClose}
       />
-      <aside className="absolute inset-y-0 left-0 flex w-full max-w-[460px] flex-col border-r border-border bg-surface shadow-[var(--rb-shadow)] animate-[rb-drawer-in_200ms_ease-out] max-sm:max-w-none">
-        <header className="flex flex-none items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <h2 className="m-0 text-base font-semibold">{title}</h2>
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-[520px] flex-col border-l border-border bg-surface shadow-[-18px_0_50px_-30px_rgba(0,0,0,0.45)] animate-[rb-drawer-in_200ms_ease-out] max-sm:max-w-none">
+        <header className="flex flex-none items-start justify-between gap-2.5 border-b border-border px-4 py-3.5">
+          <h2 className="rb-display m-0 text-[18px] leading-tight wrap-anywhere">{title}</h2>
           <Button variant="ghost" size="sm" onClick={onClose}>
             关闭
           </Button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+        <div className="rb-thin-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-4">
+          {children}
+        </div>
       </aside>
     </div>,
     document.body,

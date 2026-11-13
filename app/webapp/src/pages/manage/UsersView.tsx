@@ -106,7 +106,7 @@ export function UsersView({ reloadSignal }: { reloadSignal: number }) {
   return (
     <>
       <StatusText text={status.text} error={status.error} />
-      <div className="grid gap-2.5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-2.5">
         {!rows.length ? (
           <Empty>还没有识别到用户。</Empty>
         ) : (

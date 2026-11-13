@@ -75,13 +75,19 @@ const TYPE_COLORS = [
   "#0f766e",
 ];
 
-const CATEGORY_COLORS: Record<BusinessCategory, string> = {
-  objects: "#2563eb",
-  relations: "#0891b2",
-  actions: "#16a34a",
-  terms: "#db2777",
-  types: "#f59e0b",
-};
+function useIsWide(px: number): boolean {
+  const [wide, setWide] = useState(
+    () => typeof window === "undefined" || window.matchMedia(`(min-width:${px}px)`).matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia(`(min-width:${px}px)`);
+    const onChange = () => setWide(query.matches);
+    onChange();
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, [px]);
+  return wide;
+}
 
 interface BusinessItem {
   kind: BusinessCategory;
@@ -1009,6 +1015,7 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
 
   const selectNode = useCallback((id: string) => {
     setCategory("objects");
+    setDetail(null);
     setSelectedId((prev) => (prev === id ? null : id));
   }, []);
 
@@ -1016,6 +1023,7 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
 
   const chooseCategory = (id: BusinessCategory) => {
     setSelectedId(null);
+    setDetail(null);
     setCategory(id);
   };
 
@@ -1032,181 +1040,212 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   }, []);
 
   const graphTruncated = !!view && (view.edges_truncated || view.objects.length > 160);
+  const isWide = useIsWide(1100);
+  const effectiveSelection: BusinessSelection | null = detail ?? (selectedId ? { kind: "objects", id: selectedId } : null);
+  const categoryCounts: Record<BusinessCategory, number> = {
+    objects: view?.objects.length ?? 0,
+    relations: view?.relations.length ?? 0,
+    actions: view?.actions.length ?? 0,
+    terms: view?.terms.length ?? 0,
+    types: view?.types.length ?? 0,
+  };
+  const lintCount = lint ? lint.summary.error + lint.summary.warn : null;
+  const legend = view ? [...typeColors.entries()].slice(0, 8) : [];
+  const closeEffective = () => {
+    closeDetail();
+    clearSelection();
+  };
 
-  return (
-    <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      {status.text ? <StatusText text={status.text} error={status.error} /> : null}
+  if (!view) {
+    return (
+      <div className="grid h-full place-items-center p-6">
+        <StatusText text={status.text || "加载中…"} error={status.error} />
+      </div>
+    );
+  }
 
-      {!view ? null : !view.exists ? (
-        <div className="grid place-items-center rounded-[14px] border border-border bg-surface px-6 py-16 text-center shadow-[var(--rb-shadow)]">
-          <p className="m-0 max-w-[380px] text-[13px] leading-relaxed text-muted">
+  if (!view.exists) {
+    return (
+      <div className="grid h-full place-items-center p-6">
+        <div className="grid max-w-[420px] place-items-center rounded-[14px] border border-border bg-surface px-6 py-12 text-center shadow-[var(--rb-shadow)]">
+          <p className="m-0 text-[13px] leading-relaxed text-muted">
             还没有知识数据。由任务通过 `PUT /v1/business` 写入后再刷新。
           </p>
         </div>
-      ) : (
-        <>
-          <section className="mt-4 overflow-hidden rounded-[14px] border border-border bg-surface shadow-[var(--rb-shadow)]">
-            <div className="grid items-stretch min-[1100px]:h-[clamp(520px,70vh,820px)] min-[1100px]:grid-cols-[minmax(0,1fr)_320px]">
-              <aside className="order-1 flex max-h-[70vh] min-h-0 flex-col border-b border-border min-[1100px]:order-2 min-[1100px]:max-h-none min-[1100px]:border-b-0 min-[1100px]:border-l">
-                <div className="flex-none border-b border-border p-2.5">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <h3 className="m-0 text-xs font-semibold">条目</h3>
-                    <span className="text-[11px] text-muted tabular-nums">{items.length}</span>
-                  </div>
-                  {selectedId && selectedObject && (
-                    <div className="mt-1.5 flex items-center gap-1.5 rounded-[7px] bg-accent-soft px-1.5 py-1 text-[11px] text-accent">
-                      <span className="min-w-0 flex-1 truncate">
-                        {`与「${selectedObject.name || selectedObject.id}」相关`}
-                      </span>
-                      <button
-                        type="button"
-                        className="flex-none underline-offset-2 hover:underline"
-                        onClick={clearSelection}
-                      >
-                        清除
-                      </button>
-                    </div>
-                  )}
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {CATEGORIES.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        className={cx(
-                          "rounded-full border px-2 py-0.5 text-[11px] transition",
-                          category === c.id
-                            ? "border-accent bg-accent-soft text-accent"
-                            : "border-border bg-surface text-muted hover:text-text",
-                        )}
-                        onClick={() => chooseCategory(c.id)}
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-2">
-                    <Input
-                      type="search"
-                      placeholder="搜索对象 / 关系 / 术语 / 类型"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                  </div>
-                </div>
+      </div>
+    );
+  }
 
-                <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
-                  {!items.length ? (
-                    <Empty>
-                      {query
-                        ? `没有匹配「${search.trim()}」的条目。`
-                        : selectedId
-                          ? "没有找到相关实体。"
-                          : "这一分类还没有条目。"}
-                    </Empty>
-                  ) : (
-                    <div className="grid gap-1.5">
-                      {items.map((item) => {
-                        const active =
-                          (item.kind === "objects" && selectedId === item.id) ||
-                          (detail?.kind === item.kind && detail?.id === item.id);
-                        const objectType =
-                          item.kind === "objects"
-                            ? view.objects.find((o) => o.id === item.id)?.type
-                            : undefined;
-                        const dot =
-                          (objectType && typeColors.get(objectType)) ||
-                          CATEGORY_COLORS[item.kind] ||
-                          TYPE_COLORS[0];
-                        return (
-                          <button
-                            key={`${item.kind}:${item.id}`}
-                            type="button"
-                            className={cx(
-                              "w-full rounded-[10px] border px-2.5 py-2 text-left transition",
-                              active
-                                ? "border-accent bg-accent-soft"
-                                : "border-border bg-surface hover:border-accent/45 hover:bg-surface2",
-                            )}
-                            onClick={() => openDetail(item.kind, item.id)}
-                          >
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 flex-none rounded-full"
-                                style={{ backgroundColor: dot }}
-                              />
-                              <span className="min-w-0 flex-1 text-[13px] font-semibold wrap-anywhere">
-                                {item.title}
-                              </span>
-                            </div>
-                            {item.subtitle && (
-                              <div className="mt-0.5 pl-4 text-[11px] text-muted wrap-anywhere">
-                                {item.subtitle}
-                              </div>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+  return (
+    <div className="grid h-full min-h-0 grid-cols-[250px_minmax(0,1fr)_330px] max-[1100px]:grid-cols-[230px_minmax(0,1fr)] max-[820px]:grid-cols-1 max-[820px]:grid-rows-[minmax(0,45vh)_minmax(360px,1fr)]">
+      <aside className="flex min-h-0 flex-col border-r border-border bg-surface max-[820px]:border-b max-[820px]:border-r-0">
+        <div className="flex-none px-3.5 pb-1.5 pt-3.5">
+          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+            Business Map
+          </div>
+          <div className="rb-display mt-0.5 text-[17px] font-bold">知识</div>
+          <div className="mt-1 text-[11.5px] text-muted">
+            只读{lintCount !== null ? ` · lint ${lintCount} 项` : ""}
+          </div>
+        </div>
+        <div className="flex flex-none flex-wrap gap-1 px-3 pb-2">
+          {CATEGORIES.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className={cx(
+                "rounded-full border px-2 py-0.5 text-[11px] transition",
+                category === c.id
+                  ? "border-accent/40 bg-accent-soft font-bold text-accent-ink"
+                  : "border-border bg-surface text-muted hover:text-text",
+              )}
+              onClick={() => chooseCategory(c.id)}
+            >
+              {c.label} {categoryCounts[c.id]}
+            </button>
+          ))}
+        </div>
+        <div className="flex-none px-3 pb-2">
+          <Input
+            type="search"
+            placeholder="搜索…"
+            className="py-1.5 text-[12px]"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        {status.text ? (
+          <div className="px-3">
+            <StatusText text={status.text} error={status.error} />
+          </div>
+        ) : null}
+        {selectedId && selectedObject ? (
+          <div className="mx-2 mb-1.5 flex flex-none items-center gap-1.5 rounded-[7px] bg-accent-soft px-2 py-1 text-[11px] text-accent-ink">
+            <span className="min-w-0 flex-1 truncate">
+              与「{selectedObject.name || selectedObject.id}」相关
+            </span>
+            <button type="button" className="flex-none hover:underline" onClick={clearSelection}>
+              清除
+            </button>
+          </div>
+        ) : null}
+        <div className="rb-thin-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-3.5">
+          {!items.length ? (
+            <Empty>
+              {query
+                ? `没有匹配「${search.trim()}」的条目。`
+                : selectedId
+                  ? "没有找到相关实体。"
+                  : "这一分类还没有条目。"}
+            </Empty>
+          ) : (
+            items.map((item) => {
+              const active =
+                (item.kind === "objects" && selectedId === item.id) ||
+                (detail?.kind === item.kind && detail?.id === item.id);
+              return (
+                <button
+                  key={`${item.kind}:${item.id}`}
+                  type="button"
+                  className={cx(
+                    "mb-0.5 block w-full rounded-[8px] px-2 py-1.5 text-left transition",
+                    active ? "bg-accent-soft" : "hover:bg-surface2",
                   )}
-                </div>
-              </aside>
+                  onClick={() => openDetail(item.kind, item.id)}
+                >
+                  <span className="block truncate text-[12px] font-semibold">{item.title}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-faint">
+                    {item.subtitle}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
 
-              <div className="order-2 flex min-w-0 flex-col min-[1100px]:order-1">
-                <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <h2 className="m-0 text-sm font-semibold">知识图谱</h2>
-                    <div className="w-32">
-                      <Select
-                        value={activeGraph}
-                        onValueChange={chooseGraph}
-                        options={graphOptions}
-                        ariaLabel="切换图谱"
-                        className="px-2 py-1 text-[11px]"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted tabular-nums">
-                      {`${view.edges.length} 条边${graphTruncated ? " · 已截断" : ""}`}
-                    </span>
-                    <button
-                      type="button"
-                      title="检查异常"
-                      aria-label="检查异常"
-                      className="flex-none rounded-full border border-border bg-surface/95 p-1 text-muted shadow-[var(--rb-shadow)] transition hover:text-text"
-                      onClick={openLint}
-                    >
-                      <BugIcon className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </header>
-                <div className="min-h-0 flex-1">
-                  <BusinessGraph
-                    data={view}
-                    typeColors={typeColors}
-                    selection={selectedId ? { kind: "objects", id: selectedId } : null}
-                    query={query}
-                    focusRequest={focusRequest}
-                    onSelect={(_kind, id) => selectNode(id)}
-                    onClearSelection={clearSelection}
-                  />
-                </div>
-              </div>
+      <section className="relative flex min-h-0 min-w-0 flex-col bg-bg">
+        <header className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-3.5 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="m-0 text-[13px] font-semibold">知识图谱</h2>
+            <div className="w-32">
+              <Select
+                value={activeGraph}
+                onValueChange={chooseGraph}
+                options={graphOptions}
+                ariaLabel="切换图谱"
+                className="px-2 py-1 text-[11px]"
+              />
             </div>
-          </section>
-        </>
-      )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] tabular-nums text-muted">
+              {view.edges.length} 条边{graphTruncated ? " · 已截断" : ""}
+            </span>
+            <button
+              type="button"
+              title="检查异常"
+              aria-label="检查异常"
+              className="flex-none rounded-full border border-border bg-surface/95 p-1 text-muted shadow-[var(--rb-shadow)] transition hover:text-text"
+              onClick={openLint}
+            >
+              <BugIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1">
+          <BusinessGraph
+            data={view}
+            typeColors={typeColors}
+            selection={selectedId ? { kind: "objects", id: selectedId } : null}
+            query={query}
+            focusRequest={focusRequest}
+            onSelect={(_kind, id) => selectNode(id)}
+            onClearSelection={clearSelection}
+          />
+        </div>
+        {legend.length ? (
+          <div className="pointer-events-none absolute bottom-3 left-3 flex max-w-[calc(100%-24px)] flex-wrap gap-2 rounded-[8px] border border-border bg-surface px-2 py-1 text-[9.5px] text-muted">
+            {legend.map(([id, color]) => (
+              <span key={id} className="inline-flex items-center gap-1">
+                <i
+                  className="inline-block size-[7px] rounded-[2px]"
+                  style={{ backgroundColor: color }}
+                />
+                {businessTypeName(view, id)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
-      {view?.exists && detail && (
-        <Drawer title={`${categoryLabel(detail.kind)}详情`} onClose={closeDetail}>
+      {isWide ? (
+        <aside className="rb-thin-scroll min-h-0 overflow-y-auto border-l border-border bg-surface p-3.5">
+          {effectiveSelection ? (
+            <BusinessDetail
+              data={view}
+              selection={effectiveSelection}
+              onSelect={openDetail}
+              onFocus={focusInGraph}
+            />
+          ) : (
+            <p className="mx-auto my-8 max-w-[320px] text-center text-[13px] text-muted">
+              选一个条目看详情，或切到关系图点节点。
+            </p>
+          )}
+        </aside>
+      ) : null}
+
+      {!isWide && effectiveSelection ? (
+        <Drawer title={`${categoryLabel(effectiveSelection.kind)}详情`} onClose={closeEffective}>
           <BusinessDetail
             data={view}
-            selection={detail}
+            selection={effectiveSelection}
             onSelect={openDetail}
             onFocus={focusInGraph}
           />
         </Drawer>
-      )}
+      ) : null}
 
       {lintOpen && (
         <Modal title="检查异常" onClose={() => setLintOpen(false)}>

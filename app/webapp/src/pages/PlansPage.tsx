@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
+import { cx } from "../lib/cx.ts";
 import { badgeVariant, friendlyError } from "../lib/format.ts";
 import type { Board } from "../lib/types.ts";
 import {
   Badge,
   Button,
-  Card,
-  CardBody,
-  CardHead,
-  CardMeta,
-  CardTitle,
   Empty,
   Field,
   Input,
-  Select,
+  Page,
+  PageHead,
+  Segmented,
   StatusText,
   Textarea,
 } from "../components/ui.tsx";
+import { Drawer } from "../components/Drawer.tsx";
 
 const STATUS_OPTIONS = [
   { value: "all", label: "全部" },
@@ -25,6 +24,10 @@ const STATUS_OPTIONS = [
 ];
 
 const STATUS_LABEL: Record<string, string> = { active: "进行中", done: "已完成", archived: "已归档" };
+
+function percent(done: number, total: number): number {
+  return total ? Math.round((done / total) * 100) : 0;
+}
 
 export function PlansPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
@@ -35,6 +38,7 @@ export function PlansPage({ reloadSignal }: { reloadSignal: number }) {
   const [title, setTitle] = useState("");
   const [background, setBackground] = useState("");
   const [goalsText, setGoalsText] = useState("");
+  const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -57,14 +61,19 @@ export function PlansPage({ reloadSignal }: { reloadSignal: number }) {
     void load();
   }, [reloadSignal, load]);
 
+  const closeCreate = () => {
+    setCreating(false);
+    setFormError("");
+  };
+
   const submitCreate = async () => {
     const t = title.trim();
     if (!t) {
-      setStatus({ text: "计划标题不能为空。", error: true });
+      setFormError("计划标题不能为空。");
       return;
     }
     setBusy(true);
-    setStatus({ text: "保存中…" });
+    setFormError("");
     try {
       await request("/v1/plans", {
         method: "POST",
@@ -81,7 +90,7 @@ export function PlansPage({ reloadSignal }: { reloadSignal: number }) {
       setStatus({ text: "" });
       await load();
     } catch (e) {
-      setStatus({ text: `新建失败：${friendlyError(e)}`, error: true });
+      setFormError(`新建失败：${friendlyError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -129,125 +138,175 @@ export function PlansPage({ reloadSignal }: { reloadSignal: number }) {
   };
 
   return (
-    <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      <div className="my-3 flex flex-wrap items-end gap-3">
-        <Field label="状态" compact>
-          <Select value={filter} onValueChange={setFilter} options={STATUS_OPTIONS} ariaLabel="计划状态" />
-        </Field>
-        <Button variant="primary" size="sm" onClick={() => setCreating((v) => !v)}>
-          {creating ? "取消" : "新建计划"}
-        </Button>
-      </div>
-
-      {creating && (
-        <Card className="mb-3">
-          <CardHead>
-            <CardTitle>新建计划</CardTitle>
-          </CardHead>
-          <CardBody className="grid gap-3">
-            <Field label="标题">
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="一句话说清要做什么" />
-            </Field>
-            <Field label="背景">
-              <Textarea
-                rows={3}
-                value={background}
-                onChange={(e) => setBackground(e.target.value)}
-                placeholder="为什么做、范围、约束、相关链接"
-              />
-            </Field>
-            <Field label="目标（一行一条）">
-              <Textarea
-                rows={3}
-                value={goalsText}
-                onChange={(e) => setGoalsText(e.target.value)}
-                placeholder={"查 state\n回报结果"}
-              />
-            </Field>
-            <div className="flex justify-end gap-2">
-              <Button size="sm" onClick={() => setCreating(false)} disabled={busy}>
-                取消
-              </Button>
-              <Button variant="primary" size="sm" onClick={() => void submitCreate()} disabled={busy}>
-                {busy ? "保存中…" : "保存"}
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
-      )}
+    <Page>
+      <PageHead
+        eyebrow="Plans"
+        title="计划"
+        sub="目标勾选和进展记录都在这里；新增/过期记忆走 IM，这里只做计划本身。"
+        actions={
+          <>
+            <Segmented
+              value={filter}
+              options={STATUS_OPTIONS}
+              onChange={setFilter}
+              label="计划状态"
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => (creating ? closeCreate() : setCreating(true))}
+            >
+              {creating ? "收起新建" : "新建计划"}
+            </Button>
+          </>
+        }
+      />
 
       <StatusText text={status.text} error={status.error} />
 
-      <div className="grid gap-2.5">
-        {!rows.length ? (
-          <Empty>没有计划。新建一条，或者让机器人在聊天里建。</Empty>
-        ) : (
-          rows.map((b) => (
-            <Card key={b.slug}>
-              <CardHead>
-                <CardTitle>
-                  <span className="font-mono text-[13px] font-semibold text-muted">{b.slug}</span> {b.title}
-                </CardTitle>
-                <Badge variant={badgeVariant(b.status)}>{STATUS_LABEL[b.status] ?? b.status}</Badge>
-              </CardHead>
-              <CardMeta>
-                <Badge>{b.status === "active" ? "进行中" : STATUS_LABEL[b.status] ?? b.status}</Badge>
-                <span>目标 {b.goals_done}/{b.goals_total}</span>
-                <span>进展 {b.progress.length}</span>
-                {b.updated_at_local && <span>更新 {b.updated_at_local}</span>}
-              </CardMeta>
-              {b.background && (
-                <CardBody>
-                  <div className="whitespace-pre-wrap text-sm text-muted">{b.background}</div>
-                </CardBody>
-              )}
-              <CardBody className="grid gap-2">
-                {b.goals.length === 0 ? (
-                  <p className="m-0 text-sm text-muted">还没有目标。</p>
-                ) : (
-                  b.goals.map((g, i) => (
-                    <label key={`${b.slug}-${i}`} className="flex cursor-pointer items-start gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5 size-4 flex-none accent-[var(--rb-accent)]"
-                        checked={g.done}
-                        onChange={() => void toggleGoal(b, i)}
-                      />
-                      <span className={g.done ? "text-muted line-through" : ""}>{g.text}</span>
-                    </label>
-                  ))
-                )}
-              </CardBody>
-              {b.progress.length > 0 && (
-                <CardBody>
-                  <div className="grid gap-1 text-[13px]">
-                    {b.progress.map((p, i) => (
+      {!rows.length ? (
+        <Empty>没有计划。新建一条，或者让机器人在聊天里建。</Empty>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(330px,1fr))] items-start gap-3">
+          {rows.map((b) => {
+            const done = b.goals_done ?? b.goals.filter((g) => g.done).length;
+            const total = b.goals_total ?? b.goals.length;
+            const ratio = percent(done, total);
+            return (
+              <article
+                key={b.slug}
+                className="rounded-[14px] border border-border bg-surface p-4 shadow-[var(--rb-shadow)]"
+              >
+                <div className="flex items-start justify-between gap-2.5">
+                  <div className="min-w-0 text-[14px] font-semibold wrap-anywhere">
+                    <span className="mr-1 inline-block rounded-[5px] border border-border bg-surface2 px-1.5 py-px align-middle font-mono text-[10.5px] font-normal text-muted">
+                      {b.slug}
+                    </span>
+                    {b.title}
+                  </div>
+                  <Badge variant={badgeVariant(b.status)}>
+                    {STATUS_LABEL[b.status] ?? b.status}
+                  </Badge>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-muted">
+                  <span>
+                    目标 {done}/{total}
+                  </span>
+                  <span>进展 {b.progress.length}</span>
+                  <span>完成度 {ratio}%</span>
+                </div>
+                <div className="mb-1 mt-2.5 h-1.5 overflow-hidden rounded bg-surface3">
+                  <i
+                    className="block h-full rounded bg-accent transition-[width]"
+                    style={{ width: `${ratio}%` }}
+                  />
+                </div>
+
+                {b.background ? (
+                  <p className="mb-0 mt-2.5 whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
+                    {b.background}
+                  </p>
+                ) : null}
+
+                <div className="mt-2.5 grid gap-1.5">
+                  {b.goals.length === 0 ? (
+                    <p className="m-0 text-[12.5px] text-muted">还没有目标。</p>
+                  ) : (
+                    b.goals.map((g, i) => (
+                      <label
+                        key={`${b.slug}-${i}`}
+                        className="flex cursor-pointer items-start gap-2 text-[12.5px]"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-[3px] size-3.5 flex-none accent-[var(--rb-accent)]"
+                          checked={g.done}
+                          onChange={() => void toggleGoal(b, i)}
+                        />
+                        <span className={cx("wrap-anywhere", g.done && "text-faint line-through")}>
+                          {g.text}
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
+
+                {b.progress.length > 0 && (
+                  <div className="mt-2.5 grid gap-1 text-[11.5px] text-muted">
+                    {b.progress.slice(-3).map((p, i) => (
                       <div key={`${b.slug}-p-${i}`} className="flex gap-2">
-                        {p.at_local && <span className="flex-none text-muted tabular-nums">{p.at_local.slice(5, 16)}</span>}
+                        {p.at_local && (
+                          <span className="flex-none tabular-nums text-faint">
+                            {p.at_local.slice(5, 16)}
+                          </span>
+                        )}
                         <span className="wrap-anywhere">{p.text}</span>
                       </div>
                     ))}
                   </div>
-                </CardBody>
-              )}
-              <CardBody className="grid gap-2">
+                )}
+
+                <div className="my-3 h-px bg-border" />
                 <ProgressInput onSubmit={(note) => void addProgress(b, note)} />
-                <div className="flex flex-wrap gap-2">
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {b.status !== "done" && (
-                    <Button size="sm" onClick={() => void setBoardStatus(b, "done")}>
+                    <Button variant="ghost" size="sm" onClick={() => void setBoardStatus(b, "done")}>
                       标完成
                     </Button>
                   )}
-                  <Button size="sm" onClick={() => void setBoardStatus(b, "archived")}>
+                  <Button variant="ghost" size="sm" onClick={() => void setBoardStatus(b, "archived")}>
                     归档
                   </Button>
                 </div>
-              </CardBody>
-            </Card>
-          ))
-        )}
-      </div>
-    </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {creating && (
+        <Drawer title="新建计划" onClose={closeCreate}>
+          <Field label="标题">
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="一句话说清要做什么"
+            />
+          </Field>
+          <div className="h-2.5" />
+          <Field label="背景">
+            <Textarea
+              rows={4}
+              value={background}
+              onChange={(e) => setBackground(e.target.value)}
+              placeholder="为什么做、范围、约束、相关链接"
+            />
+          </Field>
+          <div className="h-2.5" />
+          <Field label="目标（一行一条）">
+            <Textarea
+              rows={4}
+              value={goalsText}
+              onChange={(e) => setGoalsText(e.target.value)}
+              placeholder={"查 state\n回报结果"}
+            />
+          </Field>
+          {formError ? (
+            <p className="mt-2.5 text-[12.5px] text-bad" role="alert">
+              {formError}
+            </p>
+          ) : null}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={closeCreate} disabled={busy}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => void submitCreate()} disabled={busy}>
+              {busy ? "保存中…" : "保存计划"}
+            </Button>
+          </div>
+        </Drawer>
+      )}
+    </Page>
   );
 }
 

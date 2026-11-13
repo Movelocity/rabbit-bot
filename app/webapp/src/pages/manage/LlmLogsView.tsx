@@ -174,13 +174,7 @@ export function LlmLogsView({ reloadSignal }: { reloadSignal: number }) {
 
   return (
     <div className="min-w-0">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2 className="m-0 text-base font-semibold">模型日志</h2>
-          <p className="mt-1 text-xs text-muted">
-            读 pi 落盘的实际请求 / 响应。先选会话，再按需往前翻；默认只加载最近 {MESSAGE_PAGE} 条。
-          </p>
-        </div>
+      <div className="mb-2.5 flex flex-wrap items-center justify-end gap-2">
         <Button variant="ghost" size="sm" disabled={sessionsLoading} onClick={() => void loadSessions()}>
           {sessionsLoading ? "读取中…" : "刷新会话"}
         </Button>

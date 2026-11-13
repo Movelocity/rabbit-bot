@@ -67,6 +67,7 @@ export default function App() {
   const [health, setHealth] = useState<Health>("checking");
   const [currentPool, setCurrentPool] = useState<string | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
+  const [taskFocus, setTaskFocus] = useState<number | null>(null);
   const { tab, manageView, setTab, setManageView } = useUrlState();
 
   useEffect(() => {
@@ -169,30 +170,32 @@ export default function App() {
   return (
     <ApiProvider token={token} onUnauthorized={handleUnauthorized}>
       <div className="flex h-dvh flex-col">
-        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-2.5 max-sm:gap-2">
-          <div className="flex items-center gap-2.5 font-semibold">
-            <img
-              src={ICON_URL}
-              alt=""
-              className="size-[30px] rounded-[9px]"
-            />
-            <span className="max-[480px]:hidden">Rabbit Bot 管理台</span>
-            <span className="rounded-full bg-accent-soft px-2 py-px text-[11px] font-semibold text-accent">
+        <header className="flex h-14 flex-none flex-wrap items-center gap-3.5 border-b border-border bg-surface px-4.5 max-sm:h-auto max-sm:gap-2 max-sm:py-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src={ICON_URL} alt="" className="size-8 flex-none rounded-[10px]" />
+            <span className="rb-display whitespace-nowrap text-[17px] font-bold max-[480px]:hidden">
+              Rabbit Bot 管理台
+            </span>
+            <span className="whitespace-nowrap rounded-full border border-accent/30 bg-accent-soft px-2 py-px text-[11px] font-semibold text-accent-ink">
               本地管理
             </span>
           </div>
-          <div className="ml-auto flex min-w-0 items-center gap-1.5 text-[13px] max-sm:order-3 max-sm:ml-0 max-sm:w-full">
+          <div className="ml-auto flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted max-sm:order-3 max-sm:ml-0 max-sm:w-full">
             <span
               className={cx(
-                "size-[9px] flex-none rounded-full",
-                health === "ok" && "bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-ok)_20%,transparent)]",
-                health === "bad" && "bg-bad shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-bad)_20%,transparent)]",
+                "size-[8px] flex-none rounded-full",
+                health === "ok" &&
+                  "bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-ok)_18%,transparent)]",
+                health === "bad" &&
+                  "bg-bad shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-bad)_18%,transparent)]",
                 health === "checking" && "bg-muted",
               )}
             />
-            <span>{healthText}</span>
+            <span className="whitespace-nowrap">{healthText}</span>
             <span className="text-border">·</span>
-            <span className="truncate text-muted">{window.location.origin}</span>
+            <span className="truncate font-mono text-[11.5px] text-muted">
+              {window.location.origin}
+            </span>
           </div>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             退出
@@ -200,7 +203,7 @@ export default function App() {
         </header>
 
         <nav
-          className="flex gap-1 overflow-x-auto border-b border-border bg-surface px-4 pt-2 max-sm:px-3"
+          className="rb-thin-scroll flex flex-none items-center gap-0.5 overflow-x-auto border-b border-border bg-surface px-3.5 max-sm:px-3"
           aria-label="功能页签"
         >
           {TAB_ITEMS.map(({ tab: item, label }) => (
@@ -208,7 +211,7 @@ export default function App() {
               key={item}
               type="button"
               className={cx(
-                "whitespace-nowrap rounded-t-[9px] border-b-2 px-4 py-2.5 text-muted transition",
+                "relative whitespace-nowrap border-b-2 px-3.5 pb-2.5 pt-[11px] text-muted transition-colors",
                 tab === item
                   ? "border-accent font-semibold text-text"
                   : "border-transparent hover:text-text",
@@ -223,8 +226,8 @@ export default function App() {
             type="button"
             title="重新加载当前页数据"
             className={cx(
-              "sticky right-0 z-[1] my-auto ml-auto mr-0 inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition",
-              "hover:border-accent/40 hover:bg-accent-soft hover:text-accent",
+              "sticky right-0 z-[1] my-auto ml-auto mr-0 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-surface px-2.5 py-1 text-[11.5px] text-muted transition",
+              "hover:border-accent/45 hover:bg-accent-soft hover:text-accent",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
             )}
             onClick={() => setReloadSignal((n) => n + 1)}
@@ -256,9 +259,23 @@ export default function App() {
               reloadSignal={reloadSignal}
             />
           )}
-          {tab === "tasks" && <TasksPage reloadSignal={reloadSignal} />}
+          {tab === "tasks" && (
+            <TasksPage
+              reloadSignal={reloadSignal}
+              focusTaskId={taskFocus}
+              onFocusHandled={() => setTaskFocus(null)}
+            />
+          )}
           {tab === "outputs" && <OutputsPage reloadSignal={reloadSignal} />}
-          {tab === "approvals" && <ApprovalsPage reloadSignal={reloadSignal} />}
+          {tab === "approvals" && (
+            <ApprovalsPage
+              reloadSignal={reloadSignal}
+              onOpenTask={(id) => {
+                setTaskFocus(id);
+                setTab("tasks");
+              }}
+            />
+          )}
           {tab === "plans" && <PlansPage reloadSignal={reloadSignal} />}
           {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
           {tab === "business" && <BusinessPage reloadSignal={reloadSignal} />}
@@ -272,7 +289,7 @@ export default function App() {
         </main>
 
         <footer
-          className="flex-none border-t border-border bg-surface px-4 py-1.5 text-right text-xs text-muted"
+          className="flex-none border-t border-border bg-surface px-4 py-1.5 text-right text-[11.5px] text-muted"
           hidden={!hint}
         >
           {hint}

@@ -38,7 +38,7 @@ export function Button({
     <button
       type={type}
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 rounded-[9px] border border-transparent transition disabled:opacity-55",
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[9px] border border-transparent transition disabled:opacity-55",
         BUTTON_SIZES[size],
         BUTTON_VARIANTS[variant],
         className,
@@ -50,10 +50,10 @@ export function Button({
 
 const BADGE_VARIANTS: Record<BadgeVariant, string> = {
   default: "text-muted border-border",
-  done: "text-ok border-ok/40",
-  closed: "text-bad border-bad/35",
-  info: "text-accent border-accent/40",
-  warn: "text-amber-700 border-amber-500 bg-amber-500/10 dark:text-amber-300 dark:border-amber-700",
+  done: "text-ok border-ok/40 bg-ok-soft",
+  closed: "text-bad border-bad/35 bg-rose-soft",
+  info: "text-accent-ink border-accent/40 bg-accent-soft",
+  warn: "text-amber border-amber/40 bg-amber-soft",
 };
 
 export function Badge({
@@ -68,7 +68,7 @@ export function Badge({
   return (
     <span
       className={cx(
-        "inline-block rounded-full border px-1.5 py-0.5 text-[11px] leading-normal",
+        "inline-block whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[11px] leading-normal",
         BADGE_VARIANTS[variant],
         className,
       )}
@@ -285,6 +285,187 @@ export function StatusText({ text, error }: { text?: string; error?: boolean }) 
 export function Empty({ children }: { children: ReactNode }) {
   return (
     <p className="mx-auto my-10 max-w-[360px] text-center text-sm text-muted">{children}</p>
+  );
+}
+
+export function Page({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cx(
+        "rb-thin-scroll h-full overflow-y-auto px-[clamp(16px,3.4vw,40px)] pb-16 pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function PageHead({
+  eyebrow,
+  title,
+  sub,
+  actions,
+}: {
+  eyebrow: ReactNode;
+  title: ReactNode;
+  sub?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-end gap-4">
+      <div className="min-w-0">
+        <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-faint">
+          {eyebrow}
+        </div>
+        <h1 className="rb-display m-0 mt-1 text-[25px] leading-[1.15]">{title}</h1>
+        {sub ? (
+          <p className="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-muted">{sub}</p>
+        ) : null}
+      </div>
+      {actions ? (
+        <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
+      ) : null}
+    </div>
+  );
+}
+
+type KpiTone = "accent" | "amber" | "rose" | "default";
+
+const KPI_BAR: Record<KpiTone, string> = {
+  accent: "bg-accent",
+  amber: "bg-amber",
+  rose: "bg-rose",
+  default: "bg-line-strong",
+};
+
+export function KpiGrid({ children }: { children: ReactNode }) {
+  return (
+    <div className="mb-3.5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
+      {children}
+    </div>
+  );
+}
+
+export function Kpi({
+  label,
+  value,
+  note,
+  tone = "default",
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  note?: ReactNode;
+  tone?: KpiTone;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-[13px] border border-border bg-surface px-3.5 py-3">
+      <span className={cx("absolute inset-y-0 left-0 w-[3px]", KPI_BAR[tone])} />
+      <div className="text-[11px] tracking-[0.04em] text-muted">{label}</div>
+      <div className="rb-display mt-0.5 text-[25px] font-bold leading-tight tabular-nums">
+        {value}
+      </div>
+      {note ? <div className="mt-0.5 text-[11px] text-faint">{note}</div> : null}
+    </div>
+  );
+}
+
+type ChipTone = "default" | "accent" | "clay" | "amber" | "rose" | "ok";
+
+const CHIP_TONES: Record<ChipTone, string> = {
+  default: "border-border bg-surface text-muted",
+  accent: "border-accent/40 bg-accent-soft text-accent-ink font-semibold",
+  clay: "border-clay/40 bg-clay-soft text-clay",
+  amber: "border-amber/40 bg-amber-soft text-amber",
+  rose: "border-rose/40 bg-rose-soft text-rose",
+  ok: "border-ok/40 bg-ok-soft text-ok",
+};
+
+export function Chip({
+  tone = "default",
+  className,
+  children,
+}: {
+  tone?: ChipTone;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px]",
+        CHIP_TONES[tone],
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+export function Notice({
+  tone = "default",
+  className,
+  children,
+}: {
+  tone?: "default" | "accent";
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cx(
+        "flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-[12px] leading-[1.6]",
+        tone === "accent"
+          ? "border-accent/30 bg-accent-soft text-accent-ink"
+          : "border-border bg-surface2 text-muted",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function SectionTitle({
+  children,
+  count,
+}: {
+  children: ReactNode;
+  count?: ReactNode;
+}) {
+  return (
+    <h2 className="rb-display mb-2.5 mt-5 flex items-baseline gap-2 text-[17px]">
+      {children}
+      {count !== undefined ? (
+        <span className="text-[12px] font-normal text-muted">{count}</span>
+      ) : null}
+    </h2>
+  );
+}
+
+export function FilterBar({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className={cx("mb-3 flex flex-wrap items-end gap-2.5", className)}>{children}</div>
+  );
+}
+
+export function TableWrap({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div
+      className={cx(
+        "rb-thin-scroll overflow-auto rounded-[12px] border border-border bg-surface",
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }
 

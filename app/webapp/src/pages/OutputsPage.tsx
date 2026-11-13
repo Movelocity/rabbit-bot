@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useApi } from "../lib/api-context.tsx";
+import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError } from "../lib/format.ts";
 import { delimiterFor, parseDelimited } from "../lib/csv.ts";
 import type { OutputFile, OutputNode } from "../lib/types.ts";
-import { Button, Empty, Input, StatusText } from "../components/ui.tsx";
+import { Button, Chip, Empty, Input, Segmented, StatusText } from "../components/ui.tsx";
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
@@ -14,11 +15,25 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+type TypeFilter = "all" | "md" | "csv" | "html";
+
+const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "md", label: "md" },
+  { value: "csv", label: "csv" },
+  { value: "html", label: "html" },
+];
+
 function formatBytes(bytes: number | undefined): string {
   const n = Number(bytes ?? 0);
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function extOf(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ext === name.toLowerCase() ? "" : ext;
 }
 
 function countFiles(nodes: OutputNode[]): number {
@@ -28,41 +43,29 @@ function countFiles(nodes: OutputNode[]): number {
   );
 }
 
-function filterTree(nodes: OutputNode[], query: string): OutputNode[] {
-  if (!query) return nodes;
-  const out: OutputNode[] = [];
+function firstFile(nodes: OutputNode[]): OutputNode | null {
   for (const node of nodes) {
-    const nameMatch = node.name.toLowerCase().includes(query);
-    if (node.kind === "file") {
-      if (nameMatch) out.push(node);
-      continue;
-    }
-    const children = filterTree(node.children ?? [], query);
-    if (nameMatch) out.push(node);
-    else if (children.length) out.push({ ...node, children });
+    if (node.kind === "file") return node;
+    const child = firstFile(node.children ?? []);
+    if (child) return child;
   }
-  return out;
+  return null;
 }
 
-function EntryIcon({ node }: { node: OutputNode }) {
-  if (node.kind === "dir") {
-    return (
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="size-4 flex-none text-accent">
-        <path
-          d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.2 1.5h5.2A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7Z"
-          stroke="currentColor"
-          strokeWidth="1.3"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
+function filterTree(nodes: OutputNode[], query: string, type: TypeFilter): OutputNode[] {
+  if (!query && type === "all") return nodes;
+  const out: OutputNode[] = [];
+  for (const node of nodes) {
+    if (node.kind === "file") {
+      const nameMatch = !query || node.name.toLowerCase().includes(query);
+      const typeMatch = type === "all" || extOf(node.name) === type;
+      if (nameMatch && typeMatch) out.push(node);
+      continue;
+    }
+    const children = filterTree(node.children ?? [], query, type);
+    if (children.length) out.push({ ...node, children });
   }
-  const ext = node.name.split(".").pop()?.toLowerCase() ?? "";
-  return (
-    <span className="w-8 flex-none rounded-[4px] border border-border bg-surface2 px-0.5 text-center text-[9px] font-semibold uppercase leading-4 text-muted">
-      {(ext || "file").slice(0, 4)}
-    </span>
-  );
+  return out;
 }
 
 function Chevron({ open }: { open: boolean }) {
@@ -71,9 +74,7 @@ function Chevron({ open }: { open: boolean }) {
       viewBox="0 0 16 16"
       fill="none"
       aria-hidden="true"
-      className={
-        "size-3.5 flex-none text-muted transition-transform " + (open ? "rotate-90" : "")
-      }
+      className={cx("size-3 flex-none text-faint transition-transform", open && "rotate-90")}
     >
       <path
         d="m6 4 4 4-4 4"
@@ -86,6 +87,47 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
+function FilePreview({ file }: { file: OutputFile }) {
+  if (file.binary) {
+    return (
+      <div className="rounded-[10px] border border-border bg-surface2 px-4 py-8 text-center text-[13px] text-muted">
+        二进制文件，暂不支持预览（{formatBytes(file.bytes)}）。
+      </div>
+    );
+  }
+  const ext = file.ext;
+  const header = file.truncated ? (
+    <p className="mb-2 rounded-[8px] border border-amber/40 bg-amber-soft px-2.5 py-1.5 text-xs text-amber">
+      文件较大，仅预览前 2 MB。
+    </p>
+  ) : null;
+
+  if (ext === "md" || ext === "markdown") {
+    return (
+      <div>
+        {header}
+        <MarkdownPreview text={file.content} />
+      </div>
+    );
+  }
+  if (ext === "csv" || ext === "tsv") {
+    return (
+      <div>
+        {header}
+        <CsvPreview text={file.content} ext={ext} />
+      </div>
+    );
+  }
+  return (
+    <div>
+      {header}
+      <pre className="rb-thin-scroll max-h-[calc(100dvh-260px)] overflow-auto whitespace-pre-wrap wrap-anywhere rounded-[12px] border border-border bg-surface p-3.5 font-mono text-[11.5px] leading-[1.7]">
+        {file.content}
+      </pre>
+    </div>
+  );
+}
+
 function MarkdownPreview({ text }: { text: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text, { gfm: true, async: false }) as string;
@@ -93,7 +135,7 @@ function MarkdownPreview({ text }: { text: string }) {
   }, [text]);
   return (
     <div
-      className="rb-markdown text-[16px]"
+      className="rb-markdown rounded-[12px] border border-border bg-surface px-5 py-4 text-[13.5px]"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -104,18 +146,18 @@ function CsvPreview({ text, ext }: { text: string; ext: string }) {
     () => parseDelimited(text, delimiterFor(ext, text)),
     [text, ext],
   );
-  if (!table.rows.length) return <p className="text-[14px] text-muted">空文件。</p>;
+  if (!table.rows.length) return <p className="text-[13px] text-muted">空文件。</p>;
   const [header, ...body] = table.rows;
   return (
     <div className="min-w-0">
-      <div className="max-h-[calc(100dvh-260px)] overflow-auto rounded-[10px] border border-border">
-        <table className="min-w-full border-collapse text-[14px]">
+      <div className="rb-thin-scroll max-h-[calc(100dvh-260px)] overflow-auto rounded-[12px] border border-border bg-surface">
+        <table className="w-full border-collapse text-[12.5px]">
           <thead className="sticky top-0 z-[1] bg-surface2">
             <tr>
               {header.map((cell, i) => (
                 <th
                   key={i}
-                  className="whitespace-nowrap border-b border-r border-border px-2.5 py-2 text-left font-semibold last:border-r-0"
+                  className="whitespace-nowrap border-b border-r border-border px-2.5 py-2 text-left text-[10.5px] font-semibold uppercase tracking-[0.05em] text-muted last:border-r-0"
                 >
                   {cell || "—"}
                 </th>
@@ -124,7 +166,7 @@ function CsvPreview({ text, ext }: { text: string; ext: string }) {
           </thead>
           <tbody>
             {body.map((row, ri) => (
-              <tr key={ri} className="align-top even:bg-surface2/40">
+              <tr key={ri} className="align-top transition hover:bg-accent-soft/30">
                 {row.map((cell, ci) => (
                   <td
                     key={ci}
@@ -146,40 +188,12 @@ function CsvPreview({ text, ext }: { text: string; ext: string }) {
   );
 }
 
-function FilePreview({ file }: { file: OutputFile }) {
-  if (file.binary) {
-    return (
-      <div className="rounded-[10px] border border-border bg-surface2 px-4 py-8 text-center text-[14px] text-muted">
-        二进制文件，暂不支持预览（{formatBytes(file.bytes)}）。
-      </div>
-    );
-  }
-  const ext = file.ext;
-  return (
-    <div className="min-w-0">
-      {file.truncated && (
-        <p className="mb-2 rounded-[8px] border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-          文件较大，仅预览前 2 MB。
-        </p>
-      )}
-      {ext === "md" || ext === "markdown" ? (
-        <MarkdownPreview text={file.content} />
-      ) : ext === "csv" || ext === "tsv" ? (
-        <CsvPreview text={file.content} ext={ext} />
-      ) : (
-        <pre className="max-h-[calc(100dvh-260px)] overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-border bg-surface2 p-3 text-[14px] leading-relaxed">
-          {file.content}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
   const [tree, setTree] = useState<OutputNode[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [selected, setSelected] = useState("");
   const [file, setFile] = useState<OutputFile | null>(null);
   const [treeLoading, setTreeLoading] = useState(true);
@@ -239,9 +253,32 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
     if (selected) void loadFile(selected);
   }, [reloadSignal]);
 
+  const expandParents = (path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      const parts = path.split("/");
+      for (let i = 1; i < parts.length; i++) next.add(parts.slice(0, i).join("/"));
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (selected || !tree.length) return;
+    const first = firstFile(tree);
+    if (first) {
+      setSelected(first.path);
+      expandParents(first.path);
+      void loadFile(first.path);
+    }
+  }, [tree, selected, loadFile]);
+
   const query = filter.trim().toLowerCase();
-  const visible = useMemo(() => filterTree(tree, query), [tree, query]);
+  const visible = useMemo(
+    () => filterTree(tree, query, typeFilter),
+    [tree, query, typeFilter],
+  );
   const files = useMemo(() => countFiles(tree), [tree]);
+  const filtering = !!query || typeFilter !== "all";
 
   const toggleDir = (path: string) => {
     setExpanded((prev) => {
@@ -254,33 +291,57 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
 
   const selectFile = (path: string) => {
     setSelected(path);
+    expandParents(path);
     void loadFile(path);
+  };
+
+  const copyPath = async () => {
+    if (!selected) return;
+    try {
+      await navigator.clipboard?.writeText(selected);
+      setStatus({ text: `已复制路径：${selected}` });
+    } catch {
+      setStatus({ text: `复制失败，路径：${selected}`, error: true });
+    }
   };
 
   const renderNodes = (nodes: OutputNode[], depth: number) =>
     nodes.map((node) => {
       const isDir = node.kind === "dir";
-      const open = isDir && (query ? true : expanded.has(node.path));
+      const open = isDir && (filtering ? true : expanded.has(node.path));
+      const ext = isDir ? "" : extOf(node.name);
       return (
         <li key={node.path} className="min-w-0">
           <button
             type="button"
             title={node.path}
-            className={
-              "flex w-full min-w-0 items-center gap-1.5 rounded-[8px] py-1.5 pr-2 text-left text-[14px] transition " +
-              (node.path === selected
-                ? "bg-accent-soft font-semibold text-accent"
-                : "text-text hover:bg-surface2")
-            }
-            style={{ paddingLeft: 6 + depth * 14 }}
+            className={cx(
+              "flex w-full min-w-0 items-center gap-1.5 rounded-[7px] py-1.5 pr-2 text-left text-[12px] transition",
+              node.path === selected
+                ? "bg-accent-soft font-semibold text-accent-ink"
+                : "text-text hover:bg-surface2",
+            )}
+            style={{ paddingLeft: 6 + depth * 13 }}
             onClick={() => (isDir ? toggleDir(node.path) : selectFile(node.path))}
           >
-            {isDir ? <Chevron open={open} /> : <span className="w-3.5 flex-none" />}
-            <EntryIcon node={node} />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            {!isDir && (
-              <span className="flex-none text-[11px] text-muted">{formatBytes(node.bytes)}</span>
+            {isDir ? (
+              <Chevron open={open} />
+            ) : (
+              <span className="w-3 flex-none" />
             )}
+            {isDir ? (
+              <span className="w-[30px] flex-none rounded-[4px] border border-transparent bg-accent-soft py-px text-center font-mono text-[8.5px] font-bold text-accent-ink">
+                DIR
+              </span>
+            ) : (
+              <span className="w-[30px] flex-none rounded-[4px] border border-border bg-surface2 py-px text-center font-mono text-[8.5px] font-bold uppercase text-muted">
+                {(ext || "file").slice(0, 4)}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            <span className="flex-none text-[10px] tabular-nums text-faint">
+              {isDir ? countFiles(node.children ?? []) : formatBytes(node.bytes)}
+            </span>
           </button>
           {open && node.children?.length ? (
             <ul className="m-0 grid min-w-0 list-none gap-0.5 p-0">
@@ -291,54 +352,88 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
       );
     });
 
+  const segments = selected.split("/");
+
   return (
     <div className="flex h-full min-h-0 max-[820px]:flex-col">
-      <aside className="flex w-[360px] flex-none flex-col border-r border-border bg-surface max-[820px]:h-[45%] max-[820px]:w-full max-[820px]:border-b max-[820px]:border-r-0">
-        <div className="flex-none border-b border-border px-3 py-2.5">
+      <aside className="flex w-[352px] flex-none flex-col border-r border-border bg-surface max-[820px]:h-[45%] max-[820px]:w-full max-[820px]:border-b max-[820px]:border-r-0">
+        <div className="flex-none border-b border-border px-3.5 pb-2.5 pt-3.5">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-sm font-semibold">产出目录</span>
-            <span className="text-xs text-muted">{files} 个文件</span>
+            <span className="text-[13px] font-bold">产出目录</span>
+            <span className="text-[11px] text-muted">{files} 个文件</span>
           </div>
+        </div>
+        <div className="px-2.5 pb-1.5 pt-2.5">
           <Input
             aria-label="搜索产出文件"
             type="search"
             placeholder="搜索文件名…"
-            className="mt-2 py-1.5 text-[13px]"
+            className="py-1.5 text-[12px]"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
+        <div className="px-2.5 pb-2">
+          <Segmented
+            value={typeFilter}
+            options={TYPE_OPTIONS}
+            onChange={setTypeFilter}
+            label="文件类型"
           />
         </div>
 
         <StatusText text={status.text} error={status.error} />
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3">
+        <div className="rb-thin-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 pb-3">
           {treeLoading ? (
-            <p className="px-2 text-[13px] text-muted">加载中…</p>
+            <p className="px-2 text-[12px] text-muted">加载中…</p>
           ) : !visible.length ? (
-            <Empty>{query ? "没有匹配的文件。" : "这里还没有产出。"}</Empty>
+            <Empty>{filtering ? "没有匹配的文件。" : "这里还没有产出。"}</Empty>
           ) : (
             <ul className="m-0 grid list-none gap-0.5 p-0">{renderNodes(visible, 0)}</ul>
           )}
         </div>
       </aside>
 
-      <section className="min-w-0 flex-1 overflow-y-auto px-[clamp(14px,3vw,32px)] py-4">
-        <div className="mx-auto w-full max-w-[860px]">
+      <section className="rb-thin-scroll min-w-0 flex-1 overflow-y-auto bg-bg px-[clamp(14px,3vw,32px)] pb-12 pt-4">
+        <div className="mx-auto w-full max-w-[880px]">
           {!selected ? (
             <Empty>选择左侧文件预览。支持 Markdown、CSV / TSV 和纯文本。</Empty>
           ) : (
             <>
-              <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border pb-2">
-                <h2 className="m-0 min-w-0 break-words text-[17px] font-semibold">{selected}</h2>
-                {file && (
-                  <span className="text-xs text-muted">
-                    {formatBytes(file.bytes)} · {formatTs(file.mtime)}
-                  </span>
-                )}
-                <span className="flex-1" />
-                <Button variant="ghost" size="sm" onClick={() => void loadFile(selected)}>
-                  重新加载
-                </Button>
+              <header className="mb-3.5 flex flex-wrap items-start gap-3 border-b border-border pb-2.5">
+                <div className="min-w-0">
+                  <div className="mb-1 flex flex-wrap gap-1 font-mono text-[10.5px] text-faint">
+                    {segments.map((segment, i) => (
+                      <span key={`${segment}-${i}`} className="flex gap-1">
+                        <span>{segment}</span>
+                        {i < segments.length - 1 ? <span>/</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                  <h2 className="rb-display m-0 text-[19px] wrap-anywhere">
+                    {segments[segments.length - 1] || selected}
+                  </h2>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-muted">
+                    {file ? (
+                      <>
+                        <span>{formatBytes(file.bytes)}</span>
+                        <span>{formatTs(file.mtime)}</span>
+                        <Chip className="px-1.5 py-0 font-mono text-[10px]">
+                          {file.ext || "file"}
+                        </Chip>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="ml-auto flex flex-wrap gap-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => void copyPath()}>
+                    复制路径
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void loadFile(selected)}>
+                    重新加载
+                  </Button>
+                </div>
               </header>
               {fileLoading ? (
                 <p className="text-[13px] text-muted">加载中…</p>

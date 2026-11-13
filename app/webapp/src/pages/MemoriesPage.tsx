@@ -1,22 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
+import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError } from "../lib/format.ts";
 import type { Memory, MemoryList, MemoryTrace } from "../lib/types.ts";
-import { Drawer } from "../components/Drawer.tsx";
 import {
   Badge,
   Button,
-  Card,
-  CardHead,
-  CardMeta,
-  CardTitle,
+  Chip,
   Empty,
   Field,
+  FilterBar,
   Input,
+  Page,
+  PageHead,
   Select,
   StatusText,
   Textarea,
 } from "../components/ui.tsx";
+import { Modal } from "../components/Modal.tsx";
 
 const KIND_OPTIONS = [
   { value: "", label: "全部" },
@@ -52,10 +53,12 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Memory | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [tracingId, setTracingId] = useState<number | null>(null);
   const [trace, setTrace] = useState<MemoryTrace | null>(null);
   const [localTick, setLocalTick] = useState(0);
@@ -97,6 +100,16 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
     };
   }, [user, kind, scope, validity, q, page, pageSize, reloadSignal, localTick, request]);
 
+  useEffect(() => {
+    if (!rows.length) {
+      setSelectedId(null);
+      return;
+    }
+    if (selectedId === null || !rows.some((m) => m.id === selectedId)) {
+      setSelectedId(rows[0].id);
+    }
+  }, [rows, selectedId]);
+
   const reload = useCallback(() => setLocalTick((n) => n + 1), []);
 
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -105,6 +118,14 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
   const end = Math.min(total, currentPage * pageSize);
 
   const resetPage = () => setPage(1);
+
+  const selected = rows.find((m) => m.id === selectedId) ?? rows[0] ?? null;
+
+  const selectMemory = (id: number) => {
+    setSelectedId(id);
+    setEditingId(null);
+    setTrace(null);
+  };
 
   const startEdit = (m: Memory) => {
     setEditingId(m.id);
@@ -138,24 +159,27 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
     }
   };
 
-  const remove = async (m: Memory) => {
+  const remove = async () => {
+    const m = pendingDelete;
+    if (!m) return;
     const owner = m.user_id || user.trim();
     if (!owner) {
       setStatus({ text: "这条记忆缺少 user id，无法删除。", error: true });
+      setPendingDelete(null);
       return;
     }
-    if (!window.confirm(`删除记忆 #${m.id}？\n\n${m.content}`)) return;
-    setDeletingId(m.id);
+    setDeleting(true);
     try {
       await request(`/v1/memories/${m.id}?user=${encodeURIComponent(owner)}`, {
         method: "DELETE",
       });
       setStatus({ text: "" });
+      setPendingDelete(null);
       reload();
     } catch (e) {
       setStatus({ text: `删除失败：${friendlyError(e)}`, error: true });
     } finally {
-      setDeletingId(null);
+      setDeleting(false);
     }
   };
 
@@ -179,8 +203,15 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
   };
 
   return (
-    <div className="h-full overflow-y-auto px-[clamp(16px,4vw,44px)] pb-[60px] pt-[22px] max-[820px]:px-3.5 max-[820px]:pb-12 max-[820px]:pt-4">
-      <div className="my-3 flex flex-wrap items-end gap-3">
+    <Page>
+      <PageHead
+        eyebrow="Memories"
+        title="记忆"
+        sub="Web 只改正文和删除；新增、过期、跨会话梳理仍走 IM。来源可回溯到具体消息。"
+        actions={<Chip>{rows.length} / {total} 条</Chip>}
+      />
+
+      <FilterBar>
         <Field label="用户" compact>
           <Input
             type="text"
@@ -236,151 +267,217 @@ export function MemoriesPage({ reloadSignal }: { reloadSignal: number }) {
             }}
           />
         </Field>
-      </div>
+      </FilterBar>
 
       <StatusText text={status.text} error={status.error} />
 
-      <div className="grid gap-2.5">
-        {!rows.length ? (
-          <Empty>{status.text ? "" : "没有可见的记忆。"}</Empty>
-        ) : (
-          rows.map((m) => (
-            <Card key={m.id}>
-              <CardHead>
-                {editingId === m.id ? (
-                  <Textarea
-                    className="min-h-[76px] text-sm"
-                    rows={3}
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                  />
-                ) : (
-                  <CardTitle>{m.content}</CardTitle>
+      <div className="grid items-start gap-3.5 min-[1200px]:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0">
+          {!rows.length ? (
+            <Empty>{status.text ? "" : "没有可见的记忆。"}</Empty>
+          ) : (
+            rows.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className={cx(
+                  "mb-1.5 block w-full rounded-[10px] border bg-surface px-3 py-2.5 text-left transition",
+                  selected?.id === m.id
+                    ? "border-accent/48 bg-accent-soft"
+                    : "border-border hover:border-line-strong",
                 )}
-                <Badge variant={m.to ? "closed" : "done"}>{m.to ? "已失效" : "有效"}</Badge>
-              </CardHead>
-              <CardMeta>
-                <span>#{m.id}</span>
-                <Badge>{m.kind || "fact"}</Badge>
-                <Badge>scope {m.scope}</Badge>
-                {m.user_id && <span className="font-mono">{m.user_id}</span>}
-                {m.source_pool && <span>池 {m.source_pool}</span>}
-                <span>
-                  有效 {formatTs(m.from)} → {m.to ? formatTs(m.to) : "至今"}
-                </span>
-                {m.created_at ? <span>创建 {formatTs(m.created_at)}</span> : null}
-                {m.replaced_by && <span>被 #{m.replaced_by} 顶替</span>}
-              </CardMeta>
-              <div className="mt-2.5 flex gap-2">
-                {editingId === m.id ? (
-                  <>
-                    <Button variant="primary" size="sm" disabled={saving} onClick={() => void save(m)}>
-                      {saving ? "保存中…" : "保存"}
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
-                      取消
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    {m.source_seq_start ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={tracingId === m.id}
-                        onClick={() => void showTrace(m)}
-                      >
-                        {tracingId === m.id ? "回溯中…" : "来源"}
-                      </Button>
-                    ) : null}
-                    <Button variant="ghost" size="sm" onClick={() => startEdit(m)}>
-                      编辑
-                    </Button>
+                onClick={() => selectMemory(m.id)}
+              >
+                <div className="line-clamp-2 text-[12.5px] leading-snug">{m.content}</div>
+                <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-1 text-[10.5px] text-muted">
+                  <span>#{m.id}</span>
+                  <Badge variant={m.to ? "closed" : "done"}>{m.to ? "已失效" : "有效"}</Badge>
+                  <span className="rounded-[5px] border border-border bg-surface2 px-1.5 py-px font-mono text-[10px]">
+                    {m.kind || "fact"}
+                  </span>
+                  <span>scope {m.scope}</span>
+                  {m.user_id && <span className="font-mono">{m.user_id}</span>}
+                  <span>
+                    {formatTs(m.from)} → {m.to ? formatTs(m.to) : "至今"}
+                  </span>
+                  {m.replaced_by && <span>被 #{m.replaced_by} 顶替</span>}
+                </div>
+              </button>
+            ))
+          )}
+
+          {total > 0 && (
+            <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                上一页
+              </Button>
+              <span>
+                {start}–{end} / 共 {total} 条 · 第 {currentPage} / {pages} 页
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={currentPage >= pages}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                下一页
+              </Button>
+              <span className="flex-1" />
+              <Select
+                className="!w-auto py-1.5"
+                ariaLabel="每页条数"
+                value={String(pageSize)}
+                onValueChange={(value) => {
+                  setPageSize(Number(value) || 20);
+                  setPage(1);
+                }}
+                options={[10, 20, 50, 100].map((n) => ({
+                  value: String(n),
+                  label: `${n} 条/页`,
+                }))}
+              />
+            </div>
+          )}
+        </div>
+
+        {selected ? (
+          <aside className="rounded-[13px] border border-border bg-surface p-4 shadow-[var(--rb-shadow)] min-[1200px]:sticky min-[1200px]:top-0">
+            <div className="flex items-start gap-2">
+              <h3 className="rb-display m-0 flex-1 text-[17px]">记忆 #{selected.id}</h3>
+              <Badge variant={selected.to ? "closed" : "done"}>
+                {selected.to ? "已失效" : "有效"}
+              </Badge>
+            </div>
+
+            {editingId === selected.id ? (
+              <>
+                <Textarea
+                  className="mt-2.5 min-h-[96px] text-[13px]"
+                  rows={5}
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                />
+                <div className="mt-2 flex gap-1.5">
+                  <Button variant="primary" size="sm" disabled={saving} onClick={() => void save(selected)}>
+                    {saving ? "保存中…" : "保存"}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
+                    取消
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="m-0 mb-2.5 mt-2 whitespace-pre-wrap text-[13px] leading-[1.75]">
+                  {selected.content}
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => startEdit(selected)}>
+                    编辑
+                  </Button>
+                  {selected.source_seq_start ? (
                     <Button
-                      variant="danger"
+                      variant="ghost"
                       size="sm"
-                      disabled={deletingId === m.id}
-                      onClick={() => void remove(m)}
+                      disabled={tracingId === selected.id}
+                      onClick={() => void showTrace(selected)}
                     >
-                      {deletingId === m.id ? "删除中…" : "删除"}
+                      {tracingId === selected.id ? "回溯中…" : "来源"}
                     </Button>
-                  </>
-                )}
+                  ) : null}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setPendingDelete(selected)}
+                  >
+                    删除
+                  </Button>
+                </div>
+              </>
+            )}
+
+            <div className="my-3 h-px bg-border" />
+            <dl className="rb-kv">
+              <dt>kind</dt>
+              <dd>{selected.kind || "fact"}</dd>
+              <dt>scope</dt>
+              <dd>{selected.scope}</dd>
+              <dt>user</dt>
+              <dd className="font-mono">{selected.user_id || "—"}</dd>
+              <dt>来源池</dt>
+              <dd>{selected.source_pool || "—"}</dd>
+              <dt>有效</dt>
+              <dd>
+                {formatTs(selected.from)} → {selected.to ? formatTs(selected.to) : "至今"}
+              </dd>
+              {selected.replaced_by ? (
+                <>
+                  <dt>替换</dt>
+                  <dd>被 #{selected.replaced_by} 顶替</dd>
+                </>
+              ) : null}
+            </dl>
+
+            {trace && trace.id === selected.id ? (
+              <div className="mt-2.5 overflow-hidden rounded-[10px] border border-border">
+                {trace.note ? (
+                  <div className="border-b border-border bg-surface2 px-2.5 py-2 text-[11.5px] text-muted">
+                    {trace.note}
+                  </div>
+                ) : null}
+                {trace.messages.map((msg) => (
+                  <div
+                    key={msg.seq}
+                    className={cx(
+                      "border-b border-border px-2.5 py-2 text-[11.5px] last:border-b-0",
+                      msg.anchor && "bg-accent-soft",
+                    )}
+                  >
+                    <div className="mb-0.5 flex flex-wrap gap-1.5 text-[10px] text-faint">
+                      <span>#{msg.seq}</span>
+                      <span>{msg.local}</span>
+                      <span className={msg.from_self ? "text-accent" : ""}>
+                        {msg.from_self ? "我" : msg.sender}
+                      </span>
+                      {msg.anchor ? <Badge variant="done">来源</Badge> : null}
+                    </div>
+                    <div className="whitespace-pre-wrap wrap-anywhere">{msg.text}</div>
+                  </div>
+                ))}
+                <div className="border-t border-border p-2">
+                  <Button variant="ghost" size="sm" onClick={() => setTrace(null)}>
+                    收起来源
+                  </Button>
+                </div>
               </div>
-            </Card>
-          ))
-        )}
+            ) : null}
+          </aside>
+        ) : null}
       </div>
 
-      {total > 0 && (
-        <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            上一页
-          </Button>
-          <span>
-            {start}–{end} / 共 {total} 条 · 第 {currentPage} / {pages} 页
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={currentPage >= pages}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            下一页
-          </Button>
-          <span className="flex-1" />
-          <Select
-            className="!w-auto py-1.5"
-            ariaLabel="每页条数"
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setPageSize(Number(value) || 20);
-              setPage(1);
-            }}
-            options={[10, 20, 50, 100].map((n) => ({
-              value: String(n),
-              label: `${n} 条/页`,
-            }))}
-          />
-        </div>
+      {pendingDelete && (
+        <Modal title={`删除记忆 #${pendingDelete.id}？`} onClose={() => setPendingDelete(null)}>
+          <p className="m-0 text-sm leading-relaxed text-muted">
+            {pendingDelete.content}
+            <br />
+            <br />
+            删除后不可撤销；如果只是过期，应该走 IM 标记失效。
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setPendingDelete(null)}>
+              取消
+            </Button>
+            <Button variant="danger" size="sm" disabled={deleting} onClick={() => void remove()}>
+              {deleting ? "删除中…" : "确认删除"}
+            </Button>
+          </div>
+        </Modal>
       )}
-
-      {trace ? (
-        <Drawer title={`记忆 #${trace.id} 的来源`} onClose={() => setTrace(null)}>
-          <div className="mb-3 rounded-[14px] border border-border bg-surface2 px-3 py-2.5 text-sm">
-            <div className="font-semibold">{trace.content}</div>
-            <div className="mt-1 text-xs text-muted">
-              {trace.source
-                ? `来源 ${trace.source.pool} · #${trace.source.from}${trace.source.to !== trace.source.from ? `-${trace.source.to}` : ""}`
-                : "没有来源消息索引"}
-            </div>
-          </div>
-          {trace.note ? <p className="text-sm text-muted">{trace.note}</p> : null}
-          <div className="grid gap-2">
-            {trace.messages.map((msg) => (
-              <div
-                key={msg.seq}
-                className={`rounded-[12px] border px-3 py-2 text-sm ${
-                  msg.anchor ? "border-accent bg-accent-soft" : "border-border bg-surface"
-                }`}
-              >
-                <div className="mb-1 flex flex-wrap items-center gap-x-2 text-xs text-muted">
-                  <span className="font-mono">#{msg.seq}</span>
-                  <span>{msg.local}</span>
-                  <span className={msg.from_self ? "text-accent" : ""}>{msg.from_self ? "我" : msg.sender}</span>
-                  {msg.anchor ? <Badge variant="done">来源</Badge> : null}
-                </div>
-                <div className="whitespace-pre-wrap break-words">{msg.text}</div>
-              </div>
-            ))}
-          </div>
-        </Drawer>
-      ) : null}
-    </div>
+    </Page>
   );
 }

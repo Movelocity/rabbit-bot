@@ -11,7 +11,7 @@ import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError, kindLabel } from "../lib/format.ts";
 import type { Pool, PoolMessage, PoolMessages, SendReviewSettingsResponse } from "../lib/types.ts";
-import { Button, Empty, Segmented } from "../components/ui.tsx";
+import { Button, Chip, Empty, Input, Notice, Segmented } from "../components/ui.tsx";
 
 type PoolReviewMode = "inherit" | "review" | "direct";
 
@@ -20,6 +20,21 @@ function mergeMessages(prev: PoolMessage[], incoming: PoolMessage[]): PoolMessag
   for (const m of incoming) map.set(m.seq, m);
   return [...map.values()].sort((a, b) => a.seq - b.seq);
 }
+
+function initial(value: string | null | undefined): string {
+  const text = String(value ?? "").trim();
+  return text ? text.slice(0, 1) : "?";
+}
+
+function poolBucketKind(kind: string): string {
+  return kind || "group";
+}
+
+const BUCKET_LABEL: Record<string, string> = {
+  private: "私聊",
+  group: "群聊",
+  task: "任务",
+};
 
 export function ChatPage({
   currentPool,
@@ -39,6 +54,7 @@ export function ChatPage({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [reading, setReading] = useState(false);
   const [view, setView] = useState<"active" | "archived">("active");
+  const [search, setSearch] = useState("");
   const [archiving, setArchiving] = useState(false);
   const [sendReview, setSendReview] = useState<SendReviewSettingsResponse | null>(null);
   const [reviewSaving, setReviewSaving] = useState(false);
@@ -280,19 +296,43 @@ export function ChatPage({
   const canLoadOlder =
     oldestSeq !== null && messages.length > 0 && messages[0].seq > oldestSeq;
 
+  const query = search.trim().toLowerCase();
+  const visiblePools = pools.filter(
+    (p) => !query || `${p.title} ${p.alias}`.toLowerCase().includes(query),
+  );
+  const buckets = new Map<string, Pool[]>();
+  for (const p of visiblePools) {
+    const key = poolBucketKind(p.kind);
+    const list = buckets.get(key) ?? [];
+    list.push(p);
+    buckets.set(key, list);
+  }
+  const bucketOrder = ["private", "group", "task"];
+  const orderedBuckets = [...buckets.entries()].sort(
+    (a, b) =>
+      (bucketOrder.indexOf(a[0]) === -1 ? 9 : bucketOrder.indexOf(a[0])) -
+      (bucketOrder.indexOf(b[0]) === -1 ? 9 : bucketOrder.indexOf(b[0])),
+  );
+  const recentMessages = messages.slice(-3).reverse();
+
   let previous: PoolMessage | null = null;
   let previousDay = "";
 
   return (
-    <div className="grid h-full grid-cols-[280px_minmax(0,1fr)] min-h-0 max-[820px]:grid-cols-1">
+    <div className="grid h-full min-h-0 grid-cols-[288px_minmax(0,1fr)_308px] max-[1200px]:grid-cols-[260px_minmax(0,1fr)] max-[820px]:grid-cols-1">
       <aside
         className={cx(
           "flex min-h-0 flex-col border-r border-border bg-surface max-[820px]:border-r-0",
           reading && "max-[820px]:hidden",
         )}
       >
-        <div className="flex items-center justify-between gap-2 px-5 pb-3 pt-[18px] text-[13px] text-muted">
-          <span>会话池</span>
+        <div className="flex items-center justify-between gap-2 px-3.5 pb-2.5 pt-4">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+              会话池
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted">{visiblePools.length} 个会话</div>
+          </div>
           <Segmented
             value={view}
             options={[
@@ -303,57 +343,88 @@ export function ChatPage({
             label="会话池视图"
           />
         </div>
-        <div className="overflow-y-auto px-2.5 pb-4">
-          {!pools.length ? (
-            <Empty>{view === "archived" ? "还没有已归档的会话。" : "还没有会话池。"}</Empty>
+        <div className="px-3 pb-2.5">
+          <Input
+            type="search"
+            aria-label="搜索会话或别名"
+            placeholder="搜索会话或别名…"
+            className="py-1.5 text-[12px]"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="rb-thin-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {!visiblePools.length ? (
+            <Empty>
+              {view === "archived"
+                ? "还没有已归档的会话。"
+                : query
+                  ? "没有匹配的会话。"
+                  : "还没有会话池。"}
+            </Empty>
           ) : (
-            pools.map((p) => (
-              <button
-                key={p.alias}
-                type="button"
-                title={p.title || p.alias}
-                aria-current={p.alias === currentPool}
-                className={cx(
-                  "mb-1 block w-full rounded-md border-0 px-3 py-3.5 text-left transition hover:bg-surface2",
-                  p.alias === currentPool ? "bg-surface2" : "bg-transparent",
-                )}
-                onClick={() => {
-                  setReading(true);
-                  if (currentPool !== p.alias) onCurrentPoolChange(p.alias);
-                  else if (messagesBox.current) {
-                    messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
-                  }
-                }}
-              >
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="flex min-w-0 items-baseline gap-1.5">
-                    <span className="truncate text-sm font-semibold">
-                      {p.title || "（无标题）"}
-                    </span>
-                    {p.is_main && (
+            orderedBuckets.map(([kind, rows]) => (
+              <div key={kind}>
+                <div className="px-2 pb-1 pt-3 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+                  {BUCKET_LABEL[kind] ?? kindLabel(kind)} · {rows.length}
+                </div>
+                {rows.map((p) => {
+                  const selected = p.alias === currentPool;
+                  return (
+                    <button
+                      key={p.alias}
+                      type="button"
+                      title={p.title || p.alias}
+                      aria-current={selected ? "true" : undefined}
+                      className={cx(
+                        "relative flex w-full items-start gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition hover:bg-surface2",
+                        selected && "bg-accent-soft",
+                      )}
+                      onClick={() => {
+                        setReading(true);
+                        if (currentPool !== p.alias) onCurrentPoolChange(p.alias);
+                        else if (messagesBox.current) {
+                          messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
+                        }
+                      }}
+                    >
+                      {selected && (
+                        <span className="absolute inset-y-2 left-0 w-[3px] rounded bg-accent" />
+                      )}
                       <span
-                        className="flex-none rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted"
-                        title="主聊天：任务汇报只发这里，审批消息也发到这里"
+                        className={cx(
+                          "grid size-[30px] flex-none place-items-center rounded-[9px] border text-[13px] font-bold",
+                          p.kind === "private"
+                            ? "border-clay/25 bg-clay-soft text-clay"
+                            : "border-accent/25 bg-accent-soft text-accent-ink",
+                        )}
                       >
-                        主聊天
+                        {initial(p.title || p.alias)}
                       </span>
-                    )}
-                  </span>
-                  <span className="flex-none text-[11px] text-muted">
-                    {kindLabel(p.kind)}
-                  </span>
-                </div>
-                <div className="mt-1.5 flex items-baseline gap-2 text-xs text-muted [font-variant-numeric:tabular-nums]">
-                  <span className="font-mono text-[11px]">{p.alias}</span>
-                  <span
-                    className="flex-1"
-                    title={p.last_msg_local || ""}
-                  >
-                    {p.last_msg_local ? p.last_msg_local.slice(5, 16) : "暂无消息"}
-                  </span>
-                  <span>{p.total || 0} 条</span>
-                </div>
-              </button>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5 text-[12.5px] font-semibold leading-tight">
+                          <span className="truncate">{p.title || p.alias}</span>
+                          {p.is_main && (
+                            <Chip tone="accent" className="px-1.5 py-0 text-[9px]">
+                              主
+                            </Chip>
+                          )}
+                        </span>
+                        <span className="mt-1 flex items-center gap-1.5 text-[10.5px] text-muted">
+                          <code className="truncate font-mono text-[10px] text-faint">
+                            {p.alias}
+                          </code>
+                          <span className="truncate">{p.last_msg_local ? p.last_msg_local.slice(5, 16) : "暂无消息"}</span>
+                        </span>
+                      </span>
+                      <span className="flex flex-none flex-col items-end gap-0.5 text-[10px] text-faint">
+                        <span>{kindLabel(p.kind)}</span>
+                        <span>{p.total || 0} 条</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             ))
           )}
         </div>
@@ -366,7 +437,7 @@ export function ChatPage({
         )}
         aria-label="会话记录"
       >
-        <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-7 py-2 max-[820px]:px-4 max-[820px]:py-1.5">
+        <div className="flex min-h-[58px] flex-wrap items-center gap-3 border-b border-border px-5 py-2.5 max-[820px]:px-3">
           <button
             type="button"
             className="hidden flex-none rounded-[9px] border border-border px-2.5 py-1.5 text-[13px] max-[820px]:block"
@@ -374,23 +445,25 @@ export function ChatPage({
           >
             会话列表
           </button>
-          <div className="flex min-w-0 flex-1 items-baseline gap-3">
-            <h2 className="m-0 truncate text-sm font-semibold">
+          <div className="min-w-0 flex-1">
+            <h2 className="rb-display m-0 truncate text-[17px]">
               {pool ? pool.title || pool.alias : "选择左侧会话"}
             </h2>
-            <div className="flex-none text-xs text-muted max-[820px]:hidden">
-              {pool ? `${total} 条消息` : ""}
+            <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11.5px] text-muted">
+              {pool ? (
+                <>
+                  <code className="font-mono text-[10.5px] text-faint">{pool.alias}</code>
+                  <span>{kindLabel(pool.kind)}</span>
+                  <span>{total} 条消息</span>
+                  <span>最后 {pool.last_msg_local || "—"}</span>
+                </>
+              ) : null}
             </div>
           </div>
           {pool && sendReview && (pool.kind === "group" || pool.kind === "private") && (
-            <div className="flex flex-none items-center gap-2">
+            <div className="flex flex-none flex-wrap items-center justify-end gap-2">
               {isPrimary ? (
-                <span
-                  className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
-                  title="主聊天：任务汇报只发这里，且永远免审批"
-                >
-                  主聊天 · 免审批
-                </span>
+                <Chip tone="accent">主聊天 · 免审批</Chip>
               ) : (
                 <Segmented
                   value={effectiveReview ? "review" : "direct"}
@@ -407,12 +480,17 @@ export function ChatPage({
                 size="sm"
                 disabled={reviewSaving}
                 aria-pressed={isPrimary}
-                title={isPrimary
-                  ? "主聊天：任务汇报只发这里、永不审批；点此取消"
-                  : "设为主聊天：任务汇报只发这里，永不审批，并接收审批消息"}
+                title={
+                  isPrimary
+                    ? "主聊天：任务汇报只发这里、永不审批；点此取消"
+                    : "设为主聊天：任务汇报只发这里，永不审批，并接收审批消息"
+                }
                 onClick={() => void setPrimaryPool(!isPrimary)}
               >
                 {isPrimary ? "主聊天 ✓" : "设为主聊天"}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
+                {pool.archived ? "取消归档" : "归档"}
               </Button>
             </div>
           )}
@@ -421,7 +499,7 @@ export function ChatPage({
         {status.text && (
           <p
             className={cx(
-              "m-0 bg-bg px-7 py-2.5 text-[13px] max-[820px]:px-4",
+              "m-0 border-b border-border bg-bg px-5 py-2 text-[12.5px] max-[820px]:px-3",
               status.error ? "text-bad" : "text-muted",
             )}
             role={status.error ? "alert" : "status"}
@@ -432,7 +510,7 @@ export function ChatPage({
 
         <div
           ref={messagesBox}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[max(28px,calc((100%-800px)/2))] pb-9 pt-4 [scrollbar-gutter:stable] max-[820px]:px-4 max-[820px]:pb-6"
+          className="rb-thin-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-[max(24px,calc((100%-760px)/2))] pb-8 pt-3 [scrollbar-gutter:stable] max-[820px]:px-3.5 max-[820px]:pb-6"
           tabIndex={0}
           aria-label="消息记录"
         >
@@ -467,45 +545,55 @@ export function ChatPage({
                   return (
                     <Fragment key={m.seq}>
                       {showDay && (
-                        <div className="my-6 flex items-center gap-[18px] text-xs text-muted [font-variant-numeric:tabular-nums] before:h-px before:flex-1 before:bg-border before:content-[''] after:h-px after:flex-1 after:bg-border after:content-['']">
+                        <div className="my-4 flex items-center gap-3 text-[10.5px] tracking-[0.08em] text-faint">
+                          <span className="h-px flex-1 bg-border" />
                           {day}
+                          <span className="h-px flex-1 bg-border" />
                         </div>
                       )}
                       <article
                         className={cx(
-                          "mt-6 w-fit max-w-[88%] max-[820px]:max-w-[94%]",
-                          m.from_self && "ml-auto",
-                          grouped && "mt-2",
+                          "my-3 flex max-w-[min(680px,88%)] items-start gap-2.5 max-[820px]:max-w-[94%]",
+                          m.from_self && "ml-auto flex-row-reverse",
+                          grouped && "mt-1.5",
                         )}
                       >
-                        <div
+                        <span
                           className={cx(
-                            "mb-1.5 flex flex-wrap items-baseline gap-2 text-xs text-muted",
-                            grouped && "mb-0.5 text-[11px]",
+                            "grid size-6 flex-none place-items-center rounded-[7px] border text-[11px] font-bold",
+                            m.from_self
+                              ? "border-transparent bg-accent text-white"
+                              : "border-border bg-surface3 text-muted",
+                            grouped && "opacity-0",
                           )}
                         >
-                          <span
+                          {initial(m.sender || "机器人")}
+                        </span>
+                        <div className="min-w-0">
+                          <div
                             className={cx(
-                              "wrap-anywhere font-semibold text-text",
+                              "mb-1 flex flex-wrap items-baseline gap-2 text-[10.5px] text-faint",
+                              m.from_self && "justify-end",
                               grouped && "hidden",
                             )}
                           >
-                            {m.sender || (m.from_self ? "机器人" : "未知")}
-                          </span>
-                          {m.from_self && !grouped && (
-                            <span className="text-[11px]">机器人</span>
-                          )}
-                          <span className="ml-auto pl-3 [font-variant-numeric:tabular-nums]">
-                            {stamp.match(/\d{2}:\d{2}/)?.[0] || stamp}
-                          </span>
-                        </div>
-                        <div
-                          className={cx(
-                            "whitespace-pre-wrap wrap-anywhere rounded-[3px_12px_12px] bg-surface2 px-4 py-3 leading-[1.8] max-[820px]:px-3 max-[820px]:py-2.5",
-                            m.from_self && "rounded-[12px_3px_12px_12px] bg-self",
-                          )}
-                        >
-                          {m.text || ""}
+                            <b className="text-[11px] font-semibold text-muted">
+                              {m.sender || (m.from_self ? "机器人" : "未知")}
+                            </b>
+                            {m.from_self && <span>机器人</span>}
+                            <time className="tabular-nums">
+                              {stamp.match(/\d{2}:\d{2}/)?.[0] || stamp}
+                            </time>
+                          </div>
+                          <div
+                            className={cx(
+                              "whitespace-pre-wrap wrap-anywhere rounded-[3px_12px_12px_12px] border border-border bg-surface2 px-3 py-2.5 text-[13px] leading-[1.75]",
+                              m.from_self &&
+                                "rounded-[12px_3px_12px_12px] border-accent/20 bg-accent-soft",
+                            )}
+                          >
+                            {m.text || ""}
+                          </div>
                         </div>
                       </article>
                     </Fragment>
@@ -516,12 +604,12 @@ export function ChatPage({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-border px-7 py-2.5 text-xs text-muted max-[820px]:px-4">
+        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-2 text-[11px] text-muted max-[820px]:px-3">
           <span>只读 · 收发走已启用的 IM</span>
           <div className="flex items-center gap-1.5">
-            {pool && (
-              <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
-                {pool.archived ? "取消归档" : "归档"}
+            {canLoadOlder && (
+              <Button variant="ghost" size="sm" disabled={loadingOlder} onClick={() => void loadOlder()}>
+                加载更早
               </Button>
             )}
             <Button
@@ -536,6 +624,106 @@ export function ChatPage({
           </div>
         </div>
       </section>
+
+      <aside className="rb-thin-scroll min-h-0 overflow-y-auto border-l border-border bg-surface p-3.5 max-[1200px]:hidden">
+        <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+            会话信息
+          </div>
+          {pool ? (
+            <>
+              <dl className="rb-kv">
+                <dt>pool_id</dt>
+                <dd>
+                  <code className="font-mono text-[10.5px]">{pool.pool_id}</code>
+                </dd>
+                <dt>类型</dt>
+                <dd>{kindLabel(pool.kind)}</dd>
+                <dt>消息</dt>
+                <dd>{pool.total || 0} 条</dd>
+                <dt>最后</dt>
+                <dd>{pool.last_msg_local || "—"}</dd>
+              </dl>
+              <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted">
+                {pool.is_main
+                  ? "主聊天：任务汇报与审批消息都发这里，发送永不审批。"
+                  : "只读值班台：修改发送策略只影响机器人后续发送。"}
+              </p>
+            </>
+          ) : (
+            <p className="m-0 text-[12px] text-muted">选择左侧会话查看信息。</p>
+          )}
+        </div>
+
+        <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+            发送策略
+          </div>
+          {pool && sendReview ? (
+            isPrimary ? (
+              <Notice tone="accent">
+                主聊天永远免审批；任务汇报只发这里，审批消息也发这里。
+              </Notice>
+            ) : (
+              <>
+                <p className="m-0 mb-2 text-[11.5px] leading-relaxed text-muted">
+                  这个会话当前：
+                  <b className="text-text">{effectiveReview ? "需审批" : "直接发"}</b>
+                  。改策略只影响后续机器人发送。
+                </p>
+                <Segmented
+                  value={effectiveReview ? "review" : "direct"}
+                  options={[
+                    { value: "direct", label: "直接发" },
+                    { value: "review", label: "需审批" },
+                  ]}
+                  onChange={(value) => void changePoolReview(value)}
+                  label="发送审批"
+                />
+              </>
+            )
+          ) : (
+            <p className="m-0 text-[11.5px] text-muted">发送审核接口不可用。</p>
+          )}
+          {pool && sendReview ? (
+            <>
+              <div className="my-3 h-px bg-border" />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full"
+                disabled={reviewSaving}
+                onClick={() => void setPrimaryPool(!isPrimary)}
+              >
+                {isPrimary ? "取消主聊天" : "设为主聊天"}
+              </Button>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-[11px] border border-border bg-surface p-3">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+            最近消息
+          </div>
+          {recentMessages.length ? (
+            <ol className="m-0 grid list-none gap-2 p-0 text-[11px]">
+              {recentMessages.map((m) => (
+                <li key={m.seq} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2 text-muted">
+                  <time className="font-mono text-[10px] text-faint tabular-nums">
+                    {(m.local || formatTs(m.ts)).match(/\d{2}:\d{2}/)?.[0] || "—"}
+                  </time>
+                  <span className="min-w-0">
+                    <b className="text-text">{m.sender || "未知"}</b>
+                    <span className="mt-0.5 block truncate">{m.text || ""}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="m-0 text-[11.5px] text-muted">还没有消息。</p>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

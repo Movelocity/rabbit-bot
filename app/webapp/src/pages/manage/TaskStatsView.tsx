@@ -1,8 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { friendlyError, money, num } from "../../lib/format.ts";
 import type { TaskStats } from "../../lib/types.ts";
-import { Empty, Field, Select, StatusText } from "../../components/ui.tsx";
+import {
+  Empty,
+  Field,
+  Kpi,
+  KpiGrid,
+  Select,
+  StatusText,
+} from "../../components/ui.tsx";
 
 type Range = "7d" | "30d" | "90d" | "all";
 
@@ -73,6 +80,19 @@ export function TaskStatsView({ reloadSignal }: { reloadSignal: number }) {
       ]
     : [];
 
+  const distribution = useMemo(() => {
+    const labels = ["< 1 分", "1–5 分", "5–15 分", "15–30 分", "> 30 分"];
+    const values = labels.map(() => 0);
+    for (const task of stats?.tasks ?? []) {
+      const minutes = (Number(task.duration_ms) || 0) / 60_000;
+      const index = minutes < 1 ? 0 : minutes < 5 ? 1 : minutes < 15 ? 2 : minutes < 30 ? 3 : 4;
+      values[index]++;
+    }
+    return labels.map((label, i) => ({ label, value: values[i] }));
+  }, [stats]);
+
+  const distributionMax = distribution.reduce((max, row) => Math.max(max, row.value), 0);
+
   return (
     <>
       <div className="my-3 flex flex-wrap items-end gap-3">
@@ -97,17 +117,41 @@ export function TaskStatsView({ reloadSignal }: { reloadSignal: number }) {
         )}
       </div>
 
-      <div className="my-3 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-        {cards.map(([label, value]) => (
-          <div
+      <KpiGrid>
+        {cards.map(([label, value], index) => (
+          <Kpi
             key={label}
-            className="flex flex-col gap-1 rounded-[14px] border border-border bg-surface px-3.5 py-3 shadow-[var(--rb-shadow)]"
-          >
-            <span className="text-xs text-muted">{label}</span>
-            <strong className="text-xl tabular-nums">{value}</strong>
-          </div>
+            label={label}
+            value={value}
+            tone={index === 1 ? "accent" : "default"}
+          />
         ))}
-      </div>
+      </KpiGrid>
+
+      {stats && stats.tasks.length > 0 ? (
+        <div className="mb-3 rounded-[14px] border border-border bg-surface p-3.5">
+          <div className="text-[13px] font-semibold">耗时分布</div>
+          <div className="mt-2.5 grid gap-2">
+            {distribution.map((row) => (
+              <div
+                key={row.label}
+                className="grid grid-cols-[64px_minmax(0,1fr)_28px] items-center gap-2 text-[11.5px]"
+              >
+                <span className="text-muted">{row.label}</span>
+                <span className="h-2 overflow-hidden rounded bg-surface2">
+                  <i
+                    className="block h-full rounded bg-accent"
+                    style={{
+                      width: `${distributionMax ? (row.value / distributionMax) * 100 : 0}%`,
+                    }}
+                  />
+                </span>
+                <span className="text-right tabular-nums">{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {stats && stats.tasks.length > 0 ? (
         <div className="overflow-x-auto rounded-[14px] border border-border bg-surface">

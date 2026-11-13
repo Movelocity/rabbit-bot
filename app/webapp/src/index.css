@@ -1,34 +1,58 @@
 @import "tailwindcss";
 
 :root {
-  --rb-bg: #f4f5f7;
+  --rb-bg: #ffffff;
   --rb-surface: #ffffff;
-  --rb-surface-2: #eceef2;
-  --rb-border: #d9dde5;
-  --rb-text: #171a20;
-  --rb-muted: #6b7280;
-  --rb-accent: #2563eb;
-  --rb-accent-soft: #dbeafe;
-  --rb-ok: #16a34a;
-  --rb-bad: #dc2626;
-  --rb-self: #e8f0ff;
-  --rb-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.05);
+  --rb-surface-2: #f4f7f5;
+  --rb-surface-3: #e9efec;
+  --rb-border: #e1e8e4;
+  --rb-line-strong: #cbd8d1;
+  --rb-text: #14211c;
+  --rb-muted: #5f746b;
+  --rb-faint: #84978e;
+  --rb-accent: #0b6f60;
+  --rb-accent-ink: #064e44;
+  --rb-accent-soft: #e2f3ee;
+  --rb-ok: #2f7d54;
+  --rb-ok-soft: #e3f1e9;
+  --rb-bad: #b3403a;
+  --rb-rose: #b3403a;
+  --rb-rose-soft: #fae9e6;
+  --rb-amber: #96610f;
+  --rb-amber-soft: #f8efd9;
+  --rb-clay: #a65a33;
+  --rb-clay-soft: #f7e9df;
+  --rb-self: #e2f3ee;
+  --rb-shadow: 0 1px 2px rgba(20, 33, 28, 0.05), 0 10px 30px -24px rgba(20, 33, 28, 0.4);
+  --rb-serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --rb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --rb-bg: #0f1115;
-    --rb-surface: #171a21;
-    --rb-surface-2: #20242d;
-    --rb-border: #2c313b;
-    --rb-text: #e8eaed;
-    --rb-muted: #9aa1ac;
-    --rb-accent: #60a5fa;
-    --rb-accent-soft: #1e3a5f;
-    --rb-ok: #22c55e;
-    --rb-bad: #f87171;
-    --rb-self: #1b2a44;
-    --rb-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+    --rb-bg: #101613;
+    --rb-surface: #161e1a;
+    --rb-surface-2: #1d2722;
+    --rb-surface-3: #25322b;
+    --rb-border: #2d3b34;
+    --rb-line-strong: #3d4e45;
+    --rb-text: #e8efeb;
+    --rb-muted: #9db0a6;
+    --rb-faint: #7a8f84;
+    --rb-accent: #5fc9b6;
+    --rb-accent-ink: #8ee0d1;
+    --rb-accent-soft: #173c35;
+    --rb-ok: #66c48d;
+    --rb-ok-soft: #1b3527;
+    --rb-bad: #f08a82;
+    --rb-rose: #f08a82;
+    --rb-rose-soft: #3d2523;
+    --rb-amber: #e0b15e;
+    --rb-amber-soft: #3a311f;
+    --rb-clay: #e0a07d;
+    --rb-clay-soft: #3a2a22;
+    --rb-self: #173c35;
+    --rb-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px -24px rgba(0, 0, 0, 0.8);
   }
 }
 
@@ -36,16 +60,28 @@
   --color-bg: var(--rb-bg);
   --color-surface: var(--rb-surface);
   --color-surface2: var(--rb-surface-2);
+  --color-surface3: var(--rb-surface-3);
   --color-border: var(--rb-border);
+  --color-line-strong: var(--rb-line-strong);
   --color-text: var(--rb-text);
   --color-muted: var(--rb-muted);
+  --color-faint: var(--rb-faint);
   --color-accent: var(--rb-accent);
+  --color-accent-ink: var(--rb-accent-ink);
   --color-accent-soft: var(--rb-accent-soft);
   --color-ok: var(--rb-ok);
+  --color-ok-soft: var(--rb-ok-soft);
   --color-bad: var(--rb-bad);
+  --color-rose: var(--rb-rose);
+  --color-rose-soft: var(--rb-rose-soft);
+  --color-amber: var(--rb-amber);
+  --color-amber-soft: var(--rb-amber-soft);
+  --color-clay: var(--rb-clay);
+  --color-clay-soft: var(--rb-clay-soft);
   --color-self: var(--rb-self);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: var(--rb-mono);
 }
 
 @layer base {
@@ -90,6 +126,34 @@
 
   ::selection {
     background: var(--rb-accent-soft);
+  }
+}
+
+@layer components {
+  .rb-display {
+    font-family: var(--rb-serif);
+    letter-spacing: 0.01em;
+  }
+
+  .rb-kv {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 6px 8px;
+    font-size: 11.5px;
+  }
+
+  .rb-kv dt {
+    color: var(--rb-muted);
+  }
+
+  .rb-kv dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .rb-thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rb-line-strong) transparent;
   }
 }
 
@@ -317,6 +381,6 @@
 }
 
 @keyframes rb-drawer-in {
-  from { transform: translateX(-100%); }
+  from { transform: translateX(100%); }
   to { transform: translateX(0); }
 }

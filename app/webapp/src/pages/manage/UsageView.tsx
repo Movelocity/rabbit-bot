@@ -1,8 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { formatTs, friendlyError, money, num } from "../../lib/format.ts";
 import type { UsageCall, UsagePoint, UsageStats, UsageSummary } from "../../lib/types.ts";
-import { Empty, Field, Select, StatusText } from "../../components/ui.tsx";
+import {
+  Empty,
+  Field,
+  Kpi,
+  KpiGrid,
+  Select,
+  StatusText,
+  TableWrap,
+} from "../../components/ui.tsx";
 
 type Bucket = "hour" | "day";
 type Range = "24h" | "7d" | "30d" | "90d";
@@ -199,6 +207,19 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
       ]
     : [];
 
+  const modelRows = useMemo(() => {
+    const map = new Map<string, { model: string; tokens: number; calls: number; cost: number }>();
+    for (const call of calls) {
+      const key = call.model || "—";
+      const row = map.get(key) ?? { model: key, tokens: 0, calls: 0, cost: 0 };
+      row.tokens += Number(call.totalTokens) || 0;
+      row.calls += Number(call.calls) || 0;
+      row.cost += Number(call.costUsd) || 0;
+      map.set(key, row);
+    }
+    return [...map.values()].sort((a, b) => b.tokens - a.tokens);
+  }, [calls]);
+
   return (
     <>
       <div className="my-3 flex flex-wrap items-end gap-3">
@@ -227,19 +248,60 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
         </Field>
       </div>
 
-      <div className="my-3 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-        {cards.map(([label, value]) => (
-          <div
+      <KpiGrid>
+        {cards.map(([label, value], index) => (
+          <Kpi
             key={label}
-            className="flex flex-col gap-1 rounded-[14px] border border-border bg-surface px-3.5 py-3 shadow-[var(--rb-shadow)]"
-          >
-            <span className="text-xs text-muted">{label}</span>
-            <strong className="text-xl tabular-nums">{value}</strong>
-          </div>
+            label={label}
+            value={value}
+            tone={index === 0 ? "accent" : "default"}
+            note={index === 0 ? "当前区间" : undefined}
+          />
         ))}
-      </div>
+      </KpiGrid>
 
       <UsageChart series={series} />
+
+      {modelRows.length ? (
+        <div className="mb-3">
+          <div className="mb-1.5 text-[13px] font-semibold">按模型</div>
+          <TableWrap>
+            <table className="w-full border-collapse text-[12.5px]">
+              <thead>
+                <tr>
+                  {["模型", "token", "调用", "费用"].map((label) => (
+                    <th
+                      key={label}
+                      className="whitespace-nowrap border-b border-border bg-surface2 px-2.5 py-2 text-left text-[10.5px] font-semibold uppercase tracking-[0.05em] text-muted"
+                    >
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {modelRows.map((row) => (
+                  <tr key={row.model} className="hover:bg-accent-soft/30">
+                    <td className="whitespace-nowrap border-b border-border px-2.5 py-2 font-mono text-[11.5px]">
+                      {row.model}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
+                      {num(row.tokens)}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
+                      {num(row.calls)}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
+                      {money(row.cost)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableWrap>
+        </div>
+      ) : null}
+
       <CallsTable calls={calls} />
       <StatusText text={status.text} error={status.error} />
     </>
