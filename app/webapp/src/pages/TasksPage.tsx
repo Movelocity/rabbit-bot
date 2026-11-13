@@ -7,7 +7,7 @@ import {
   friendlyError,
   noteSummary,
 } from "../lib/format.ts";
-import type { TaskSnapshot, TaskView } from "../lib/types.ts";
+import type { ExecutorInfo, TaskSnapshot, TaskView } from "../lib/types.ts";
 import {
   Badge,
   Button,
@@ -219,6 +219,7 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [executorFilter, setExecutorFilter] = useState("");
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -273,6 +274,18 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
   }, [loadTasks]);
 
   useEffect(() => {
+    let alive = true;
+    void request<ExecutorInfo[]>("/v1/executors")
+      .then((list) => {
+        if (alive) setExecutors(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [request]);
+
+  useEffect(() => {
     if (reloadSignal === 0) return;
     void loadTasks(false);
   }, [reloadSignal, loadTasks]);
@@ -323,8 +336,9 @@ export function TasksPage({ reloadSignal }: { reloadSignal: number }) {
             }}
             options={[
               { value: "", label: "全部" },
-              { value: "opencode", label: "opencode" },
-              { value: "mimo", label: "mimo" },
+              ...(executors.length
+                ? executors.map((e) => ({ value: e.name, label: e.available ? e.name : `${e.name}（未安装）` }))
+                : [{ value: "opencode", label: "opencode" }, { value: "mimo", label: "mimo" }]),
             ]}
           />
         </Field>

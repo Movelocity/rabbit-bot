@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { friendlyError } from "../../lib/format.ts";
 import type {
-  MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
+  ExecutorInfo, MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
 } from "../../lib/types.ts";
-import { Button, Card, CardBody, CardHead, CardTitle, Field, Input, Select, StatusText } from "../../components/ui.tsx";
+import { Badge, Button, Card, CardBody, CardHead, CardTitle, Field, Input, Select, StatusText } from "../../components/ui.tsx";
 
 const DEFAULT_MEMORY_REVIEW: MemoryReviewSettings = {
   enabled: false,
@@ -45,6 +45,9 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   const [sendReviewReady, setSendReviewReady] = useState(true);
   const [sendReviewStatus, setSendReviewStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [sendReviewSaving, setSendReviewSaving] = useState(false);
+
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
+  const [executorsStatus, setExecutorsStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
 
   const apply = useCallback((s: SchedulerSettings) => {
     setPrivateSec(String(Math.round(Number(s.privateWakeMs) / 1000)));
@@ -94,6 +97,25 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     if (reloadSignal === 0) return;
     void load();
   }, [reloadSignal, load]);
+
+  const loadExecutors = useCallback(async () => {
+    setExecutorsStatus({ text: "探测中…" });
+    try {
+      setExecutors(await request<ExecutorInfo[]>("/v1/executors"));
+      setExecutorsStatus({ text: "" });
+    } catch (e) {
+      setExecutorsStatus({ text: `探测失败：${friendlyError(e)}`, error: true });
+    }
+  }, [request]);
+
+  useEffect(() => {
+    void loadExecutors();
+  }, [loadExecutors]);
+
+  useEffect(() => {
+    if (reloadSignal === 0) return;
+    void loadExecutors();
+  }, [reloadSignal, loadExecutors]);
 
   const save = async () => {
     const fields: [keyof SchedulerSettings, string, string][] = [
@@ -383,6 +405,35 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
             </Button>
           </div>
           <StatusText text={sendReviewStatus.text} error={sendReviewStatus.error} />
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHead>
+          <CardTitle>本地 CLI</CardTitle>
+        </CardHead>
+        <CardBody>
+          <p className="mb-3 text-sm text-muted">
+            调度器启动任务时直接调用本机命令。这里只做探测，不能在 Web 安装或切换默认执行器。
+          </p>
+          <ul className="grid gap-2 text-sm">
+            {executors.map((e) => (
+              <li key={e.name} className="flex flex-wrap items-baseline gap-2">
+                <code>{e.name}</code>
+                <Badge variant={e.available ? "done" : "closed"}>{e.available ? "可用" : "未安装"}</Badge>
+                <span className="text-muted">{e.bin}</span>
+                {e.version && <span className="text-muted">{e.version}</span>}
+                {!e.available && e.error && <span className="text-bad">{e.error}</span>}
+              </li>
+            ))}
+            {!executors.length && <li className="text-muted">没有探测结果。</li>}
+          </ul>
+          <div className="mt-3">
+            <Button variant="ghost" size="sm" onClick={() => void loadExecutors()}>
+              重新探测
+            </Button>
+          </div>
+          <StatusText text={executorsStatus.text} error={executorsStatus.error} />
         </CardBody>
       </Card>
     </>

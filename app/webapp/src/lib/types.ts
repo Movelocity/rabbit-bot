@@ -282,6 +282,14 @@ export interface TaskStats {
   tasks: TaskStatsRow[];
 }
 
+export interface ExecutorInfo {
+  name: string;
+  bin: string;
+  available: boolean;
+  version: string;
+  error: string;
+}
+
 export interface Skill {
   name: string;
   description: string;

@@ -346,7 +346,7 @@ function executorArgs(task: Task, prompt: string, resume: boolean): { bin: strin
   const executor: Executor = task.executor === "mimo" ? "mimo" : "opencode";
   const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []), "--dir", task.work_dir,
     "--title", sessionTitle(task), "--format", "json"];
-  if (executor === "opencode") args.push("--dangerously-skip-permissions");
+  args.push("--dangerously-skip-permissions");
   const model = String(task.model ?? "").trim();
   if (model) args.push(executor === "mimo" ? "--model" : "-m", model);
   return { bin: executor === "mimo" ? MIMO_BIN : "opencode", args };

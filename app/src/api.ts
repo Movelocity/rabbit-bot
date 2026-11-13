@@ -42,6 +42,7 @@ import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listOutputs, listOutputTree, readOutput } from "./ops/outputs.ts";
 import { listSkills } from "./ops/skills.ts";
+import { listExecutors } from "./ops/executors.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
@@ -959,6 +960,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             })));
           }
           throw new HttpError(404, "用法：GET /v1/skills");
+        }
+        case "executors": {
+          if (parts.length === 2 && method === "GET") return reply(200, listExecutors());
+          throw new HttpError(404, "用法：GET /v1/executors");
         }
         case "pm": {
           if (parts.length === 3 && parts[2] === "audit" && method === "GET") {

@@ -189,6 +189,7 @@ test("startTask：model 分别走 -m / --model", async () => {
   const argv2: string[] = JSON.parse(fs.readFileSync(out2, "utf8")).argv;
   assert.equal(argv2[argv2.indexOf("--model") + 1], "provider/model-b");
   assert.equal(argv2.includes("-m"), false);
+  assert.ok(argv2.includes("--dangerously-skip-permissions"), `mimo 启动参数缺无审批 flag：${argv2.join(" ")}`);
   store.close();
   store2.close();
 });
