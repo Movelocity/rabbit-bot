@@ -82,7 +82,7 @@ interface Pending {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-const DEFAULT_TIMEOUT_MS = 600_000;
+const DEFAULT_TIMEOUT_MS = 86_400_000;
 const DEFAULT_PREVIEW_CHARS = 800;
 /** 同时待审上限：agent 一次刷太多预览会淹审批聊天，超过就拒掉新的 */
 const MAX_PENDING = 20;

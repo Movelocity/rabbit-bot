@@ -383,7 +383,7 @@ export function validateConfig(cfg: Config): void {
       ? (cfg.sendReview.ownerIds ?? [])
       : (cfg.approval?.ownerIds ?? []);
     if (!owners.length) throw new Error("config: sendReview.ownerIds 不能为空（sendReview.enabled=true 时）");
-    pos(cfg.sendReview.timeoutMs ?? cfg.approval?.timeoutMs ?? 600000, "sendReview.timeoutMs");
+    pos(cfg.sendReview.timeoutMs ?? cfg.approval?.timeoutMs ?? 86400000, "sendReview.timeoutMs");
     const max = cfg.sendReview.previewMaxChars;
     if (max !== undefined && !(Number.isInteger(max) && max > 0)) {
       throw new Error("config: sendReview.previewMaxChars 必须是正整数");

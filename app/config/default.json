@@ -190,7 +190,7 @@
     "platform": "",
     "roomId": "",
     "ownerIds": [],
-    "timeoutMs": 600000,
+    "timeoutMs": 86400000,
     "notify": true
   }
 }
