@@ -87,8 +87,10 @@ export function UsersView({ reloadSignal }: { reloadSignal: number }) {
     setStatus({ text: "加载中…" });
     try {
       const data = await request<User[]>("/v1/users");
-      setRows(data);
-      setStatus({ text: data.length ? "" : "还没有识别到用户。" });
+      // 任务执行器自动生成的 CLI 用户（platform=task）不在这里显示，避免干扰别名编辑
+      const visible = data.filter((u) => !u.identities.some((i) => i.platform === "task"));
+      setRows(visible);
+      setStatus({ text: visible.length ? "" : "还没有识别到用户。" });
     } catch (e) {
       setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
     }

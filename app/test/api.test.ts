@@ -10,6 +10,7 @@ import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
 import { importBusinessMap } from "../src/ops/business-map.ts";
+import { saveModelSettings } from "../src/ops/model-settings.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-api-"));
 const cfg = loadConfig({
@@ -37,7 +38,14 @@ test.before(async () => {
   fs.mkdirSync(path.join(dir, "sandbox", "skills", "demo"), { recursive: true });
   fs.writeFileSync(path.join(dir, "sandbox", "skills", "demo", "SKILL.md"), "# demo\n");
   fs.writeFileSync(path.join(dir, "media", "a.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-  server = await startApiServer({ cfg, store, log, token });
+  server = await startApiServer({
+    cfg, store, log, token,
+    switchModel: async (provider, model) => saveModelSettings(cfg, { provider, model }),
+    listModels: async () => [
+      { provider: "deepseek", model: "deepseek-flash", name: "DeepSeek Flash" },
+      { provider: "openrouter", model: "gemini-4-argon", name: "Gemini 4 Argon" },
+    ],
+  });
   const addr = server!.address() as AddressInfo;
   base = `http://127.0.0.1:${addr.port}`;
 });
@@ -366,6 +374,19 @@ test("任务产出：列目录、读 markdown、越界拒绝", async () => {
   fs.writeFileSync(path.join(out, "summary.md"), "# 标题\n\n正文\n");
   fs.writeFileSync(path.join(out, "rows.csv"), "name,value\na,1\n");
   fs.writeFileSync(path.join(out, "image.bin"), Buffer.from([0x00, 0x01, 0x02]));
+  fs.writeFileSync(path.join(out, "image.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  // 明确时间戳：产出按时间倒序，最新在最上面
+  const now = Date.now() / 1000;
+  const touch = (name: string, ageSec: number) => {
+    const at = new Date(now - ageSec);
+    fs.utimesSync(path.join(out, name), at, at);
+  };
+  touch("summary.md", 0);
+  touch("image.png", 10);
+  touch("rows.csv", 20);
+  touch("image.bin", 30);
+  const ordered = ["summary.md", "image.png", "rows.csv", "image.bin"];
 
   const root = await call("/v1/outputs");
   assert.equal(root.status, 200, JSON.stringify(root.body));
@@ -373,7 +394,7 @@ test("任务产出：列目录、读 markdown、越界拒绝", async () => {
 
   const nested = await call(`/v1/outputs?path=${encodeURIComponent("task-7/报告")}`);
   assert.equal(nested.status, 200, JSON.stringify(nested.body));
-  assert.deepEqual(nested.body.data.map((e: any) => e.name), ["image.bin", "rows.csv", "summary.md"]);
+  assert.deepEqual(nested.body.data.map((e: any) => e.name), ordered);
 
   const tree = await call("/v1/outputs/tree");
   assert.equal(tree.status, 200, JSON.stringify(tree.body));
@@ -382,7 +403,7 @@ test("任务产出：列目录、读 markdown、越界拒绝", async () => {
   assert.deepEqual(task7.children.map((e: any) => e.name), ["报告"]);
   assert.deepEqual(
     task7.children[0].children.map((e: any) => e.name),
-    ["image.bin", "rows.csv", "summary.md"],
+    ordered,
   );
 
   const md = await call(`/v1/outputs/file?path=${encodeURIComponent("task-7/报告/summary.md")}`);
@@ -394,8 +415,68 @@ test("任务产出：列目录、读 markdown、越界拒绝", async () => {
   assert.equal(bin.body.data.binary, true);
   assert.equal(bin.body.data.content, "");
 
+  const raw = await fetch(
+    `${base}/v1/outputs/raw?path=${encodeURIComponent("task-7/报告/image.png")}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  assert.equal(raw.status, 200);
+  assert.equal(raw.headers.get("content-type"), "image/png");
+  assert.equal((await raw.arrayBuffer()).byteLength, 4);
+
   const escape = await call(`/v1/outputs/file?path=${encodeURIComponent("../../etc/passwd")}`);
   assert.equal(escape.status, 400);
+  const rawEscape = await call(`/v1/outputs/raw?path=${encodeURIComponent("../../etc/passwd")}`);
+  assert.equal(rawEscape.status, 400);
+});
+
+test("模型：列清单、保存备用模型、切换当前模型", async () => {
+  const got = await call("/v1/llm/models");
+  assert.equal(got.status, 200, JSON.stringify(got.body));
+  assert.equal(got.body.data.provider, cfg.llm.provider);
+  assert.equal(typeof got.body.data.model, "string");
+  assert.ok(Array.isArray(got.body.data.choices));
+  assert.deepEqual(got.body.data.available.map((m: any) => `${m.provider}/${m.model}`), [
+    "deepseek/deepseek-flash",
+    "openrouter/gemini-4-argon",
+  ]);
+
+  const put = await call("/v1/llm/models", {
+    method: "PUT",
+    body: JSON.stringify({
+      choices: [
+        { provider: "deepseek", model: "deepseek-flash" },
+        { provider: "openrouter", model: "gemini-4-argon", label: "备用" },
+      ],
+    }),
+  });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.equal(put.body.data.choices.length, 2);
+
+  const switched = await call("/v1/llm/switch", {
+    method: "POST",
+    body: JSON.stringify({ provider: "openrouter", model: "gemini-4-argon" }),
+  });
+  assert.equal(switched.status, 200, JSON.stringify(switched.body));
+  assert.equal(switched.body.data.provider, "openrouter");
+  assert.equal(switched.body.data.model, "gemini-4-argon");
+
+  const bad = await call("/v1/llm/switch", {
+    method: "POST",
+    body: JSON.stringify({ provider: "openrouter" }),
+  });
+  assert.equal(bad.status, 400);
+});
+
+test("工作记忆：只读读取 memory.md", async () => {
+  const file = path.join(dir, "runtime", "memory.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "- 正在改产出目录\n");
+  const r = await call("/v1/working-memory");
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.content, "- 正在改产出目录");
+  assert.equal(r.body.data.chars, 9);
+  assert.equal(r.body.data.path, file);
+  fs.rmSync(file, { force: true });
 });
 
 test("图片：列表与原始字节，越界拒绝", async () => {

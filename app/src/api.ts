@@ -11,7 +11,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { APP_ROOT, type Config } from "./config.ts";
+import { APP_ROOT, type Config, type ModelChoice } from "./config.ts";
 import type { Store } from "./core/db.ts";
 import type { Logger } from "./core/logger.ts";
 import { archivePool, listPools, readPool, searchPool } from "./ops/pools.ts";
@@ -40,7 +40,11 @@ import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, w
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
-import { listOutputs, listOutputTree, readOutput } from "./ops/outputs.ts";
+import { listOutputs, listOutputTree, readOutput, readOutputRaw } from "./ops/outputs.ts";
+import { readWorkingMemory } from "./core/working-memory.ts";
+import {
+  effectiveModelSettings, normalizeChoice, saveModelSettings, MAX_MODEL_CHOICES, type ModelSettings,
+} from "./ops/model-settings.ts";
 import { listSkills } from "./ops/skills.ts";
 import { listExecutors } from "./ops/executors.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
@@ -82,6 +86,10 @@ export interface ApiDeps {
   onTaskDecided?: (taskId: number) => void;
   /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；日程变更后叫它马上重查 */
   scheduler?: Pick<Scheduler, "updateConfig"> & Partial<Pick<Scheduler, "notifyScheduleChange">>;
+  /** 管理台换主模型：由 App 负责校验凭据、持久化并重建会话 */
+  switchModel?: (provider: string, model: string) => Promise<ModelSettings>;
+  /** 管理台可选模型：返回当前有凭据的模型 */
+  listModels?: () => Promise<{ provider: string; model: string; name: string }[]>;
 }
 
 const WEB_ROOT = path.join(APP_ROOT, "web");
@@ -292,6 +300,37 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, log);
           }
           throw new HttpError(404, "用法：GET /v1/llm-logs?limit=30、GET /v1/llm-logs/:id?limit=40&before=N");
+        }
+        case "llm": {
+          if (parts.length === 3 && parts[2] === "models" && method === "GET") {
+            const settings = effectiveModelSettings(d.cfg);
+            let available: { provider: string; model: string; name: string }[] = [];
+            let availableError: string | undefined;
+            if (d.listModels) {
+              try { available = await d.listModels(); }
+              catch (e) { availableError = (e as Error).message; }
+            }
+            return reply(200, { ...settings, available, ...(availableError ? { available_error: availableError } : {}) });
+          }
+          if (parts.length === 3 && parts[2] === "models" && method === "PUT") {
+            if (!Array.isArray(body.choices)) throw new HttpError(400, "choices 要是数组");
+            if (body.choices.length > MAX_MODEL_CHOICES) {
+              throw new HttpError(400, `最多只能配置 ${MAX_MODEL_CHOICES} 个模型`);
+            }
+            const choices = (body.choices as unknown[]).map(normalizeChoice);
+            if (choices.some((x) => !x)) throw new HttpError(400, "每个模型都要有 provider 和 model");
+            return reply(200, saveModelSettings(d.cfg, {
+              choices: choices.filter((x): x is ModelChoice => !!x),
+            }));
+          }
+          if (parts.length === 3 && parts[2] === "switch" && method === "POST") {
+            if (!d.switchModel) throw new HttpError(400, "当前进程不支持切换模型");
+            const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+            const model = typeof body.model === "string" ? body.model.trim() : "";
+            if (!provider || !model) throw new HttpError(400, "缺少 provider / model");
+            return reply(200, await d.switchModel(provider, model));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/llm/models、POST /v1/llm/switch {provider, model}");
         }
         case "users": {
           if (parts.length === 2 && method === "GET") return reply(200, d.store.listUsers());
@@ -1057,7 +1096,22 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 3 && parts[2] === "file" && method === "GET") {
             return reply(200, readOutput(d.cfg, url.searchParams.get("path") ?? ""));
           }
-          throw new HttpError(404, "用法：GET /v1/outputs?path=、GET /v1/outputs/tree、GET /v1/outputs/file?path=");
+          if (parts.length === 3 && parts[2] === "raw" && method === "GET") {
+            const raw = readOutputRaw(d.cfg, url.searchParams.get("path") ?? "");
+            res.writeHead(200, {
+              "content-type": raw.mime,
+              "content-length": raw.buffer.length,
+              "cache-control": "private, max-age=60",
+            });
+            return res.end(raw.buffer);
+          }
+          throw new HttpError(404, "用法：GET /v1/outputs?path=、GET /v1/outputs/tree、GET /v1/outputs/file?path=、GET /v1/outputs/raw?path=");
+        }
+        case "working-memory": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, readWorkingMemory(d.cfg));
+          }
+          throw new HttpError(404, "用法：GET /v1/working-memory");
         }
         case "sandbox": {
           // 只暴露文件区；`sb run` 不给 —— 技能脚本本来就在 shell 里

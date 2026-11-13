@@ -5,6 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+export interface ModelChoice {
+  provider: string;
+  model: string;
+  label?: string;
+}
+
 export interface EmojiTarget {
   /** 飞书表情包 file_key（发 sticker 消息） */
   sticker?: string;
@@ -95,7 +101,16 @@ export interface Config {
     /** 群聊池的额外收紧：群里主动开口要更克制，覆盖上面的同名字段 */
     group?: Partial<GateConfig>;
   };
-  llm: { provider: string; model: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high"; maxRetries: number; /** 单次请求输出上限；不设则用模型自带（gemini-4-argon 自带 943k，OpenRouter 会按它算钱） */ maxTokens?: number };
+  llm: {
+    provider: string;
+    model: string;
+    /** 管理台可手动切换的模型清单；留空时至少包含当前模型 */
+    models?: ModelChoice[];
+    thinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
+    maxRetries: number;
+    /** 单次请求输出上限；不设则用模型自带（gemini-4-argon 自带 943k，OpenRouter 会按它算钱） */
+    maxTokens?: number;
+  };
   adapters: {
     feishu: { enabled: boolean; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions: boolean; logRawEmoji: boolean };
     /** 自建 Matrix（Continuwuity）。token 走环境变量 MATRIX_TOKEN，不进配置文件 */

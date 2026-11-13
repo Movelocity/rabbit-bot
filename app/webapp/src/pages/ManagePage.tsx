@@ -8,27 +8,33 @@ import { TaskStatsView } from "./manage/TaskStatsView.tsx";
 import { SkillsView } from "./manage/SkillsView.tsx";
 import { SchedulesView } from "./manage/SchedulesView.tsx";
 import { LlmLogsView } from "./manage/LlmLogsView.tsx";
+import { ModelsView } from "./manage/ModelsView.tsx";
+import { WorkingMemoryView } from "./manage/WorkingMemoryView.tsx";
 
 const LABELS: Record<ManageView, string> = {
   usage: "用量",
   "task-stats": "任务统计",
   "llm-logs": "模型日志",
+  models: "模型",
   persona: "提示词编辑",
   users: "用户",
   schedules: "日程",
   settings: "调度",
   skills: "技能",
+  "work-memory": "工作记忆",
 };
 
 const HINTS: Record<ManageView, string> = {
   usage: "按模型和调用看 token 与费用；区间由前端筛选。",
   "task-stats": "已完成任务的耗时、token 与费用。",
   "llm-logs": "按会话看实际请求 / 响应；长正文先折叠。",
+  models: "配置多个备用模型；手动切换后下一轮唤醒用新模型重建会话。",
   persona: "人设与提示词；保存后下一轮生效。",
-  users: "别名优先于通讯录名字；保存后回填。",
+  users: "别名优先于通讯录名字；保存后回填。任务 CLI 用户已隐藏。",
   schedules: "cron 重复 / N 分钟后一次；到点写入日程池。",
   settings: "单位：秒；保存后立即生效。",
   skills: "只读：只做发现，不在管理台改技能内容。",
+  "work-memory": "只读：跨会话共享的 memory.md；写入仍走 Agent 的 working_memory 工具。",
 };
 
 export function ManagePage({
@@ -69,11 +75,13 @@ export function ManagePage({
         {view === "usage" && <UsageView reloadSignal={reloadSignal} />}
         {view === "task-stats" && <TaskStatsView reloadSignal={reloadSignal} />}
         {view === "llm-logs" && <LlmLogsView reloadSignal={reloadSignal} />}
+        {view === "models" && <ModelsView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
         {view === "schedules" && <SchedulesView reloadSignal={reloadSignal} />}
         {view === "settings" && <SettingsView reloadSignal={reloadSignal} />}
         {view === "skills" && <SkillsView reloadSignal={reloadSignal} />}
+        {view === "work-memory" && <WorkingMemoryView reloadSignal={reloadSignal} />}
       </div>
     </div>
   );

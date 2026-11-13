@@ -64,6 +64,8 @@ export interface AgentEngine {
   reflect(prompt: string, limits: RunLimits, systemPrompt: string): Promise<RunResult>;
   /** 后台记忆梳理：独立临时会话，只给传入的工具（memory），用完即弃。 */
   review(prompt: string, limits: RunLimits, tools: ToolDefinition[], systemPrompt: string): Promise<RunResult>;
+  /** 运行中换模型：丢掉现有会话，下一轮用新模型重建。 */
+  switchModel(model: Model<any>, modelRuntime: ModelRuntime): void;
   dispose(): Promise<void>;
 }
 
@@ -347,6 +349,19 @@ export class PiEngine implements AgentEngine {
     this.freshNext = true;
     this.seenPools.clear();
     return { id, tokens: r.tokens, llmCalls: r.llmCalls };
+  }
+
+  switchModel(model: Model<any>, modelRuntime: ModelRuntime): void {
+    const previous = `${this.d.model.provider}/${this.d.model.id}`;
+    this.session?.dispose();
+    this.session = null;
+    this.reflectSession?.dispose();
+    this.reflectSession = null;
+    this.d.model = model;
+    this.d.modelRuntime = modelRuntime;
+    this.freshNext = true;
+    this.seenPools.clear();
+    this.d.log.info(`模型已切换：${previous} → ${model.provider}/${model.id}；下一轮重建会话`);
   }
 
   async dispose() { this.session?.dispose(); this.session = null; this.reflectSession?.dispose(); this.reflectSession = null; }

@@ -27,7 +27,8 @@ import { EmojiTable } from "./core/emoji.ts";
 import { mediaId, toImageContent } from "./core/media.ts";
 import type { ImagePart } from "./agent/engine.ts";
 import type { Attachment } from "./types.ts";
-import { PiEngine, type AgentEngine, type RunResult } from "./agent/engine.ts";
+import { PiEngine, resolveModel, type AgentEngine, type RunResult } from "./agent/engine.ts";
+import { effectiveModelSettings, saveModelSettings, type ModelSettings } from "./ops/model-settings.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
 import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
@@ -306,6 +307,35 @@ export class App {
       const sentSeq = seq ?? this.store.lastSelfMessageRow(poolId)?.seq ?? 0;
       this.watchdog.onSent(poolId, sentSeq, this.clock.now());
     };
+  }
+
+  /** 管理台：当前可用（有凭据）的模型，用于校验和展示。 */
+  async listAvailableModels(): Promise<{ provider: string; model: string; name: string }[]> {
+    const available = await this.o.modelRuntime.getAvailable();
+    return available.map((m) => ({
+      provider: m.provider,
+      model: m.id,
+      name: (m as { name?: string }).name || m.id,
+    }));
+  }
+
+  /** 管理台：切换主模型。先解析并校验凭据，成功后才重建会话。 */
+  async switchModel(provider: string, model: string): Promise<ModelSettings> {
+    const current = effectiveModelSettings(this.o.cfg);
+    if (current.provider === provider && current.model === model) return current;
+    if (this.queue.isBusy()) throw new Error("正在处理一条唤醒，等这轮结束后再切换");
+    const cfg = this.o.cfg;
+    const resolved = await resolveModel({
+      ...cfg,
+      llm: { ...cfg.llm, provider, model },
+    } as Config);
+    // 解析模型要读磁盘/探测凭据，期间可能又进来一轮唤醒：切会话前再确认一次
+    if (this.queue.isBusy()) throw new Error("正在处理一条唤醒，等这轮结束后再切换");
+    const next = saveModelSettings(cfg, { provider, model, choices: current.choices });
+    this.engine.switchModel(resolved.model, resolved.modelRuntime);
+    this.o.model = resolved.model;
+    this.o.modelRuntime = resolved.modelRuntime;
+    return next;
   }
 
   async start() {

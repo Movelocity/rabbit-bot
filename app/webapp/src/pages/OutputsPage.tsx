@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { useApi } from "../lib/api-context.tsx";
+import { useApi, useApiBlob } from "../lib/api-context.tsx";
 import { cx } from "../lib/cx.ts";
 import { formatTs, friendlyError } from "../lib/format.ts";
 import { delimiterFor, parseDelimited } from "../lib/csv.ts";
@@ -35,6 +35,8 @@ function extOf(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return ext === name.toLowerCase() ? "" : ext;
 }
+
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "svg", "ico"]);
 
 function countFiles(nodes: OutputNode[]): number {
   return nodes.reduce(
@@ -87,7 +89,21 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-function FilePreview({ file }: { file: OutputFile }) {
+function FilePreview({ file, imageUrl }: { file: OutputFile; imageUrl?: string }) {
+  if (IMAGE_EXTS.has(file.ext)) {
+    if (!imageUrl) {
+      return <p className="text-[13px] text-muted">图片加载中…</p>;
+    }
+    return (
+      <div className="overflow-hidden rounded-[12px] border border-border bg-surface p-2">
+        <img
+          src={imageUrl}
+          alt={file.name}
+          className="mx-auto max-h-[calc(100dvh-260px)] max-w-full rounded-[8px] object-contain"
+        />
+      </div>
+    );
+  }
   if (file.binary) {
     return (
       <div className="rounded-[10px] border border-border bg-surface2 px-4 py-8 text-center text-[13px] text-muted">
@@ -207,6 +223,7 @@ function CsvPreview({ text, ext }: { text: string; ext: string }) {
 
 export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
+  const requestBlob = useApiBlob();
   const [tree, setTree] = useState<OutputNode[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
@@ -215,8 +232,23 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
   const [file, setFile] = useState<OutputFile | null>(null);
   const [treeLoading, setTreeLoading] = useState(true);
   const [fileLoading, setFileLoading] = useState(false);
+  const [imageUrl, setImageUrl] = useState("");
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const fileRequest = useRef(0);
+  const imageUrlRef = useRef("");
+
+  const replaceImageUrl = useCallback((url: string) => {
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+    imageUrlRef.current = url;
+    setImageUrl(url);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+    },
+    [],
+  );
 
   const loadTree = useCallback(
     async (silent = false) => {
@@ -243,6 +275,7 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
       const seq = ++fileRequest.current;
       setFileLoading(true);
       setFile(null);
+      replaceImageUrl("");
       try {
         const data = await request<OutputFile>(
           `/v1/outputs/file?path=${encodeURIComponent(path)}`,
@@ -250,6 +283,18 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
         if (seq !== fileRequest.current) return;
         setFile(data);
         setStatus({ text: "" });
+        if (IMAGE_EXTS.has(data.ext)) {
+          try {
+            const blob = await requestBlob(
+              `/v1/outputs/raw?path=${encodeURIComponent(path)}`,
+            );
+            if (seq !== fileRequest.current) return;
+            replaceImageUrl(URL.createObjectURL(blob));
+          } catch (e) {
+            if (seq !== fileRequest.current) return;
+            setStatus({ text: `图片加载失败：${friendlyError(e)}`, error: true });
+          }
+        }
       } catch (e) {
         if (seq !== fileRequest.current) return;
         setStatus({ text: `预览失败：${friendlyError(e)}`, error: true });
@@ -257,7 +302,7 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
         if (seq === fileRequest.current) setFileLoading(false);
       }
     },
-    [request],
+    [replaceImageUrl, request, requestBlob],
   );
 
   useEffect(() => {
@@ -455,7 +500,7 @@ export function OutputsPage({ reloadSignal }: { reloadSignal: number }) {
               {fileLoading ? (
                 <p className="text-[13px] text-muted">加载中…</p>
               ) : file ? (
-                <FilePreview file={file} />
+                <FilePreview file={file} imageUrl={imageUrl} />
               ) : (
                 <Empty>文件读取失败。</Empty>
               )}

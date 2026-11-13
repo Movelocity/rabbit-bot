@@ -46,6 +46,8 @@ type BoardGroup = {
   variant: "default" | "done" | "closed" | "info" | "warn";
 };
 
+const BOARD_PAGE_SIZE = 10;
+
 const BOARD_GROUPS: BoardGroup[] = [
   { key: "pending", title: "待审批", statuses: ["pending_approval", "pending"], variant: "warn" },
   { key: "running", title: "进行中", statuses: ["running"], variant: "info" },
@@ -283,6 +285,7 @@ export function TasksPage({
   const [drawerTab, setDrawerTab] = useState<"detail" | "events">("detail");
   const [modalLoading, setModalLoading] = useState(false);
   const [snapshots, setSnapshots] = useState<Record<number, TaskSnapshot>>({});
+  const [boardLimits, setBoardLimits] = useState<Record<string, number>>({});
   const modalIdRef = useRef<number | null>(null);
   modalIdRef.current = modalId;
 
@@ -328,6 +331,10 @@ export function TasksPage({
   useEffect(() => {
     void loadTasks(false);
   }, [loadTasks]);
+
+  useEffect(() => {
+    setBoardLimits({});
+  }, [statusFilter, executorFilter, search]);
 
   useEffect(() => {
     let alive = true;
@@ -473,6 +480,8 @@ export function TasksPage({
         <div className="grid grid-cols-4 items-start gap-2.5 max-[1100px]:grid-cols-2 max-[640px]:grid-cols-1">
           {BOARD_GROUPS.map((group) => {
             const list = filtered.filter((t) => group.statuses.includes(t.status));
+            const limit = boardLimits[group.key] ?? BOARD_PAGE_SIZE;
+            const shown = list.slice(0, limit);
             return (
               <div
                 key={group.key}
@@ -480,10 +489,12 @@ export function TasksPage({
               >
                 <div className="flex items-center gap-2 px-1 pb-2 pt-0.5 text-[11.5px] font-bold text-muted">
                   <Badge variant={group.variant}>{group.title}</Badge>
-                  <span className="ml-auto font-mono text-[10px] text-faint">{list.length}</span>
+                  <span className="ml-auto font-mono text-[10px] text-faint">
+                    {shown.length}/{list.length}
+                  </span>
                 </div>
-                {list.length ? (
-                  list.map((t) => (
+                {shown.length ? (
+                  shown.map((t) => (
                     <button
                       key={t.id}
                       type="button"
@@ -517,6 +528,21 @@ export function TasksPage({
                 ) : (
                   <div className="px-1 py-3 text-center text-[11px] text-muted">没有任务</div>
                 )}
+                {list.length > shown.length ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    onClick={() =>
+                      setBoardLimits((prev) => ({
+                        ...prev,
+                        [group.key]: (prev[group.key] ?? BOARD_PAGE_SIZE) + BOARD_PAGE_SIZE,
+                      }))
+                    }
+                  >
+                    加载更多（还有 {list.length - shown.length} 条）
+                  </Button>
+                ) : null}
               </div>
             );
           })}

@@ -21,6 +21,7 @@ import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import { loadWatchdogSettings } from "./ops/watchdog-settings.ts";
 import { loadSendReviewSettings } from "./ops/send-review-settings.ts";
+import { loadModelSettings } from "./ops/model-settings.ts";
 import path from "node:path";
 
 async function main() {
@@ -30,6 +31,9 @@ async function main() {
   loadSchedulerSettings(cfg, log);
   loadWatchdogSettings(cfg, log);
   loadSendReviewSettings(cfg, log);
+  // 管理台换过模型就按运行时选择启动；没有文件时沿用 config.llm
+  const modelSettings = loadModelSettings(cfg);
+  log.info(`主模型：${modelSettings.provider}/${modelSettings.model}（可切换 ${modelSettings.choices.length} 个）`);
   // 运行时内容（人设/提示词/话题库/汇报/附件）在仓库外：先保证目录在，再把模板目录指过去
   ensureRuntime(cfg, [...runtimeSubdirs(cfg), "shared", "files", "business"]);
   const sharedMade = ensureSharedWorkspace(cfg);
@@ -117,6 +121,8 @@ async function main() {
       onTaskCreated: (task) => app.notifyTaskApproval(task),
       onTaskDecided: (id) => app.forgetTaskApproval(id),
       enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
+      switchModel: (provider, model) => app.switchModel(provider, model),
+      listModels: () => app.listAvailableModels(),
     });
     if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {
       const r = await ensureSandboxContainer(shellRunnerOptions(cfg));

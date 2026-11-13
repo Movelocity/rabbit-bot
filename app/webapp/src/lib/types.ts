@@ -358,6 +358,31 @@ export interface RuntimeFile {
   source: "runtime" | "repo" | "config";
 }
 
+export interface ModelChoice {
+  provider: string;
+  model: string;
+  label?: string;
+}
+
+export interface ModelSettings {
+  provider: string;
+  model: string;
+  choices: ModelChoice[];
+}
+
+export interface ModelSettingsResponse extends ModelSettings {
+  available: { provider: string; model: string; name: string }[];
+  available_error?: string;
+}
+
+export interface WorkingMemory {
+  path: string;
+  content: string;
+  chars: number;
+  limit: number;
+  truncated: boolean;
+}
+
 export interface BusinessObjectType {
   id: string;
   name?: string;

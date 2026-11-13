@@ -32,8 +32,15 @@ export interface OutputFile {
 }
 
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+const MAX_RAW_BYTES = 32 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 20000;
 const MAX_TREE_DEPTH = 16;
+
+const RAW_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+  ".avif": "image/avif", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+};
 
 export class OutputPathError extends Error {}
 
@@ -65,9 +72,11 @@ function resolve(root: string, rel: string): string {
   return abs;
 }
 
-function sortEntries<T extends { kind: "file" | "dir"; name: string }>(out: T[]): T[] {
+function sortEntries<T extends { kind: "file" | "dir"; name: string; mtime?: number }>(out: T[]): T[] {
   return out.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+    const at = a.mtime ?? 0;
+    const bt = b.mtime ?? 0;
+    if (at !== bt) return bt - at;
     return a.name.localeCompare(b.name, "zh-CN");
   });
 }
@@ -160,5 +169,32 @@ export function readOutput(cfg: Config, rel: string): OutputFile {
     binary,
     truncated: bytes > MAX_PREVIEW_BYTES,
     content: binary ? "" : buf.toString("utf8"),
+  };
+}
+
+export interface OutputRaw {
+  name: string;
+  mime: string;
+  bytes: number;
+  buffer: Buffer;
+}
+
+/** 图片等二进制产出：原样返回字节，给前端 blob 预览用。 */
+export function readOutputRaw(cfg: Config, rel: string): OutputRaw {
+  if (!rel || !rel.trim()) throw new OutputPathError("缺少路径");
+  const root = rootDir(cfg);
+  const abs = resolve(root, rel);
+  if (!fs.existsSync(abs)) throw new OutputPathError(`没有这个文件：${rel}`);
+  const stat = fs.statSync(abs);
+  if (!stat.isFile()) throw new OutputPathError(`不是文件：${rel}`);
+  if (stat.size > MAX_RAW_BYTES) {
+    throw new OutputPathError(`文件太大（${stat.size} 字节），原始预览上限 ${MAX_RAW_BYTES} 字节`);
+  }
+  const ext = path.extname(abs).toLowerCase();
+  return {
+    name: path.basename(abs),
+    mime: RAW_MIME[ext] ?? "application/octet-stream",
+    bytes: stat.size,
+    buffer: fs.readFileSync(abs),
   };
 }

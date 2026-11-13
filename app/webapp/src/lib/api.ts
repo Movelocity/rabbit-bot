@@ -52,6 +52,30 @@ export async function apiRequest<T>(
   return body.data as T;
 }
 
+export async function apiBlobRequest(
+  token: string,
+  path: string,
+  opts: RequestOptions = {},
+): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const res = await fetch(path, {
+    method: opts.method ?? "GET",
+    headers,
+    cache: "no-store",
+  });
+
+  if (res.status === 401) throw new ApiError(401, "token 不对或已失效");
+  if (!res.ok) {
+    const text = await res.text();
+    let message = "";
+    try { message = (JSON.parse(text) as Envelope<unknown>).error ?? ""; } catch {}
+    throw new ApiError(res.status, message || `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
 export async function verifyToken(token: string): Promise<void> {
   await apiRequest<unknown>(token, "/v1/pools");
 }

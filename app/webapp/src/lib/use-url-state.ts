@@ -16,11 +16,13 @@ export const MANAGE_VIEWS = [
   "usage",
   "task-stats",
   "llm-logs",
+  "models",
   "persona",
   "users",
   "schedules",
   "settings",
   "skills",
+  "work-memory",
 ] as const;
 export type ManageView = (typeof MANAGE_VIEWS)[number];
 

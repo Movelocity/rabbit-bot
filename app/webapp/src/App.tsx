@@ -51,11 +51,13 @@ const MANAGE_HINTS: Record<string, string> = {
   usage: "",
   "task-stats": "已完成任务 · 耗时 / token / 费用",
   "llm-logs": "按会话查看实际请求 / 响应 · 默认只加载最近一段",
-  users: "别名优先于通讯录名字",
+  models: "多模型备用 · 手动切换 · 下一轮生效",
+  users: "别名优先于通讯录名字 · 任务 CLI 用户已隐藏",
   persona: "人设与提示词 · 保存后下一轮生效",
   schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",
   settings: "单位：秒 · 保存后立即生效",
   skills: "只读 · 技能只做发现",
+  "work-memory": "只读 · 跨会话共享的 memory.md",
 };
 
 export default function App() {

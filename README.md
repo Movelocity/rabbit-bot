@@ -81,6 +81,7 @@ Agent 的普通回复（assistant 文本）只写进唤醒日志（`logs/wakes.j
 | `limits.dailyLlmCalls` / `dailyTokens` / `turnTimeoutMs` | 300 / 2000000 / 300000 | 每日上限（按 Asia/Shanghai 日期）与单轮超时 |
 | `taskApproval` | enabled=false, target=origin, platform=feishu, roomId="", ownerIds=[], timeoutMs=86400000 | 任务发布审批：target=origin 发到任务发起的聊天，target=room 发到固定审批房；主人贴 OK 才启动。关掉时回退 Web 任务页 |
 | `llm.provider` / `llm.model` / `thinkingLevel` | deepseek / deepseek-flash / off | 任何 pi 支持的 provider/model（`npm run ctl -- models` 查看） |
+| `llm.models` | [] | 管理台「模型」页可手动切换的备用模型（provider / model / label）；当前选择存 `runtime/model-settings.json`，切换后下一轮重建会话 |
 | `emoji.table` | `./config/emoji-feishu.json` | 飞书内置表情映射表（中文id/别名 → emoji_type） |
 | `emoji.map` | {} | 覆盖（优先于映射表）：`中文id → {sticker: 飞书file_key}` 或 `{text: "🙂"}` |
 | `adapters.feishu.reactions` | true | 处理“表情回复”事件（需在后台订阅，见下） |
