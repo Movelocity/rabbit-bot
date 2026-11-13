@@ -20,6 +20,9 @@ const cfg = loadConfig({
   // 单测会合并线上 local.json，外部技能库和运行时目录都要指到临时目录
   runtimeDir: path.join(dir, "runtime"),
   exec: { dir: path.join(dir, "sandbox"), sharedSkillsDir: "" },
+  // 模型上下文也要钉死：否则本机 local.json 里换了模型，测试会拿「当前模型」去撞
+  // 提交的清单——名字差一个 `google/` 前缀就算两个模型，断言跟着红。
+  llm: { provider: "deepseek", model: "deepseek-flash", models: [] },
 });
 const store = new Store(path.join(dir, "test.db"));
 const log = new Logger(null, true);
@@ -450,7 +453,12 @@ test("模型：列清单、保存备用模型、切换当前模型", async () =>
     }),
   });
   assert.equal(put.status, 200, JSON.stringify(put.body));
-  assert.equal(put.body.data.choices.length, 2);
+  assert.equal(put.body.data.choices.length, 2, JSON.stringify(put.body.data.choices));
+  assert.deepEqual(put.body.data.choices.map((c: any) => `${c.provider}/${c.model}`), [
+    "deepseek/deepseek-flash",
+    "openrouter/gemini-4-argon",
+  ]);
+  assert.equal(put.body.data.choices[1].label, "备用");
 
   const switched = await call("/v1/llm/switch", {
     method: "POST",
