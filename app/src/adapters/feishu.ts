@@ -6,6 +6,7 @@
  *       im:message.p2p_msg（私聊）、im:chat:readonly（群名，可选）、contact:user.base:readonly（用户名，可选）。
  * 表情回复（可选）：事件 im.message.reaction.created_v1 + 权限 im:message.reactions:read 或 im:message:readonly。
  * 表情：出站含内置表情时发富文本 post（emotion 元素）；入站 emotion / 文本 [名字] 统一转成 [emoji:中文id]。
+ * Markdown：出站文本包含 markdown 标记（如 ** 加粗）时发富文本 post 的 md 标签，由飞书渲染。
  */
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { IMAdapter, RecallResult, RichPart, SendResult } from "./types.ts";
@@ -82,14 +83,46 @@ const PLACEHOLDER: Record<string, [MediaType, string]> = {
   location: ["other", "[位置]"], video_chat: ["other", "[视频会议]"], merge_forward: ["other", "[合并转发]"],
 };
 
-/** 文字 + 表情片段 → 飞书富文本 post 内容（按换行分段）。导出以便测试。 */
+/** 是否包含 markdown 标记：命中才走 md 标签，普通文本保持 text 消息。导出以便测试。 */
+export function looksLikeMarkdown(text: string): boolean {
+  return (
+    text.includes("**") ||
+    /```[\s\S]*?```/.test(text) ||
+    /`[^`\n]+`/.test(text) ||
+    /^#{1,6}\s+\S/m.test(text) ||
+    /^\s*[-*+]\s+\S/m.test(text) ||
+    /^\s*\d+\.\s+\S/m.test(text) ||
+    /^\s*>\s+\S/m.test(text) ||
+    /^\s*\|.*\|\s*$/m.test(text) ||
+    /\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)/.test(text)
+  );
+}
+
+/** markdown 文本 → 飞书富文本 post 内容（md 标签独占段落）。导出以便测试。 */
+export function buildFeishuMarkdown(text: string): { zh_cn: { content: object[][] } } {
+  return { zh_cn: { content: [[{ tag: "md", text }]] } };
+}
+
+/** 文字 + 表情片段 → 飞书富文本 post 内容（按换行分段；markdown 片段用 md 标签独占段落）。导出以便测试。 */
 export function buildFeishuPost(parts: RichPart[]): { zh_cn: { content: object[][] } } {
   const lines: object[][] = [[]];
+  const last = () => lines[lines.length - 1];
+  // md 独占段落，后面紧跟的文字/表情要另起一段
+  const afterMd = () => last().length === 1 && (last()[0] as any).tag === "md";
   for (const p of parts) {
-    if (p.type === "emoji") { lines[lines.length - 1].push({ tag: "emotion", emoji_type: p.key }); continue; }
+    if (p.type === "emoji") {
+      if (afterMd()) lines.push([]);
+      last().push({ tag: "emotion", emoji_type: p.key });
+      continue;
+    }
+    if (looksLikeMarkdown(p.text)) {
+      if (last().length) lines.push([]);
+      lines[lines.length - 1] = [{ tag: "md", text: p.text }];
+      continue;
+    }
     p.text.split("\n").forEach((seg, i) => {
-      if (i > 0) lines.push([]);
-      if (seg) lines[lines.length - 1].push({ tag: "text", text: seg });
+      if (i > 0 || afterMd()) lines.push([]);
+      if (seg) last().push({ tag: "text", text: seg });
     });
   }
   return { zh_cn: { content: lines.map((l) => (l.length ? l : [{ tag: "text", text: "" }])) } };
@@ -399,7 +432,11 @@ export class FeishuAdapter implements IMAdapter {
     if (r?.code !== 0 || !r?.data?.message_id) throw new Error(`飞书发送失败 code=${r?.code} msg=${r?.msg}`);
     return { msgId: r.data.message_id };
   }
-  sendText(chatId: string, text: string) { return this.create(chatId, "text", { text }); }
+  sendText(chatId: string, text: string) {
+    return looksLikeMarkdown(text)
+      ? this.create(chatId, "post", buildFeishuMarkdown(text))
+      : this.create(chatId, "text", { text });
+  }
   sendRich(chatId: string, parts: RichPart[]) { return this.create(chatId, "post", buildFeishuPost(parts)); }
   sendSticker(chatId: string, fileKey: string) { return this.create(chatId, "sticker", { file_key: fileKey }); }
 
