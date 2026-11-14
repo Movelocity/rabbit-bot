@@ -171,19 +171,17 @@ export interface Config {
   };
   /**
    * 任务发布审批：UFA 建的任务先发审批提示，主人贴 OK / No 表情裁决。
-   * target=origin 发到任务发起的聊天，target=room 发到固定审批房；关掉时回退 Web 任务页。
+   * 审批提示一律发主聊天（sendReview.primaryPoolId，未设时退回 roomId）；关掉时回退 Web 任务页。
    */
   taskApproval: {
     enabled: boolean;
     /**
-     * 审批提示发到哪：
-     *   origin = 任务发起时的聊天（默认推荐，不另开审批房）
-     *   room   = 固定审批房（roomId）
+     * 历史字段，仅为兼容旧配置保留；现在不再决定发送目标。
      */
     target?: "origin" | "room";
     /** matrix / feishu */
     platform: string;
-    /** 固定审批房的 external chat id（target=room 时必填；origin 时作为兜底） */
+    /** 主聊天 / 固定审批房的 external chat id（主聊天没设时作为兜底） */
     roomId: string;
     /** 谁能批；空 = 谁都批不了（等于关） */
     ownerIds: string[];

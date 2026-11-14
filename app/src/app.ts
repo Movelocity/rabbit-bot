@@ -524,17 +524,16 @@ export class App {
   }
 
   /**
-   * target=origin：优先发到任务发起时所在的那个聊天；
-   * 找不到（例如 API/技能建任务没带池）再退回固定审批房。
+   * 任务审批提示一律发主聊天：任务从群聊发起也只发主聊天，避免审批提示泄露到项目群。
+   * 主聊天没设（sendReview.primaryPoolId 为空）时退回 taskApproval.roomId。
    */
-  private resolveTaskApprovalTarget(task: Task): TaskApprovalTarget | null {
-    const ta = this.o.cfg.taskApproval;
-    if ((ta.target ?? "origin") === "origin") {
-      const pool = task.pool_id ? this.store.getPool(task.pool_id) : null;
-      if (pool && pool.platform !== "task" && pool.external_id) {
-        return { platform: pool.platform, chatId: pool.external_id };
-      }
+  private resolveTaskApprovalTarget(_task: Task): TaskApprovalTarget | null {
+    const mainId = mainPoolId(this.o.cfg);
+    if (mainId) {
+      const pool = this.store.getPool(mainId);
+      if (pool?.external_id) return { platform: pool.platform, chatId: pool.external_id };
     }
+    const ta = this.o.cfg.taskApproval;
     const roomId = String(ta.roomId ?? "").trim();
     return roomId ? { platform: ta.platform, chatId: roomId } : null;
   }

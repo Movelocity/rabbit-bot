@@ -12,6 +12,8 @@ import { taskDocPath } from "../src/core/dispatch.ts";
 
 const ROOM = "oc_task_approval";
 const ORIGIN = "dm-owner";
+const MAIN = "dm-main";
+const GROUP = "oc_project_group";
 const OWNER = "ou_owner";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -35,6 +37,7 @@ setTimeout(() => process.exit(0), 20);
     taskApproval: {
       enabled: true, target: "origin", platform: "mock", roomId: ROOM, ownerIds: [OWNER], timeoutMs: 60_000, notify: true,
     },
+    sendReview: { primaryPoolId: `mock:${MAIN}` },
   });
   const log: any = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, wake: () => {} };
   const app = new App({
@@ -46,7 +49,8 @@ setTimeout(() => process.exit(0), 20);
   await app.start();
 
   try {
-    const origin = app.store.upsertPool("mock", ORIGIN, "private", "主人");
+    app.store.upsertPool("mock", MAIN, "private", "主人");
+    const origin = app.store.upsertPool("mock", GROUP, "group", "项目群");
     const task = createTask(app.store, {
       userId: "u1", poolId: origin.pool_id, name: "#修复登录", goal: "把登录页修好",
       work_dir: workDir, status: "pending_approval",
@@ -54,14 +58,14 @@ setTimeout(() => process.exit(0), 20);
     app.notifyTaskApproval(task);
     await wait(20);
 
-    const prompt = mock.sent.find((s) => s.chat === ORIGIN && /【任务待审批】/.test(s.content));
-    assert.ok(prompt, "审批消息应当发到任务发起时的聊天");
-    assert.equal(mock.sent.some((s) => s.chat === ROOM && /【任务待审批】/.test(s.content)), false);
+    const prompt = mock.sent.find((s) => s.chat === MAIN && /【任务待审批】/.test(s.content));
+    assert.ok(prompt, "群聊里建的任务，审批消息也应当发到主聊天");
+    assert.equal(mock.sent.some((s) => s.chat === GROUP && /【任务待审批】/.test(s.content)), false);
 
     (mock as any).sink({
       platform: "mock",
-      external_chat_id: ORIGIN,
-      pool_kind: "group",
+      external_chat_id: MAIN,
+      pool_kind: "private",
       msg_id: `reaction-${Date.now()}`,
       sender_id: OWNER,
       sender_name: "主人",
@@ -157,6 +161,7 @@ fs.writeFileSync(${JSON.stringify(marker)}, "started");
     taskApproval: {
       enabled: true, target: "origin", platform: "mock", roomId: ROOM, ownerIds: [OWNER], timeoutMs: 60_000, notify: true,
     },
+    sendReview: { primaryPoolId: `mock:${ORIGIN}` },
   });
   const log: any = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, wake: () => {} };
   const app = new App({
