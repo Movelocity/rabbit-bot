@@ -36,6 +36,7 @@ import { taskStats } from "./ops/task-stats.ts";
 import { auditTasks, type PmTaskRow } from "./core/pm.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
 import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
+import { getProject, listProjects, updateProject } from "./ops/projects.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
 import { listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
@@ -344,6 +345,28 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, result);
           }
           throw new HttpError(404, "用法：GET /v1/users、PATCH /v1/users/:user_id {alias}");
+        }
+        case "projects": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, listProjects(d.cfg));
+          }
+          if (parts.length === 3 && method === "GET") {
+            const p = getProject(d.cfg, decodeURIComponent(parts[2]));
+            if (!p) throw new HttpError(404, `没有项目 ${parts[2]}`);
+            return reply(200, p);
+          }
+          if (parts.length === 3 && method === "PATCH") {
+            try {
+              return reply(200, updateProject(d.cfg, decodeURIComponent(parts[2]), {
+                context: body.context,
+                plan: body.plan,
+              }));
+            } catch (e) {
+              const msg = (e as Error).message;
+              throw new HttpError(/没有项目/.test(msg) ? 404 : 400, msg);
+            }
+          }
+          throw new HttpError(404, "用法：GET /v1/projects、GET/PATCH /v1/projects/:slug");
         }
         case "plans": {
           const dir = boardDir(d.cfg);

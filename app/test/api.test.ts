@@ -201,6 +201,41 @@ test("计划看板：建、列、勾目标、改状态、归档", async () => {
   assert.match(bad.body.error, /没有计划/);
 });
 
+test("项目：读 shared/projects，改 plan.md / context.md", async () => {
+  const root = path.join(dir, "runtime", "shared", "projects");
+  fs.mkdirSync(path.join(root, "demo"), { recursive: true });
+  fs.writeFileSync(path.join(root, "INDEX.md"), [
+    "# 项目索引",
+    "| slug | 项目 | 状态 | 业务地图 |",
+    "|---|---|---|---|",
+    "| demo | 演示项目 | 进行中 | — |",
+  ].join("\n"));
+  fs.writeFileSync(path.join(root, "demo", "context.md"), "# 演示项目 · 项目上下文\n\n是什么。\n");
+  fs.writeFileSync(path.join(root, "demo", "plan.md"), "# 演示项目 · 计划\n\n## 当前目标\n\n把活干完。\n");
+
+  const list = await call("/v1/projects");
+  assert.equal(list.status, 200);
+  const demo = list.body.data.find((p: any) => p.slug === "demo");
+  assert.equal(demo.title, "演示项目", "标题和状态取自 INDEX.md");
+  assert.equal(demo.status, "进行中");
+  assert.match(demo.plan, /把活干完/);
+
+  const one = await call("/v1/projects/demo");
+  assert.equal(one.status, 200);
+  assert.match(one.body.data.context, /是什么/);
+
+  const patched = await call("/v1/projects/demo", {
+    method: "PATCH",
+    body: JSON.stringify({ plan: "# 新计划\n\n下一步。\n" }),
+  });
+  assert.equal(patched.status, 200);
+  assert.match(patched.body.data.plan, /下一步/);
+  assert.equal(fs.readFileSync(path.join(root, "demo", "plan.md"), "utf8"), "# 新计划\n\n下一步。\n");
+
+  assert.equal((await call("/v1/projects/nope")).status, 404);
+  assert.equal((await call("/v1/projects/nope", { method: "PATCH", body: JSON.stringify({ plan: "x" }) })).status, 404);
+});
+
 test("记忆：写、查；scope 按池类型推导", async () => {
   const add = await call("/v1/memories", {
     method: "POST",

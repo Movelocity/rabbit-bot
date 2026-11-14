@@ -5,7 +5,7 @@ export const TABS = [
   "tasks",
   "outputs",
   "approvals",
-  "plans",
+  "projects",
   "memories",
   "business",
   "manage",
@@ -58,6 +58,7 @@ function parseUrl(search: string): ParsedUrl {
     view = LEGACY_TAB_VIEW[tab];
     tab = "manage";
   }
+  if (tab === "plans") tab = "projects";
   if (tab === "manage" && view === "business") {
     tab = "business";
     view = null;

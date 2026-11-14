@@ -17,7 +17,7 @@ import { ChatPage } from "./pages/ChatPage.tsx";
 import { TasksPage } from "./pages/TasksPage.tsx";
 import { OutputsPage } from "./pages/OutputsPage.tsx";
 import { ApprovalsPage } from "./pages/ApprovalsPage.tsx";
-import { PlansPage } from "./pages/PlansPage.tsx";
+import { ProjectsPage } from "./pages/ProjectsPage.tsx";
 import { MemoriesPage } from "./pages/MemoriesPage.tsx";
 import { BusinessPage } from "./pages/BusinessPage.tsx";
 import { ManagePage } from "./pages/ManagePage.tsx";
@@ -32,7 +32,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "tasks", label: "任务" },
   { tab: "outputs", label: "产出" },
   { tab: "approvals", label: "权限" },
-  { tab: "plans", label: "计划" },
+  { tab: "projects", label: "项目" },
   { tab: "memories", label: "记忆" },
   { tab: "business", label: "知识" },
   { tab: "manage", label: "管理" },
@@ -42,7 +42,7 @@ const TAB_HINTS: Record<string, string> = {
   tasks: "飞书审批为主 · Web 备用",
   outputs: "任务最终交付物 · Markdown / CSV / HTML 预览",
   approvals: "只读 · 审批请在飞书里完成",
-  plans: "md 看板 · 目标可在 Web 或 IM 勾选",
+  projects: "shared/projects · context.md / plan.md · 可编辑",
   memories: "可直接改正文或删除 · 新增/过期走 IM",
   business: "只读 · 对象 / 关系 / 动作",
 };
@@ -278,7 +278,7 @@ export default function App() {
               }}
             />
           )}
-          {tab === "plans" && <PlansPage reloadSignal={reloadSignal} />}
+          {tab === "projects" && <ProjectsPage reloadSignal={reloadSignal} />}
           {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
           {tab === "business" && <BusinessPage reloadSignal={reloadSignal} />}
           {tab === "manage" && (

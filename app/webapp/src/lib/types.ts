@@ -111,30 +111,14 @@ export interface Approval {
   decided_at_local: string | null;
 }
 
-export interface BoardGoal {
-  text: string;
-  done: boolean;
-}
-
-export interface BoardProgress {
-  at: number | null;
-  at_local: string | null;
-  text: string;
-}
-
-export interface Board {
+/** shared/projects/<slug>/：context.md 是项目上下文，plan.md 是当前目标与下一步。 */
+export interface Project {
   slug: string;
   title: string;
+  /** INDEX.md 里的状态原文；没登记就是空串 */
   status: string;
-  pool: string | null;
-  tags: string[];
-  background: string;
-  goals: BoardGoal[];
-  goals_total: number;
-  goals_done: number;
-  progress: BoardProgress[];
-  created_at: number | null;
-  created_at_local: string | null;
+  context: string;
+  plan: string;
   updated_at: number | null;
   updated_at_local: string | null;
   path: string;
