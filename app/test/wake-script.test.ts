@@ -76,6 +76,21 @@ test("schedule 剧本：路由指向 scene-schedule，并从共用日程池读�
   assert.match(script, /不代表现在还合适/, "过期日程允许跳过");
 });
 
+test("说话人名字用身份映射，不用平台兜底名", () => {
+  const s = mkStore();
+  const m = s.insertMessage({
+    platform: "feishu", external_chat_id: "c1", pool_kind: "group", msg_id: "m1",
+    sender_id: "ou_x", sender_name: "用户144b", ts: Date.now(), text: "在吗",
+    reply_to: null, mentions: [], is_mention_me: true, media_type: "text",
+  })!;
+  s.renameUser(m.user_id!, "刘兴旺");
+  const wake = mkWake("message");
+  wake.pools = new Set([m.pool_id]);
+  const p = wakePrompt(s, { wake, now: Date.now(), unread: [m], context: new Map() });
+  assert.match(p, /正在跟你说话的人：刘兴旺/);
+  assert.doesNotMatch(p, /正在跟你说话的人：用户144b/);
+});
+
 test("状态行：不再展示主动次数与上次主动", () => {
   const s = mkStore();
   const p = wakePrompt(s, { wake: mkWake("tick"), now: Date.now(), unread: [], context: new Map() });

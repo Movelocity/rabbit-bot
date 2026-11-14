@@ -668,7 +668,7 @@ export class App {
     try {
       const rows = this.store.recentMessages(poolId, 30);
       const recent = rows.map((m) =>
-        `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
+        `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (this.store.userDisplayName(m.platform, m.sender_id) || m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
       ).join("\n");
       this.reviewCtx = { pool: poolId, unread: rows };
       const prompt = render("memory-review", {
@@ -716,7 +716,7 @@ export class App {
     const rows = this.store.recentMessages(poolId, 13, lastSelf.seq)
       .filter((m) => m.seq !== lastSelf.seq);
     const recent = rows.map((m) =>
-      `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
+      `${fmtShort(m.ts)} ${m.from_self ? cfg.agent.name : (this.store.userDisplayName(m.platform, m.sender_id) || m.sender_name || m.user_id || "对方")}：${m.text.slice(0, 300)}`,
     ).join("\n");
     const prompt = render("watchdog", {
       now: new Intl.DateTimeFormat("zh-CN", {
@@ -1193,7 +1193,12 @@ export class App {
       wake: w, now: t0, unread, context, handoff, topics: [], mainPool: mainPoolId(cfg),
     });
     for (const pid of involved) this.engine.seenPools.add(pid);
-    entry.read = unread.map((m) => ({ pool: m.pool_id, seq: m.seq, from: m.sender_name, text: m.text.slice(0, 80) }));
+    entry.read = unread.map((m) => ({
+      pool: m.pool_id,
+      seq: m.seq,
+      from: m.from_self ? cfg.agent.name : (this.store.userDisplayName(m.platform, m.sender_id) || m.sender_name),
+      text: m.text.slice(0, 80),
+    }));
     entry.promptChars = prompt.length;
 
     // 未读里的图 + 之前被 send 顺带消费掉的图，按 seq 去重后取最近 N 张

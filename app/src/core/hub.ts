@@ -91,7 +91,8 @@ export class Hub {
     //   主人没有特权：谁的消息都一样等 tick，标 [主人] 只是给她一个"这是谁"的线索
     const urgent = saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
     const where = pool.kind === "private" ? "私聊" : saved.is_mention_me ? "群聊被@：立刻看" : "群聊：等 tick";
-    this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${saved.sender_name}: ${saved.text.slice(0, 60)}〔${where}〕`);
+    const who = this.store.userDisplayName(saved.platform, saved.sender_id) || saved.sender_name;
+    this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${who}: ${saved.text.slice(0, 60)}〔${where}〕`);
     this.scheduler?.onMessage(
       saved.pool_id,
       urgent,

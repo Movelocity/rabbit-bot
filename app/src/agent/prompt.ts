@@ -106,7 +106,11 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
   const people = new Map<string, { name: string; owner: boolean }>();
   for (const m of x.unread) {
-    if (!m.from_self && m.user_id) people.set(m.user_id, { name: m.sender_name, owner: isOwnerId(m.sender_id) });
+    if (!m.from_self && m.user_id) {
+      // 用身份映射后的显示名：sender_name 可能是平台给的「用户144b」，别名才是本人名字
+      const name = store.userDisplayName(m.platform, m.sender_id) || m.sender_name;
+      people.set(m.user_id, { name, owner: isOwnerId(m.sender_id) });
+    }
   }
   if (people.size) {
     blocks.push(`正在跟你说话的人：${[...people].map(([id, p]) => `${p.name}（user_id=${id}${p.owner ? "，主人" : ""}）`).join("、")}`);
