@@ -6,6 +6,7 @@ import { resolveModel } from "./agent/engine.ts";
 import { FeishuAdapter } from "./adapters/feishu.ts";
 import { MatrixAdapter } from "./adapters/matrix.ts";
 import { MockAdapter } from "./adapters/mock.ts";
+import { WebAdapter } from "./adapters/web.ts";
 import { Logger } from "./core/logger.ts";
 import { makeWake } from "./core/queue.ts";
 import { setOwnerIds } from "./core/owners.ts";
@@ -16,9 +17,10 @@ import { ensureSandboxContainer } from "./core/shell-runner.ts";
 import { shellRunnerOptions } from "./ops/exec.ts";
 import { ensureSkillDataDirs } from "./ops/skills.ts";
 import { acquireLock, releaseLock } from "./core/lockfile.ts";
-import { ensureRuntime, ensureHostSandboxLinks, ensureSharedWorkspace, runtimeSubdirs, sharedDir, filesDir } from "./core/runtime.ts";
+import { ensureRuntime, ensureHostSandboxLinks, ensureSharedWorkspace, runtimeSubdirs, sharedDir, filesDir, mediaInboxDir } from "./core/runtime.ts";
 import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
+import { loadLimitSettings } from "./ops/limit-settings.ts";
 import { loadWatchdogSettings } from "./ops/watchdog-settings.ts";
 import { loadSendReviewSettings } from "./ops/send-review-settings.ts";
 import { loadModelSettings } from "./ops/model-settings.ts";
@@ -29,6 +31,8 @@ async function main() {
   const log = new Logger(cfg.logDir);
   // Web 管理台保存过的调度间隔 / 看门狗：先应用再建 App，重启后照旧生效
   loadSchedulerSettings(cfg, log);
+  // 管理台调过的日额度：同样是运行时覆盖，避免改一次额度就要改仓库配置
+  loadLimitSettings(cfg, log);
   loadWatchdogSettings(cfg, log);
   loadSendReviewSettings(cfg, log);
   // 管理台换过模型就按运行时选择启动；没有文件时沿用 config.llm
@@ -72,7 +76,7 @@ async function main() {
   const madeDirs = ensureSkillDataDirs(cfg);
   if (madeDirs.length) log.info(`补了 ${madeDirs.length} 个技能 data 目录`);
   if (cfg.adapters.feishu.enabled)
-    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes }, filesDir: filesDir(cfg) }, log));
+    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: mediaInboxDir(cfg), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes }, filesDir: filesDir(cfg) }, log));
   if (cfg.adapters.matrix.enabled && process.env.MATRIX_TOKEN)
     app.hub.addAdapter(
       new MatrixAdapter(
@@ -81,7 +85,7 @@ async function main() {
           userId: cfg.adapters.matrix.userId,
           accessToken: process.env.MATRIX_TOKEN,
           stateFile: path.join(cfg.dataDir, "matrix-sync.json"),
-          media: { dir: path.join(cfg.dataDir, "media"), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes },
+          media: { dir: mediaInboxDir(cfg), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes },
           filesDir: filesDir(cfg),
         },
         log,
@@ -92,6 +96,9 @@ async function main() {
   // 测试池（platform=mock）：send 只记在内存里，不发任何真实 IM。
   // 测试注入走 INJECT_POOL=mock:test，这样她的回复不会落到主人的飞书。
   app.hub.addAdapter(new MockAdapter());
+
+  // 网页直聊（platform=web）：用户消息从 /v1/webchat/send 入池，回复由 hub 写库、前端轮询。
+  app.hub.addAdapter(new WebAdapter());
 
   let stopping = false;
   let injectSrv: Awaited<ReturnType<typeof startInjectServer>> = null;
@@ -117,9 +124,10 @@ async function main() {
     const token = resolveApiToken(cfg);
     apiSrv = await startApiServer({
       cfg, store: app.store, log, token,
+      hub: app.hub,
       scheduler: app.scheduler,
       onTaskCreated: (task) => app.notifyTaskApproval(task),
-      onTaskDecided: (id) => app.forgetTaskApproval(id),
+      onTaskDecided: (id, decision) => app.onTaskDecided(id, decision),
       enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
       switchModel: (provider, model) => app.switchModel(provider, model),
       listModels: () => app.listAvailableModels(),

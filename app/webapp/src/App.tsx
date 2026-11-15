@@ -4,6 +4,7 @@ import {
   ApiError,
   checkHealth,
   clearStoredToken,
+  logoutWeb,
   readStoredToken,
   storeToken,
   verifyToken,
@@ -12,6 +13,7 @@ import { friendlyError } from "./lib/format.ts";
 import { useUrlState, type Tab } from "./lib/use-url-state.ts";
 import { cx } from "./lib/cx.ts";
 import { Button } from "./components/ui.tsx";
+import { SchedulerTickStatus } from "./components/SchedulerTickStatus.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
 import { TasksPage } from "./pages/TasksPage.tsx";
@@ -55,7 +57,7 @@ const MANAGE_HINTS: Record<string, string> = {
   users: "别名优先于通讯录名字 · 任务 CLI 用户已隐藏",
   persona: "人设与提示词 · 保存后下一轮生效",
   schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",
-  settings: "单位：秒 · 保存后立即生效",
+  settings: "唤醒间隔 · 日额度 · 保存后下一轮生效",
   skills: "只读 · 技能只做发现",
   "work-memory": "只读 · 跨会话共享的 memory.md",
 };
@@ -65,7 +67,6 @@ export default function App() {
   const [token, setToken] = useState(storedToken);
   const [auth, setAuth] = useState<AuthState>(storedToken ? "checking" : "login");
   const [loginError, setLoginError] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
   const [health, setHealth] = useState<Health>("checking");
   const [currentPool, setCurrentPool] = useState<string | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
@@ -84,7 +85,7 @@ export default function App() {
         setToken("");
         setLoginError(
           e instanceof ApiError && e.status === 401
-            ? "token 已失效，请重新输入"
+            ? "登录已失效，请重新登录"
             : `连接失败：${friendlyError(e)}`,
         );
         setAuth("login");
@@ -112,40 +113,25 @@ export default function App() {
     clearStoredToken();
     setToken("");
     setAuth("login");
-    setLoginError("token 不对或已失效，请重新输入");
+    setLoginError("登录已失效，请重新登录");
     setCurrentPool(null);
   }, []);
 
-  const handleLogin = useCallback(async (raw: string) => {
-    if (!raw) {
-      setLoginError("请先填入 token");
-      return;
-    }
-    setLoginBusy(true);
+  const handleAuthed = useCallback((raw: string) => {
+    setToken(raw);
+    storeToken(raw);
     setLoginError("");
-    try {
-      await verifyToken(raw);
-      setToken(raw);
-      storeToken(raw);
-      setAuth("authed");
-    } catch (e) {
-      setLoginError(
-        e instanceof ApiError && e.status === 401
-          ? "token 不对。默认在 app/data/run/api.token，或由 RABBIT_BOT_API_TOKEN 提供。"
-          : `连接失败：${friendlyError(e)}`,
-      );
-    } finally {
-      setLoginBusy(false);
-    }
+    setAuth("authed");
   }, []);
 
   const handleLogout = useCallback(() => {
+    void logoutWeb(token);
     clearStoredToken();
     setToken("");
     setAuth("login");
     setLoginError("");
     setCurrentPool(null);
-  }, []);
+  }, [token]);
 
   if (auth === "checking") {
     return (
@@ -154,14 +140,7 @@ export default function App() {
   }
 
   if (auth === "login") {
-    return (
-      <LoginPage
-        initialToken={token}
-        error={loginError}
-        busy={loginBusy}
-        onLogin={handleLogin}
-      />
-    );
+    return <LoginPage key={loginError} initialError={loginError} onAuthed={handleAuthed} />;
   }
 
   const healthText =
@@ -182,22 +161,27 @@ export default function App() {
               本地管理
             </span>
           </div>
-          <div className="ml-auto flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted max-sm:order-3 max-sm:ml-0 max-sm:w-full">
-            <span
-              className={cx(
-                "size-[8px] flex-none rounded-full",
-                health === "ok" &&
-                  "bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-ok)_18%,transparent)]",
-                health === "bad" &&
-                  "bg-bad shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-bad)_18%,transparent)]",
-                health === "checking" && "bg-muted",
-              )}
-            />
-            <span className="whitespace-nowrap">{healthText}</span>
-            <span className="text-border">·</span>
-            <span className="truncate font-mono text-[11.5px] text-muted">
-              {window.location.origin}
-            </span>
+          <div className="ml-auto flex min-w-0 items-center gap-2.5 max-sm:order-3 max-sm:ml-0 max-sm:w-full">
+            <div className="max-sm:hidden">
+              <SchedulerTickStatus />
+            </div>
+            <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
+              <span
+                className={cx(
+                  "size-[8px] flex-none rounded-full",
+                  health === "ok" &&
+                    "bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-ok)_18%,transparent)]",
+                  health === "bad" &&
+                    "bg-bad shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-bad)_18%,transparent)]",
+                  health === "checking" && "bg-muted",
+                )}
+              />
+              <span className="whitespace-nowrap">{healthText}</span>
+              <span className="text-border">·</span>
+              <span className="truncate font-mono text-[11.5px] text-muted">
+                {window.location.origin}
+              </span>
+            </div>
           </div>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             退出

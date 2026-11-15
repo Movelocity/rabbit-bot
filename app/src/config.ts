@@ -122,6 +122,25 @@ export interface Config {
       ownerIds?: string[];
     };
   };
+  /**
+   * Web 管理台登录 + 网页直聊：一个账号密码进整个 Web 端（默认用户 rabbit-bot），
+   * 直聊是管理台会话列表里的独立 web 池。
+   * 密码可以写在配置里，也可以用环境变量 RABBIT_BOT_WEB_PASSWORD；都没有时
+   * 首次打开管理台引导设置（哈希存 SQLite，不落明文）。
+   */
+  webChat?: {
+    enabled: boolean;
+    /** 默认 rabbit-bot；改用户名不会改变已有网页会话池 */
+    username?: string;
+    /** 可选：直接配置密码（也可用 RABBIT_BOT_WEB_PASSWORD 覆盖） */
+    password?: string;
+    /** 网页池 external_id，默认 web-chat（最终 pool_id = web:<pool>） */
+    pool?: string;
+    /** 会话池标题，默认「网页直聊」 */
+    title?: string;
+    /** 登录会话有效天数，默认 30 */
+    sessionDays?: number;
+  };
   emoji: { table: string | null; map: Record<string, EmojiTarget> };
   media: { maxEdge: number; maxBytes: number; maxImagesInContext: number };
   exec: {

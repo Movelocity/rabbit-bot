@@ -106,6 +106,14 @@ export function filesDir(cfg: Config): string {
   return runtimePath(cfg, "files");
 }
 
+/**
+ * 收到的图片落盘处：宿主侧 <runtimeDir>/media/inbox，容器里 /work/media/inbox。
+ * 放在运行时目录下（而不是 data/）是因为沙盒根就是运行时目录，Agent 才能直接读到。
+ */
+export function mediaInboxDir(cfg: Config): string {
+  return runtimePath(cfg, path.join("media", "inbox"));
+}
+
 /** 业务地图：对象、关系、动作、术语表；私有数据，只放运行时目录。 */
 export function businessDir(cfg: Config): string {
   return runtimePath(cfg, "business");

@@ -13,6 +13,8 @@ upload(path="files/报告.pdf")
 
 只返回一行，例如 `https://s.hollway.top/cQ4ygy.txt`。这行就是交付物，直接发给他。
 
+群聊汇报里要发文件时也走这条：先 `upload`，只发短链，不发本地路径。桶是公共读，先确认这份产出可以公开。
+
 - 文件必须在**沙盒**里（`/work` 下面）：`files/`、`media/`、`shared/` 这些位置。
 - 要换显示名（决定扩展名和 Content-Type）：`upload(path="files/x.bin", name="报告.pdf")`
 - 上限 **50MB**。超了先压：图片转 webp、视频降码率，再传。
@@ -29,12 +31,18 @@ upload(path="files/报告.pdf")
 
 ## 交出去之前先验一次
 
+上传后马上取回原文件对比，别只看短链能不能打开：
+
 ```
-curl -sS -o /dev/null -w "%{http_code} %{redirect_url}\n" <短链>
+curl -sSL -o /tmp/upl-check "<短链>"
+sha256sum "<本地文件>" /tmp/upl-check          # macOS 用 shasum -a 256
+curl -sSI -o /dev/null -w "%{http_code}\n" "<短链>"   # 期望 302，不是 501
 ```
 
-期望 `302` 跳到 `imagevault.tos-cn-guangzhou.volces.com/...`，且跳转目标本身 200。
-只看短链返回 302 不够——对象可能在上传时写坏。
+- 两个 sha256 一致才算传完整。
+- `curl -I` 期望 `302`；看到 `501` 说明服务端没实现 HEAD，不要误判成文件坏了。
+- 最后用 `curl -sS -o /dev/null -w "%{http_code} %{redirect_url}\n" <短链>` 确认跳转目标是 200。
+- 只看短链返回 302 不够——对象可能在上传时写坏。
 
 ## 短链是什么
 

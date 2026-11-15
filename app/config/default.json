@@ -89,6 +89,13 @@
       "userId": "@xiaoyu:matrix.hollway.top"
     }
   },
+  "webChat": {
+    "enabled": true,
+    "username": "rabbit-bot",
+    "pool": "web-chat",
+    "title": "网页直聊",
+    "sessionDays": 30
+  },
   "emoji": {
     "table": "./config/emoji-feishu.json",
     "map": {}

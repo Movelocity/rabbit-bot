@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
-import { friendlyError } from "../../lib/format.ts";
+import { friendlyError, num } from "../../lib/format.ts";
 import type {
-  ExecutorInfo, MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
+  ExecutorInfo, LimitStatus, MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
 } from "../../lib/types.ts";
-import { Badge, Button, Card, CardBody, CardHead, CardTitle, Field, Input, Select, StatusText } from "../../components/ui.tsx";
+import {
+  Badge, Button, Card, CardBody, CardHead, CardTitle, Field, Input, Kpi, KpiGrid, Select, StatusText,
+} from "../../components/ui.tsx";
 
 const DEFAULT_MEMORY_REVIEW: MemoryReviewSettings = {
   enabled: false,
@@ -46,6 +48,10 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   const [sendReviewStatus, setSendReviewStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [sendReviewSaving, setSendReviewSaving] = useState(false);
 
+  const [limits, setLimits] = useState<LimitStatus | null>(null);
+  const [limitsStatus, setLimitsStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [limitsSaving, setLimitsSaving] = useState(false);
+
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorsStatus, setExecutorsStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
 
@@ -60,16 +66,19 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     setMemoryStatus({ text: "加载中…" });
     setWatchdogStatus({ text: "加载中…" });
     setSendReviewStatus({ text: "加载中…" });
+    setLimitsStatus({ text: "加载中…" });
     try {
-      const [s, m, w, sr] = await Promise.all([
+      const [s, m, w, sr, ls] = await Promise.all([
         request<SchedulerSettings>("/v1/scheduler"),
         request<MemoryReviewSettings>("/v1/memory-review"),
         request<WatchdogSettings>("/v1/watchdog"),
         request<SendReviewSettingsResponse>("/v1/send-review"),
+        request<LimitStatus>("/v1/limits"),
       ]);
       apply(s);
       setMemoryReview(m);
       setWatchdog(w);
+      setLimits(ls);
       setSendReview({
         enabled: sr.enabled,
         defaultReview: sr.defaultReview,
@@ -81,11 +90,13 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
       setMemoryStatus({ text: "" });
       setWatchdogStatus({ text: "" });
       setSendReviewStatus({ text: "" });
+      setLimitsStatus({ text: "" });
     } catch (e) {
       setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setMemoryStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setWatchdogStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setSendReviewStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
+      setLimitsStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
     }
   }, [request, apply]);
 
@@ -213,6 +224,33 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     }
   };
 
+  const saveLimits = async () => {
+    if (!limits) return;
+    setLimitsSaving(true);
+    setLimitsStatus({ text: "保存中…" });
+    try {
+      setLimits(
+        await request<LimitStatus>("/v1/limits", {
+          method: "PUT",
+          body: {
+            dailyLlmCalls: limits.dailyLlmCalls,
+            dailyTokens: limits.dailyTokens,
+            dailyCny: limits.dailyCny,
+          },
+        }),
+      );
+      setLimitsStatus({ text: "已保存，下一轮唤醒生效" });
+    } catch (e) {
+      setLimitsStatus({ text: `保存失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setLimitsSaving(false);
+    }
+  };
+
+  const setLimitNumber = (key: keyof Pick<LimitStatus, "dailyLlmCalls" | "dailyTokens" | "dailyCny">, raw: string) => {
+    setLimits((x) => (x ? { ...x, [key]: raw === "" ? 0 : Number(raw) } : x));
+  };
+
   return (
     <>
       <Card>
@@ -255,6 +293,76 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
             </Button>
           </div>
           <StatusText text={status.text} error={status.error} />
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHead>
+          <CardTitle>日额度</CardTitle>
+        </CardHead>
+        <CardBody>
+          <p className="mb-3 text-sm text-muted">
+            每天到量后不再唤醒模型。调用次数 / 折算 token 填 <code>-1</code> 表示不限；花费上限填 <code>0</code> 表示不按钱限额。
+            保存后下一轮唤醒生效，重启仍保留。
+          </p>
+          {limits ? (
+            <>
+              <KpiGrid>
+                <Kpi
+                  label={`今日调用（${limits.today.day}）`}
+                  value={num(limits.today.llm_calls)}
+                  note={limits.dailyLlmCalls < 0 ? "额度不限" : `剩 ${num(limits.today.calls_left ?? 0)} 次`}
+                />
+                <Kpi
+                  label="今日折算 token"
+                  value={num(limits.today.tokens)}
+                  note={limits.dailyTokens < 0 ? "额度不限" : `剩 ${num(limits.today.tokens_left ?? 0)}`}
+                />
+                <Kpi
+                  label="今日花费"
+                  value={`¥${Number(limits.today.cost_cny || 0).toFixed(2)}`}
+                  note={limits.dailyCny > 0 ? `剩 ¥${Number(limits.today.cny_left ?? 0).toFixed(2)}` : "额度不限"}
+                />
+              </KpiGrid>
+              <div className="grid grid-cols-[minmax(120px,220px)_minmax(180px,300px)] gap-3 max-[820px]:grid-cols-1">
+                <Field label="每日调用次数（-1 不限）">
+                  <Input
+                    type="number"
+                    min={-1}
+                    step={1}
+                    value={limits.dailyLlmCalls}
+                    onChange={(e) => setLimitNumber("dailyLlmCalls", e.target.value)}
+                  />
+                </Field>
+                <Field label="每日折算 token（-1 不限）">
+                  <Input
+                    type="number"
+                    min={-1}
+                    step={1}
+                    value={limits.dailyTokens}
+                    onChange={(e) => setLimitNumber("dailyTokens", e.target.value)}
+                  />
+                </Field>
+                <Field label="每日花费上限（元，0 = 不限）">
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={limits.dailyCny}
+                    onChange={(e) => setLimitNumber("dailyCny", e.target.value)}
+                  />
+                </Field>
+              </div>
+              <div className="my-3">
+                <Button variant="primary" disabled={limitsSaving} onClick={() => void saveLimits()}>
+                  {limitsSaving ? "保存中…" : "保存"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted">正在读取额度…</p>
+          )}
+          <StatusText text={limitsStatus.text} error={limitsStatus.error} />
         </CardBody>
       </Card>
 

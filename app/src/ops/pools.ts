@@ -10,6 +10,7 @@ export function listPools(
   return store.listPools({ includeArchived: opts.includeArchived }).map((p) => ({
     alias: store.poolAlias(p.pool_id),
     pool_id: p.pool_id,
+    platform: p.platform,
     kind: p.kind,
     title: store.poolDisplayTitle(p),
     archived: p.archived,
@@ -17,6 +18,8 @@ export function listPools(
     last_msg_at: p.last_msg_at || null,
     last_msg_local: p.last_msg_at ? fmtLocal(p.last_msg_at) : null,
     total: store.poolSpan(p.pool_id).total,
+    unread: store.unreadCount(p.pool_id),
+    cursor: store.getCursor(p.pool_id),
   }));
 }
 

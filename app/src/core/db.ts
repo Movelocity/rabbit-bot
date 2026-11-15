@@ -371,6 +371,8 @@ export class Store {
    * 没聊过或没有名字时才退回池标题（通常是「私聊」）。
    */
   poolDisplayTitle(p: Pool): string {
+    // 网页直聊是管理台里的固定入口，不按对方名字改名
+    if (p.platform === "web") return String(p.title ?? "").trim() || "网页直聊";
     if (p.kind === "private") {
       const row = this.db.prepare(
         `SELECT platform, sender_id FROM messages
@@ -592,6 +594,12 @@ export class Store {
   unread(poolId: string, limit = 200): StoredMessage[] {
     // internal 是系统留痕（额度提示、长任务提醒等），不该被当成未读交给模型
     return this.messagesAfter(poolId, this.getCursor(poolId), limit).filter((m) => !m.from_self && !m.internal);
+  }
+  /** 未读条数：口径和 unread() 一致，只计数不搬正文，供池列表角标用。 */
+  unreadCount(poolId: string): number {
+    return (this.db.prepare(
+      "SELECT COUNT(*) c FROM messages WHERE pool_id=? AND seq>? AND from_self=0 AND internal=0",
+    ).get(poolId, this.getCursor(poolId)) as any).c;
   }
   poolsWithUnread(): string[] {
     return (this.db.prepare(`SELECT p.pool_id FROM pools p WHERE p.archived=0 AND EXISTS (SELECT 1 FROM messages m WHERE m.pool_id=p.pool_id AND m.from_self=0

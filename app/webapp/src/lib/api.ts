@@ -117,3 +117,46 @@ export async function checkHealth(): Promise<boolean> {
     return false;
   }
 }
+
+export interface WebAuthStatus {
+  enabled: boolean;
+  username: string;
+  agent: string;
+  setup_required: boolean;
+  authenticated: boolean;
+  pool: string;
+  title: string;
+}
+
+export interface WebLoginResult {
+  token: string;
+  username: string;
+  expires_at: number;
+}
+
+/** 公共入口：不需要 token，用来决定显示登录还是首次设置密码。 */
+export async function fetchWebAuthStatus(): Promise<WebAuthStatus> {
+  return apiRequest<WebAuthStatus>("", "/v1/auth/status");
+}
+
+export async function setupWebPassword(password: string): Promise<WebLoginResult> {
+  return apiRequest<WebLoginResult>("", "/v1/auth/setup", {
+    method: "POST",
+    body: { password },
+  });
+}
+
+export async function loginWeb(username: string, password: string): Promise<WebLoginResult> {
+  return apiRequest<WebLoginResult>("", "/v1/auth/login", {
+    method: "POST",
+    body: { username, password },
+  });
+}
+
+export async function logoutWeb(token: string): Promise<void> {
+  try {
+    await apiRequest<unknown>(token, "/v1/auth/logout", { method: "POST" });
+  } catch {
+    // 退出是尽力而为：本地清掉 token 就够了
+  }
+}

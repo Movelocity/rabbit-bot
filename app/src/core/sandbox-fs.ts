@@ -39,6 +39,8 @@ export class SandboxPathError extends Error {}
 
 export interface SandboxFs {
   readonly root: string;
+  /** 把沙盒相对路径解析成宿主绝对路径；越界、绝对路径、指向外部的软链都会抛 SandboxPathError。 */
+  resolve(rel: string): string;
   list(sub?: string): SandboxEntry[];
   read(rel: string): string;
   write(rel: string, text: string): number;
@@ -111,6 +113,8 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
 
   return {
     root: realRoot,
+
+    resolve,
 
     list(sub = ""): SandboxEntry[] {
       const dir = sub ? resolve(sub) : realRoot;

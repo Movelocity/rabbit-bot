@@ -360,6 +360,11 @@ test("按池策略：总开关、默认值、pool_id 覆盖、主对话免审", 
     "主对话永远免审，即使单独设了需审批",
   );
   assert.equal(reviewRequiredFor({ ...base, primaryPoolId: "feishu:g1" }, "feishu:g2"), true, "其他池照旧");
+  assert.equal(
+    reviewRequiredFor({ ...base, defaultReview: true, overrides: { "web:web-chat": true } }, "web:web-chat"),
+    false,
+    "网页直聊池永远免审，回复直接写回浏览器",
+  );
 });
 
 test("Hub 接线：shouldReview=false 的池直接发，不弹审核", async () => {
@@ -388,6 +393,41 @@ test("Hub 接线：shouldReview=false 的池直接发，不弹审核", async () 
   hub.takeUnread();
   const r = await hub.send("feishu:oc_direct", "在");
   assert.equal(r.queuedForReview, undefined);
+  assert.equal(r.ok, true);
+  assert.deepEqual(sent, ["在"]);
+  assert.equal(proposed, 0);
+});
+
+test("Hub 接线：网页直聊池出站免审，回复直接写回", async () => {
+  const config = loadConfig();
+  config.send.confirmWaitMs = 0;
+  config.send.pacing.enabled = false;
+  const store = new Store(":memory:");
+  const hub = new Hub(store, config, log, {} as any);
+  const sent: string[] = [];
+  hub.addAdapter({
+    platform: "web" as const,
+    start: async () => {},
+    stop: async () => {},
+    sendText: async (_id: string, text: string) => { sent.push(text); return { msgId: "w1" }; },
+  } as any);
+  let proposed = 0;
+  hub.review = {
+    shouldReview: (poolId) => reviewRequiredFor(
+      { enabled: true, defaultReview: true, primaryPoolId: null, overrides: { "web:web-chat": true } },
+      poolId,
+    ),
+    propose: async () => { proposed++; return { queued: true, id: 1 }; },
+  };
+  const pool = store.upsertPool("web", "web-chat", "private", "网页直聊");
+  hub.ingest({
+    platform: "web", external_chat_id: "web-chat", pool_kind: "private",
+    msg_id: "w0", sender_id: "web:rabbit-bot", sender_name: "rabbit-bot", ts: Date.now(), text: "在吗",
+    reply_to: null, mentions: [], is_mention_me: true, media_type: "text",
+  });
+  hub.takeUnread();
+  const r = await hub.send(pool.pool_id, "在");
+  assert.equal(r.queuedForReview, undefined, "网页池不该进审批");
   assert.equal(r.ok, true);
   assert.deepEqual(sent, ["在"]);
   assert.equal(proposed, 0);

@@ -67,6 +67,52 @@ test("GET /v1/scheduler 返回三个值", async () => {
   });
 });
 
+test("GET /v1/scheduler/status：运行态倒计时字段", async () => {
+  const second = await startApiServer({
+    cfg, store, log, token,
+    scheduler: {
+      updateConfig: () => {},
+      stats: () => ({
+        lastTickAt: 1_000, nextTickAt: 2_000, nextTaskAt: 3_000, nextScheduleAt: 4_000,
+        debouncing: [{ pool: "p1", dueAt: 1_500, count: 2 }], recovered: 1, pausesDetected: 0,
+      }),
+    },
+  });
+  const addr = second!.address() as AddressInfo;
+  try {
+    const res = await fetch(`http://127.0.0.1:${addr.port}/v1/scheduler/status`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as any;
+    assert.equal(body.data.available, true);
+    assert.equal(body.data.paused, false);
+    assert.equal(body.data.last_tick_at, 1_000);
+    assert.equal(body.data.next_tick_at, 2_000);
+    assert.deepEqual(body.data.debouncing, [{ pool: "p1", dueAt: 1_500, count: 2 }]);
+    assert.equal(typeof body.data.now, "number");
+    assert.equal(body.data.tick_ms, cfg.scheduler.tickMs);
+  } finally {
+    await new Promise<void>((r) => second!.close(() => r()));
+  }
+});
+
+test("GET /v1/scheduler/status：没注入调度器时 available=false", async () => {
+  const second = await startApiServer({ cfg, store, log, token });
+  const addr = second!.address() as AddressInfo;
+  try {
+    const res = await fetch(`http://127.0.0.1:${addr.port}/v1/scheduler/status`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as any;
+    assert.equal(body.data.available, false);
+    assert.equal(body.data.next_tick_at, null);
+  } finally {
+    await new Promise<void>((r) => second!.close(() => r()));
+  }
+});
+
 test("PUT /v1/scheduler：合法值 200、写文件、改 cfg、调用 updateConfig", async () => {
   const r = await call("/v1/scheduler", {
     method: "PUT",

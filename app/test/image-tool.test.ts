@@ -8,7 +8,8 @@ import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 import { saveImage } from "../src/core/media.ts";
-import { listImages } from "../src/ops/images.ts";
+import { mediaInboxDir } from "../src/core/runtime.ts";
+import { imageRoots, listImages } from "../src/ops/images.ts";
 
 const PNG_1PX = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -103,4 +104,34 @@ test("img-list 能列出聊天里收到的图，view_image 能按 media/ 名字�
 
   // view 的压缩缓存不会混进 media 列表
   assert.equal(listImages(store, dataDir, { source: "media" }).total, 1);
+});
+
+test("新图落在 runtime/media/inbox：img-list 能列出，view 能按 inbox/ 与图片 id 读回", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-tool-data-"));
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-tool-runtime-"));
+  const cfg = { ...loadConfig(), dataDir, runtimeDir };
+  const store = new Store(":memory:");
+  const tools = createTools({ store, hub: {} as any, cfg, now: () => Date.now(), profile: "ufa" }) as any[];
+  const view = tools.find((t) => t.name === "chat");
+
+  const dir = mediaInboxDir(cfg);
+  assert.ok(dir.startsWith(runtimeDir), "图片目录必须在沙盒根（runtimeDir）里");
+  const a = saveImage(PNG_1PX, { dir, maxEdge: 1024, maxBytes: 512000 }, "img_abc");
+  const roots = imageRoots(cfg);
+
+  const r = listImages(store, dataDir, { source: "inbox", roots });
+  assert.equal(r.total, 1);
+  assert.equal(r.items[0].name, "inbox/img_abc.jpg");
+
+  // 同一条消息的附件和目录里的是同一个文件：all 只列一次，名字按真实位置
+  store.insertMessage(imgMsg({ ...a, id: "img_abc" }));
+  const all = listImages(store, dataDir, { source: "all", roots });
+  assert.equal(all.total, 1);
+  assert.equal(all.items[0].name, "inbox/img_abc.jpg");
+
+  for (const p of ["inbox/img_abc.jpg", "img_abc", "图片#img_abc"]) {
+    const v: any = await view.execute("m1", { action: "view", path: p });
+    assert.equal(v.content[0].type, "image", `应当能读回 ${p}`);
+  }
+  assert.ok(fs.existsSync(a.path));
 });

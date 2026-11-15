@@ -9,9 +9,9 @@ import {
 import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
-import { formatTs, friendlyError, kindLabel } from "../lib/format.ts";
+import { formatTs, friendlyError, kindLabel, platformLabel } from "../lib/format.ts";
 import type { Pool, PoolMessage, PoolMessages, SendReviewSettingsResponse } from "../lib/types.ts";
-import { Button, Chip, Empty, Input, Notice, Segmented } from "../components/ui.tsx";
+import { Button, Chip, Empty, Input, Notice, Segmented, Textarea } from "../components/ui.tsx";
 
 type PoolReviewMode = "inherit" | "review" | "direct";
 
@@ -26,11 +26,14 @@ function initial(value: string | null | undefined): string {
   return text ? text.slice(0, 1) : "?";
 }
 
-function poolBucketKind(kind: string): string {
-  return kind || "group";
+function poolBucketKind(pool: Pool): string {
+  // 网页直聊单独成组：它不是 IM 私聊，交互也和管理台读别的池不一样
+  if (pool.platform === "web") return "web";
+  return pool.kind || "group";
 }
 
 const BUCKET_LABEL: Record<string, string> = {
+  web: "网页直聊",
   private: "私聊",
   group: "群聊",
   task: "任务",
@@ -58,6 +61,8 @@ export function ChatPage({
   const [archiving, setArchiving] = useState(false);
   const [sendReview, setSendReview] = useState<SendReviewSettingsResponse | null>(null);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
 
   const messagesBox = useRef<HTMLDivElement>(null);
   const messagesData = useRef<PoolMessage[]>([]);
@@ -179,6 +184,7 @@ export function ChatPage({
     setTotal(0);
     setOldestSeq(null);
     setLoadingOlder(false);
+    setDraft("");
     if (currentPool) {
       setStatus({ text: "正在读取消息…" });
       void loadLatest(false);
@@ -208,6 +214,23 @@ export function ChatPage({
   }, 3000);
 
   const pool = pools.find((p) => p.alias === currentPool);
+  const isWebPool = pool?.platform === "web";
+
+  const sendDraft = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || !isWebPool || sending) return;
+    setSending(true);
+    try {
+      await request("/v1/webchat/send", { method: "POST", body: { text } });
+      setDraft("");
+      pendingScroll.current = "bottom";
+      await loadLatest(false);
+    } catch (e) {
+      setStatus({ text: `发送失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setSending(false);
+    }
+  }, [draft, isWebPool, sending, request, loadLatest]);
 
   const toggleArchive = useCallback(async () => {
     if (!pool || archiving) return;
@@ -302,12 +325,12 @@ export function ChatPage({
   );
   const buckets = new Map<string, Pool[]>();
   for (const p of visiblePools) {
-    const key = poolBucketKind(p.kind);
+    const key = poolBucketKind(p);
     const list = buckets.get(key) ?? [];
     list.push(p);
     buckets.set(key, list);
   }
-  const bucketOrder = ["private", "group", "task"];
+  const bucketOrder = ["web", "private", "group", "task"];
   const orderedBuckets = [...buckets.entries()].sort(
     (a, b) =>
       (bucketOrder.indexOf(a[0]) === -1 ? 9 : bucketOrder.indexOf(a[0])) -
@@ -319,7 +342,8 @@ export function ChatPage({
   let previousDay = "";
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[288px_minmax(0,1fr)_308px] max-[1200px]:grid-cols-[260px_minmax(0,1fr)] max-[820px]:grid-cols-1">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="grid min-h-0 flex-1 grid-cols-[288px_minmax(0,1fr)_308px] max-[1200px]:grid-cols-[260px_minmax(0,1fr)] max-[820px]:grid-cols-1">
       <aside
         className={cx(
           "flex min-h-0 flex-col border-r border-border bg-surface max-[820px]:border-r-0",
@@ -409,6 +433,12 @@ export function ChatPage({
                               主
                             </Chip>
                           )}
+                          <Chip
+                            tone={p.platform === "web" ? "accent" : "default"}
+                            className="px-1.5 py-0 text-[9px]"
+                          >
+                            {platformLabel(p.platform)}
+                          </Chip>
                           {Number(p.unread) > 0 && (
                             <span
                               className="ml-auto grid h-[16px] min-w-[16px] flex-none place-items-center rounded-full bg-clay px-1 text-[10px] font-semibold tabular-nums text-white"
@@ -454,21 +484,25 @@ export function ChatPage({
             会话列表
           </button>
           <div className="min-w-0 flex-1">
-            <h2 className="rb-display m-0 truncate text-[17px]">
+            <h2
+              className="rb-display m-0 truncate text-[17px]"
+              title={
+                pool
+                  ? `${pool.alias} · ${isWebPool ? "网页直聊" : `${platformLabel(pool.platform)} · ${kindLabel(pool.kind)}`} · ${total} 条消息 · 最后 ${pool.last_msg_local || "—"}`
+                  : undefined
+              }
+            >
               {pool ? pool.title || pool.alias : "选择左侧会话"}
             </h2>
-            <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11.5px] text-muted">
-              {pool ? (
-                <>
-                  <code className="font-mono text-[10.5px] text-faint">{pool.alias}</code>
-                  <span>{kindLabel(pool.kind)}</span>
-                  <span>{total} 条消息</span>
-                  <span>最后 {pool.last_msg_local || "—"}</span>
-                </>
-              ) : null}
-            </div>
           </div>
-          {pool && sendReview && (pool.kind === "group" || pool.kind === "private") && (
+          {isWebPool ? (
+            <div className="flex flex-none flex-wrap items-center justify-end gap-2">
+              <Chip tone="accent">网页直聊 · 免审批</Chip>
+              <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
+                {pool?.archived ? "取消归档" : "归档"}
+              </Button>
+            </div>
+          ) : pool && sendReview && (pool.kind === "group" || pool.kind === "private") ? (
             <div className="flex flex-none flex-wrap items-center justify-end gap-2">
               {isPrimary ? (
                 <Chip tone="accent">主聊天 · 免审批</Chip>
@@ -501,7 +535,7 @@ export function ChatPage({
                 {pool.archived ? "取消归档" : "归档"}
               </Button>
             </div>
-          )}
+          ) : null}
         </div>
 
         {status.text && (
@@ -534,7 +568,11 @@ export function ChatPage({
                 </div>
               )}
               {!messages.length ? (
-                <Empty>这个池还没有消息。收发消息请用已启用的 IM。</Empty>
+                <Empty>
+                  {isWebPool
+                    ? "网页直聊还没有消息。在下面输入框里发第一句。"
+                    : "这个池还没有消息。收发消息请用已启用的 IM。"}
+                </Empty>
               ) : (
                 messages.map((m) => {
                   const stamp = m.local || formatTs(m.ts);
@@ -612,25 +650,58 @@ export function ChatPage({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-2 text-[11px] text-muted max-[820px]:px-3">
-          <span>只读 · 收发走已启用的 IM</span>
-          <div className="flex items-center gap-1.5">
-            {canLoadOlder && (
-              <Button variant="ghost" size="sm" disabled={loadingOlder} onClick={() => void loadOlder()}>
-                加载更早
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (messagesBox.current) messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
+        {isWebPool ? (
+          <form
+            className="flex items-end gap-2 border-t border-border bg-surface px-5 py-3 max-[820px]:px-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void sendDraft();
+            }}
+          >
+            <Textarea
+              rows={2}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void sendDraft();
+                }
               }}
+              placeholder="给机器人发消息… Enter 发送，Shift+Enter 换行"
+              aria-label="网页直聊输入框"
+              className="min-h-[44px] flex-1 resize-none py-2 text-[13px]"
+            />
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!draft.trim() || sending}
+              className="mb-px flex-none px-4 py-2"
             >
-              回到最新
+              {sending ? "发送中…" : "发送"}
             </Button>
+          </form>
+        ) : (
+          <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-2 text-[11px] text-muted max-[820px]:px-3">
+            <span>只读 · 收发走已启用的 IM</span>
+            <div className="flex items-center gap-1.5">
+              {canLoadOlder && (
+                <Button variant="ghost" size="sm" disabled={loadingOlder} onClick={() => void loadOlder()}>
+                  加载更早
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (messagesBox.current) messagesBox.current.scrollTop = messagesBox.current.scrollHeight;
+                }}
+              >
+                回到最新
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       <aside className="rb-thin-scroll min-h-0 overflow-y-auto border-l border-border bg-surface p-3.5 max-[1200px]:hidden">
@@ -646,16 +717,20 @@ export function ChatPage({
                   <code className="font-mono text-[10.5px]">{pool.pool_id}</code>
                 </dd>
                 <dt>类型</dt>
-                <dd>{kindLabel(pool.kind)}</dd>
+                <dd>{isWebPool ? "网页直聊" : kindLabel(pool.kind)}</dd>
+                <dt>渠道</dt>
+                <dd>{platformLabel(pool.platform)}</dd>
                 <dt>消息</dt>
                 <dd>{pool.total || 0} 条</dd>
                 <dt>最后</dt>
                 <dd>{pool.last_msg_local || "—"}</dd>
               </dl>
               <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted">
-                {pool.is_main
-                  ? "主聊天：任务汇报与审批消息都发这里，发送永不审批。"
-                  : "只读值班台：修改发送策略只影响机器人后续发送。"}
+                {isWebPool
+                  ? "网页直聊：在浏览器或这个页面发消息都会进同一个池，机器人回复免审批直接写回。"
+                  : pool.is_main
+                    ? "主聊天：任务汇报与审批消息都发这里，发送永不审批。"
+                    : "只读值班台：修改发送策略只影响机器人后续发送。"}
               </p>
             </>
           ) : (
@@ -668,7 +743,11 @@ export function ChatPage({
             发送策略
           </div>
           {pool && sendReview ? (
-            isPrimary ? (
+            isWebPool ? (
+              <Notice tone="accent">
+                网页直聊固定直接发：消息在浏览器里往返，不进入审批流程。
+              </Notice>
+            ) : isPrimary ? (
               <Notice tone="accent">
                 主聊天永远免审批；任务汇报只发这里，审批消息也发这里。
               </Notice>
@@ -693,7 +772,7 @@ export function ChatPage({
           ) : (
             <p className="m-0 text-[11.5px] text-muted">发送审核接口不可用。</p>
           )}
-          {pool && sendReview ? (
+          {pool && sendReview && !isWebPool ? (
             <>
               <div className="my-3 h-px bg-border" />
               <Button
@@ -732,6 +811,7 @@ export function ChatPage({
           )}
         </div>
       </aside>
+      </div>
     </div>
   );
 }

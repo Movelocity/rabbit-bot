@@ -10,8 +10,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
-import { resolveImagePath } from "../ops/images.ts";
-import { shellRunnerOptions, readSandboxFile, writeSandboxFile, execShell, shellTimeoutSec } from "../ops/exec.ts";
+import { imageRoots, resolveImagePath } from "../ops/images.ts";
+import { shellRunnerOptions, readSandboxFile, writeSandboxFile, resolveSandboxPath, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
 import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
 import {
@@ -37,7 +37,7 @@ import {
 } from "../core/tasks.ts";
 import { listTaskEvents } from "../core/task-events.ts";
 import {
-  DEFAULT_CAPTURE_MS, isRunnerAlive, resumeTask, stopTask,
+  DEFAULT_CAPTURE_MS, resumeTask, runnerAlive, stopTask,
   type DispatchDeps,
 } from "../core/dispatch.ts";
 import { resolveApiToken } from "../api-token.ts";
@@ -261,7 +261,7 @@ export function createTools(d: ToolDeps) {
             if (!p.path) return txt("view 要 path（media/… 或 inbox/…）。", { ok: false });
             let abs: string;
             try {
-              abs = resolveImagePath(d.cfg.dataDir, p.path);
+              abs = resolveImagePath(d.cfg.dataDir, p.path, imageRoots(d.cfg));
             } catch {
               return txt(`没有这张图：${p.path}（先用 rb img-list 看看有哪些）`, { ok: false });
             }
@@ -980,7 +980,7 @@ export function createTools(d: ToolDeps) {
             if (!task.session_id.trim()) {
               return txt(`#${p.id} 没有 session_id，不能恢复；请先 start 或重新创建。`, { ok: false });
             }
-            if (isRunnerAlive(task.runner_pid)) return txt(`#${p.id} 已在运行。`, { ok: false });
+            if (runnerAlive(task, d.cfg.dataDir)) return txt(`#${p.id} 已在运行。`, { ok: false });
             const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
             const resumed = await resumeTask(d.store, task, deps);
             const view = formatTask(resumed.task);
@@ -999,7 +999,7 @@ export function createTools(d: ToolDeps) {
             if (p.id === undefined) return txt("cancel 要 id。", { ok: false });
             const task = getTask(d.store, p.id);
             if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
-            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
+            if (runnerAlive(task, d.cfg.dataDir)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const updated = cancelTask(d.store, p.id);
             const view = formatTask(updated);
             return txt(`#${updated.id} 已取消。`, { ok: true, task: view });
@@ -1505,9 +1505,12 @@ export function createTools(d: ToolDeps) {
       if (!base || !token) return txt("上传没配好：框架里缺 TOS_SHORT_URL / TOS_SHORT_TOKEN（告主人，别自己找凭据）", { ok: false });
       const rel = String(p.path ?? "").trim();
       if (!rel) return txt("缺少 path", { ok: false });
-      const root = path.resolve(d.cfg.runtimeDir);
-      const abs = path.resolve(root, rel);
-      if (abs !== root && !abs.startsWith(root + path.sep)) return txt(`路径越界：${rel}`, { ok: false });
+      let abs: string;
+      try {
+        abs = resolveSandboxPath(d.cfg, rel, d.readRoot);
+      } catch (e) {
+        return txt(`路径不对：${(e as Error).message}`, { ok: false });
+      }
       let buf: Buffer;
       try {
         const st = fs.statSync(abs);
@@ -1518,12 +1521,14 @@ export function createTools(d: ToolDeps) {
         return txt(`读不了：${(e as Error).message}`, { ok: false });
       }
       const filename = String(p.name ?? path.basename(abs));
+      // fetch 的 header 必须是 ByteString；中文名只能百分号编码，ASCII 名保持原样
+      const headerName = /^[\x20-\x7e]*$/.test(filename) ? filename : encodeURIComponent(filename);
       try {
         const r = await fetch(`${base}/u`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
-            "X-Filename": encodeURIComponent(filename),
+            "X-Filename": headerName,
             "Content-Type": "application/octet-stream",
           },
           body: new Uint8Array(buf),

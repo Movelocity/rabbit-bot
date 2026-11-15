@@ -17,7 +17,11 @@ const fakeBin = path.join(dir, "fake-exec.mjs");
 fs.writeFileSync(fakeBin, `#!/usr/bin/env node
 import fs from "node:fs";
 const out = process.env.FAKE_EXEC_OUT;
-if (out) fs.writeFileSync(out, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+if (out) {
+  const tmp = out + ".tmp-" + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+  fs.renameSync(tmp, out);
+}
 console.log(JSON.stringify({ type: "step_start", sessionID: "ses_api_fake" }));
 setTimeout(() => process.exit(0), 20);
 `, "utf8");

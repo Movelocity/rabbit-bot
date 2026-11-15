@@ -56,6 +56,11 @@ export function listSandboxFiles(cfg: Config, subdir = "") {
   return sbox(cfg).list(subdir);
 }
 
+export function resolveSandboxPath(cfg: Config, p: string, root?: string): string {
+  if (!p) throw new Error("缺少路径");
+  return sbox(cfg, root).resolve(p);
+}
+
 export function readSandboxFile(cfg: Config, p: string, root?: string) {
   if (!p) throw new Error("缺少路径");
   return { path: p, content: sbox(cfg, root).read(p) };

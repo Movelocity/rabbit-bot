@@ -90,7 +90,8 @@ setTimeout(() => process.exit(0), 20);
     assert.equal(fresh.session_id, "ses_task_approval");
     assert.ok(fs.existsSync(taskDocPath(fresh)), "审批通过后要补写任务文档");
     assert.match(fresh.note, /飞书审批通过/);
-    assert.ok(mock.sent.some((s) => /已批准，开始执行/.test(s.content)));
+    assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id} 审批通过，准备启动`).test(s.content)));
+    assert.equal(mock.sent.some((s) => /已批准，开始执行/.test(s.content)), false);
   } finally {
     await app.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -206,6 +207,44 @@ fs.writeFileSync(${JSON.stringify(marker)}, "started");
     assert.equal(fresh.status, "cancelled");
     assert.equal(fs.existsSync(marker), false, "被拒绝的任务不能启动执行器");
     assert.match(fresh.note, /飞书审批拒绝/);
+    assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id} 已取消`).test(s.content)));
+  } finally {
+    await app.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Web 裁决也在主聊天回一句轻量短线", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-task-decision-"));
+  const cfg = loadConfig({
+    dataDir: dir,
+    logDir: path.join(dir, "logs"),
+    runtimeDir: path.join(dir, "runtime"),
+    exec: { dir: path.join(dir, "sandbox") },
+    sendReview: { primaryPoolId: `mock:${MAIN}` },
+  });
+  const log: any = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, wake: () => {} };
+  const app = new App({
+    cfg, model: { id: "fake/model" } as any, modelRuntime: {} as any,
+    logger: log, dbFile: ":memory:", inMemorySessions: true,
+  });
+  const mock = new MockAdapter();
+  app.hub.addAdapter(mock);
+  await app.start();
+
+  try {
+    const main = app.store.upsertPool("mock", MAIN, "private", "主人");
+    const task = createTask(app.store, {
+      userId: "u1", poolId: main.pool_id, name: "#Web 裁决", goal: "回执",
+      status: "pending_approval",
+    });
+
+    app.onTaskDecided(task.id, "approved");
+    app.onTaskDecided(task.id + 1, "rejected");
+    await wait(20);
+
+    assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id} 审批通过，准备启动`).test(s.content)));
+    assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id + 1} 已取消`).test(s.content)));
   } finally {
     await app.stop();
     fs.rmSync(dir, { recursive: true, force: true });

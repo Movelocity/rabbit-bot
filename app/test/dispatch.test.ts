@@ -7,6 +7,7 @@ import { APP_ROOT, loadConfig } from "../src/config.ts";
 import { Store } from "../src/core/db.ts";
 import { createTools } from "../src/agent/tools.ts";
 import { createTask, getTask, updateTask } from "../src/core/tasks.ts";
+import { completeTask } from "../src/core/workers.ts";
 import { listTaskEvents } from "../src/core/task-events.ts";
 import {
   isRunnerAlive, resumeTask, startTask, stopTask, sweepDeadRunners, writeTaskDoc,
@@ -19,11 +20,15 @@ fs.mkdirSync(workDir, { recursive: true });
 fs.writeFileSync(fakeBin, `#!/usr/bin/env node
 import fs from "node:fs";
 const out = process.env.FAKE_EXEC_OUT;
-if (out) fs.writeFileSync(out, JSON.stringify({
-  argv: process.argv.slice(2),
-  cwd: process.cwd(),
-  env: { RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN },
-}));
+if (out) {
+  const tmp = out + ".tmp-" + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify({
+    argv: process.argv.slice(2),
+    cwd: process.cwd(),
+    env: { RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN },
+  }));
+  fs.renameSync(tmp, out);
+}
 console.log(JSON.stringify({ type: "step_start", sessionID: process.env.FAKE_EXEC_SESSION || "ses_fake_123" }));
 if (process.env.FAKE_EXEC_TOKENS) {
   console.log(JSON.stringify({ type: "step_finish", timestamp: Date.now(), part: {
@@ -139,8 +144,9 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
 
   const events = listTaskEvents(store, task.id, { limit: 1 });
   assert.match(events[0].text, /已启动 opencode/);
-  assert.match(events[0].text, /session=ses_fake_123/);
-  assert.match(events[0].text, /工作目录=/);
+  assert.match(events[0].text, /session 已捕获/);
+  assert.equal(events[0].text.includes("工作目录"), false);
+  assert.equal(events[0].text.includes("ses_fake_123"), false);
   store.close();
 });
 
@@ -216,7 +222,8 @@ test("resumeTask：用同一个 session id 带 -s，提示词要求先读任务�
   assert.equal(getTask(store, task.id)?.session_id, "ses_keep_me");
   const events = listTaskEvents(store, task.id, { limit: 1 });
   assert.match(events[0].text, /恢复执行/);
-  assert.match(events[0].text, /session=ses_keep_me/);
+  assert.equal(events[0].text.includes("工作目录"), false);
+  assert.equal(events[0].text.includes("ses_keep_me"), false);
   store.close();
 });
 
@@ -326,5 +333,40 @@ test("sweepDeadRunners：进程还活着不动，重复扫也不会重复写消�
   const before = listTaskEvents(store, task.id).length;
   assert.deepEqual(sweepDeadRunners(store).dead, []);
   assert.equal(listTaskEvents(store, task.id).length, before);
+  store.close();
+});
+
+test("任务先 complete、执行器后退出：watcher 仍要清 runner_pid 并落用量", async () => {
+  const { store, task } = setup();
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  process.env.FAKE_EXEC_OUT = recordPath();
+  process.env.FAKE_EXEC_SLEEP = "800";
+  process.env.FAKE_EXEC_TOKENS = "1";
+  fs.rmSync(path.join(root, "tasks", String(task.id)), { recursive: true, force: true });
+  try {
+    const started = await startTask(store, task, {
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+    });
+    assert.equal(typeof started.pid, "number");
+    // 执行器还在跑的时候先把任务标成 done：后续退出事件不能把任务状态改回去
+    const done = completeTask(store, task.id, { workerId: `opencode-${task.id}`, result: "做完了" });
+    assert.equal(done.status, "done");
+    assert.equal(done.runner_pid, started.pid, "complete 不负责杀进程，pid 先留着");
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && getTask(store, task.id)?.runner_pid !== null) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const fresh = getTask(store, task.id)!;
+    assert.equal(fresh.runner_pid, null, "执行器退出后 watcher 要清 pid");
+    assert.equal(fresh.status, "done", "退出事件不能把已完成任务改回 running");
+    assert.equal(fresh.exec_total_tokens, 15, "complete 之后的退出也要落用量");
+    const exitEvent = listTaskEvents(store, task.id).find((e) => /执行器进程已退出/.test(e.text));
+    assert.ok(exitEvent, "缺少退出事件");
+    assert.match(exitEvent.text, /正常退出/);
+  } finally {
+    delete process.env.FAKE_EXEC_SLEEP;
+    delete process.env.FAKE_EXEC_TOKENS;
+  }
   store.close();
 });

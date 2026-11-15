@@ -13,7 +13,10 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { APP_ROOT, type Config, type ModelChoice } from "./config.ts";
 import type { Store } from "./core/db.ts";
+import type { Hub } from "./core/hub.ts";
 import type { Logger } from "./core/logger.ts";
+import { WebAuth, effectiveWebChat } from "./core/web-auth.ts";
+import { ensureWebPool, listWebMessages, sendWebMessage } from "./ops/webchat.ts";
 import { archivePool, listPools, readPool, searchPool } from "./ops/pools.ts";
 import { listLlmSessions, readLlmSession } from "./ops/llm-logs.ts";
 import {
@@ -26,7 +29,7 @@ import {
   WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
 } from "./core/workers.ts";
 import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
-import { isRunnerAlive, resumeTask, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
+import { resumeTask, runnerAlive, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
 import {
   APPROVAL_STATUSES, ApprovalConflictError, createApproval, decideApproval, getApproval,
   isApprovalStatus,
@@ -38,7 +41,7 @@ import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
 import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
 import { getProject, listProjects, updateProject } from "./ops/projects.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
-import { listImages, resolveImagePath } from "./ops/images.ts";
+import { imageRoots, listImages, resolveImagePath } from "./ops/images.ts";
 import { fetchWeb, searchWeb } from "./ops/web.ts";
 import { listSandboxFiles, readSandboxFile, writeSandboxFile } from "./ops/exec.ts";
 import { listOutputs, listOutputTree, readOutput, readOutputRaw } from "./ops/outputs.ts";
@@ -52,6 +55,9 @@ import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMa
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
 import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
+import {
+  effectiveLimitSettings, limitStatus, saveLimitSettings, validateLimitSettings,
+} from "./ops/limit-settings.ts";
 import { createSchedule, formatSchedule, isScheduleStatus } from "./core/schedules.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
@@ -81,12 +87,15 @@ export interface ApiDeps {
   enqueue?: () => void;
   /** 测试注入：替换任务执行器可执行文件 */
   executorBin?: string;
+  /** 聊天中枢：网页直聊把用户消息直接 ingest 进池；没注入时 /v1/webchat/send 不可用 */
+  hub?: Hub;
   /** 任务建好后发审批提示（原聊天或 IM 审批房）；不传则只能在 Web 任务页审批 */
   onTaskCreated?: (task: Task) => void;
-  /** 任务在 Web 审批/驳回/取消后，清掉 IM 里的待审提示 */
-  onTaskDecided?: (taskId: number) => void;
+  /** 任务在 Web 审批/驳回/取消后，清掉 IM 里的待审提示并回执主聊天 */
+  onTaskDecided?: (taskId: number, decision: "approved" | "rejected" | "cancelled") => void;
   /** 调度器：Web 保存调度设置后调用 updateConfig 立即生效；日程变更后叫它马上重查 */
-  scheduler?: Pick<Scheduler, "updateConfig"> & Partial<Pick<Scheduler, "notifyScheduleChange">>;
+  scheduler?: Pick<Scheduler, "updateConfig"> &
+    Partial<Pick<Scheduler, "notifyScheduleChange" | "stats">>;
   /** 管理台换主模型：由 App 负责校验凭据、持久化并重建会话 */
   switchModel?: (provider: string, model: string) => Promise<ModelSettings>;
   /** 管理台可选模型：返回当前有凭据的模型 */
@@ -108,6 +117,7 @@ const MIME: Record<string, string> = {
 /**
  * 本地 Web 控制台的静态文件。未登录也能打开页面；接口仍然要 token。
  * 只认 `/`（index.html）、`/favicon.ico` 和 `/ui/*`，碰到路径穿越就当没这个文件，继续走 404。
+ * 旧的 `/chat` 不再单独出页面，统一由 `/` 承担（见请求入口的 302）。
  */
 function serveStatic(pathname: string, res: http.ServerResponse, method: string): boolean {
   if (
@@ -220,6 +230,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
   if (d.cfg.api?.enabled === false) return null;
   // 老库第一次启动：把 runtime/business 的文件地图导一次；之后只读 SQLite
   try { ensureBusinessSeeded(d.store, businessDir(d.cfg)); } catch { /* 坏地图不挡 API */ }
+  // 网页直聊池先建出来，管理台的会话列表和主聊天设置才能在第一条消息之前看到它
+  try { const ws = effectiveWebChat(d.cfg); if (ws.enabled) ensureWebPool(d.store, ws); } catch { /* 配置不完整不挡 API */ }
+  const webAuth = new WebAuth(d.store, d.cfg);
   const port = d.cfg.api?.port ?? DEFAULT_PORT;
   const host = d.cfg.api?.host ?? "0.0.0.0";
   /** 给任务子进程的回环地址；listen 后才知道真实端口 */
@@ -246,6 +259,13 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
       return reply(200, { status: "ok", exec: d.cfg.exec.shell.mode, time: Date.now() });
     }
 
+    // 历史和书签里的 /chat 直接回到统一入口；不保留第二个页面
+    if ((method === "GET" || method === "HEAD") &&
+      (url.pathname === "/chat" || url.pathname === "/chat.html" || url.pathname === "/ui/chat")) {
+      res.writeHead(302, { location: "/?tab=chat" });
+      return res.end();
+    }
+
     // 静态控制台也不鉴权：页面只是壳子，所有数据接口仍要 Bearer token
     if ((method === "GET" || method === "HEAD") && serveStatic(url.pathname, res, method)) return;
     if (method === "GET" && url.pathname === "/favicon.ico") {
@@ -255,7 +275,58 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
 
     const auth = String(req.headers.authorization ?? "");
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : String(req.headers["x-rabbit-bot-token"] ?? "");
-    if (!safeEqual(bearer, d.token)) return fail(401, "token 不对");
+    const apiAuth = safeEqual(bearer, d.token);
+    const webSession = apiAuth ? null : webAuth.verify(bearer);
+    const isWebchat = parts[0] === "v1" && parts[1] === "webchat";
+    const isAuth = parts[0] === "v1" && parts[1] === "auth";
+
+    // Web 登录的公共入口：状态、首次设置密码、登录。这里不需要 token。
+    // 登录成功后拿到的会话 token 和管理台共用（见下面的鉴权），/v1/webchat/* 是兼容旧客户端的别名。
+    const publicAuth = (isWebchat || isAuth) && (
+      (method === "GET" && parts.length === 3 && parts[2] === "status") ||
+      (method === "POST" && parts.length === 3 && (parts[2] === "setup" || parts[2] === "login"))
+    );
+    if (publicAuth) {
+      try {
+        const ws = effectiveWebChat(d.cfg);
+        const body = method === "POST" ? await readBody(req) : {};
+        if (parts[2] === "status") {
+          return reply(200, {
+            enabled: ws.enabled,
+            username: ws.username,
+            agent: String(d.cfg.agent?.name ?? "").trim() || "机器人",
+            setup_required: ws.enabled && webAuth.setupRequired(),
+            authenticated: !!webSession,
+            pool: ws.pool,
+            title: ws.title,
+          });
+        }
+        if (!ws.enabled) throw new HttpError(403, "Web 登录没有开启");
+        if (parts[2] === "setup") {
+          if (typeof body.password !== "string") throw new HttpError(400, "缺少 password");
+          try {
+            const session = webAuth.setup(body.password);
+            return reply(200, { token: session.token, username: session.username, expires_at: session.expires_at });
+          } catch (e) {
+            throw new HttpError(400, (e as Error).message);
+          }
+        }
+        const username = typeof body.username === "string" ? body.username.trim() : "";
+        const password = typeof body.password === "string" ? body.password : "";
+        if (!username || !password) throw new HttpError(400, "缺少用户名或密码");
+        const session = webAuth.login(username, password);
+        if (!session) {
+          d.log.warn(`web auth: 登录失败 ${username}（${req.socket.remoteAddress ?? "?"}）`);
+          throw new HttpError(401, "用户名或密码不对");
+        }
+        return reply(200, { token: session.token, username: session.username, expires_at: session.expires_at });
+      } catch (e) {
+        const err = e as Error;
+        return fail(e instanceof HttpError ? e.status : 400, err.message);
+      }
+    }
+
+    if (!apiAuth && !webSession) return fail(401, "token 不对");
 
     try {
       if (parts[0] !== "v1") throw new HttpError(404, "只支持 /v1/*");
@@ -573,12 +644,12 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
                 sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
               });
-              d.onTaskDecided?.(id);
+              d.onTaskDecided?.(id, "approved");
               return reply(200, formatTask(started.task));
             } catch (e) {
               const message = (e as Error).message;
               const fresh = getTask(d.store, id);
-              if (!fresh || !isRunnerAlive(fresh.runner_pid)) {
+              if (!fresh || !runnerAlive(fresh, d.cfg.dataDir)) {
                 updateTask(d.store, id, { status: "pending_approval", runner_pid: null, runner_started_at: null });
               }
               appendNote(d.store, id, `启动失败：${message}`);
@@ -594,7 +665,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             const reason = typeof body.reason === "string" ? body.reason.trim() : "";
             const cancelled = updateTask(d.store, id, { status: "cancelled" });
             appendNote(d.store, id, reason ? `Web 驳回：${reason}` : "Web 驳回");
-            d.onTaskDecided?.(id);
+            d.onTaskDecided?.(id, "rejected");
             return reply(200, formatTask(getTask(d.store, id) ?? cancelled));
           }
           if (parts.length === 4 && parts[3] === "start" && method === "POST") {
@@ -604,7 +675,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               throw new HttpError(409, `任务 #${id} 等待审批，必须走 /v1/tasks/${id}/approve，不能直接 start`);
             }
             if (!task.work_dir) throw new HttpError(400, `任务 #${id} 没有 work_dir，不能启动`);
-            if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
+            if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 已在运行`);
             writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
@@ -618,7 +689,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (!String(task.session_id ?? "").trim()) {
               throw new HttpError(409, `任务 #${id} 没有 session_id，不能恢复；请先 start 或重新创建`);
             }
-            if (isRunnerAlive(task.runner_pid)) throw new HttpError(409, `任务 #${id} 已在运行`);
+            if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 已在运行`);
             const resumed = await resumeTask(d.store, task, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir,
               sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
@@ -633,9 +704,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 4 && parts[3] === "cancel" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
-            if (isRunnerAlive(task.runner_pid)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
+            if (runnerAlive(task, d.cfg.dataDir)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const resumed = cancelTask(d.store, id);
-            d.onTaskDecided?.(id);
+            d.onTaskDecided?.(id, "cancelled");
             return reply(200, formatTask(resumed));
           }
           if (parts.length === 4 && parts[3] === "status" && method === "POST") {
@@ -806,8 +877,52 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET /v1/usage?bucket=hour|day&from=&to=、GET /v1/usage/calls?from=&to=&limit=");
         }
+        case "limits": {
+          if (parts.length === 2 && method === "GET") return reply(200, limitStatus(d.cfg, d.store));
+          if (parts.length === 2 && method === "PUT") {
+            const current = effectiveLimitSettings(d.cfg);
+            const source = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+            let settings;
+            try {
+              settings = validateLimitSettings({
+                dailyLlmCalls: source.dailyLlmCalls ?? current.dailyLlmCalls,
+                dailyTokens: source.dailyTokens ?? current.dailyTokens,
+                dailyCny: source.dailyCny ?? current.dailyCny,
+              });
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            // 先落盘再应用：写文件失败就整体不动，不出现「接口回了 200 但重启后丢」
+            try {
+              saveLimitSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入日额度设置失败：${(e as Error).message}`);
+            }
+            return reply(200, limitStatus(d.cfg, d.store));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/limits");
+        }
         case "scheduler": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveSchedulerSettings(d.cfg));
+          // 运行态：给 Web 顶栏倒计时用，和 GET /v1/scheduler 的设置契约分开，老客户端不受影响
+          if (parts.length === 3 && parts[2] === "status" && method === "GET") {
+            const stats = d.scheduler?.stats?.();
+            return reply(200, {
+              available: !!stats,
+              now: Date.now(),
+              paused: d.store.isPaused(),
+              last_tick_at: stats?.lastTickAt ?? null,
+              next_tick_at: stats?.nextTickAt ?? null,
+              next_task_at: stats?.nextTaskAt ?? null,
+              next_schedule_at: stats?.nextScheduleAt ?? null,
+              debouncing: stats?.debouncing ?? [],
+              recovered: stats?.recovered ?? 0,
+              pauses_detected: stats?.pausesDetected ?? 0,
+              tick_ms: d.cfg.scheduler.tickMs,
+              active_tick_ms: d.cfg.scheduler.activeTickMs,
+              active_window_ms: d.cfg.scheduler.activeWindowMs,
+            });
+          }
           if (parts.length === 2 && method === "PUT") {
             let settings;
             try {
@@ -829,7 +944,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             });
             return reply(200, effectiveSchedulerSettings(d.cfg));
           }
-          throw new HttpError(404, "用法：GET|PUT /v1/scheduler");
+          throw new HttpError(404, "用法：GET|PUT /v1/scheduler、GET /v1/scheduler/status");
         }
         case "watchdog": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveWatchdogSettings(d.cfg));
@@ -984,10 +1099,11 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               source: url.searchParams.get("source") ?? undefined,
               page: qInt(url.searchParams.get("page")),
               size: qInt(url.searchParams.get("size")),
+              roots: imageRoots(d.cfg),
             }));
           }
           if (parts.length === 3 && parts[2] === "file" && method === "GET") {
-            const abs = resolveImagePath(d.cfg.dataDir, url.searchParams.get("path") ?? "");
+            const abs = resolveImagePath(d.cfg.dataDir, url.searchParams.get("path") ?? "", imageRoots(d.cfg));
             const buf = fs.readFileSync(abs);
             res.writeHead(200, {
               "content-type": MIME[path.extname(abs).toLowerCase()] ?? "application/octet-stream",
@@ -997,6 +1113,56 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return res.end(buf);
           }
           throw new HttpError(404, "用法：GET /v1/images、GET /v1/images/file?path=media/x.jpg");
+        }
+        case "auth": {
+          const ws = effectiveWebChat(d.cfg);
+          if (parts.length === 3 && parts[2] === "me" && method === "GET") {
+            return reply(200, {
+              username: webSession?.username ?? ws.username,
+              agent: String(d.cfg.agent?.name ?? "").trim() || "机器人",
+              pool: ws.pool,
+              title: ws.title,
+              /** token = 直接拿 RABBIT_BOT_API_TOKEN 进来的，没有浏览器登录会话 */
+              via: webSession ? "session" : "token",
+            });
+          }
+          if (parts.length === 3 && parts[2] === "logout" && method === "POST") {
+            webAuth.logout(bearer);
+            return reply(200, { ok: true });
+          }
+          throw new HttpError(404, "用法：GET /v1/auth/status|me、POST /v1/auth/setup|login|logout");
+        }
+        case "webchat": {
+          const ws = effectiveWebChat(d.cfg);
+          if (!ws.enabled) throw new HttpError(403, "Web 登录没有开启");
+          if (parts.length === 3 && parts[2] === "me" && method === "GET") {
+            return reply(200, {
+              username: ws.username,
+              agent: String(d.cfg.agent?.name ?? "").trim() || "机器人",
+              pool: ws.pool,
+              title: ws.title,
+            });
+          }
+          if (parts.length === 3 && parts[2] === "logout" && method === "POST") {
+            webAuth.logout(bearer);
+            return reply(200, { ok: true });
+          }
+          if (parts.length === 3 && parts[2] === "messages" && method === "GET") {
+            return reply(200, listWebMessages(d.store, ws, {
+              afterSeq: qInt(url.searchParams.get("after_seq")) ?? undefined,
+              limit: qInt(url.searchParams.get("limit")) ?? undefined,
+            }));
+          }
+          if (parts.length === 3 && parts[2] === "send" && method === "POST") {
+            if (!d.hub) throw new HttpError(503, "聊天中枢没有就绪，暂时不能发消息");
+            if (typeof body.text !== "string") throw new HttpError(400, "缺少 text");
+            try {
+              return reply(201, sendWebMessage({ store: d.store, hub: d.hub, settings: ws }, body.text));
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+          }
+          throw new HttpError(404, "用法：GET /v1/webchat/status、POST /v1/webchat/setup|login|send|logout、GET /v1/webchat/me|messages");
         }
         case "web": {
           if (parts.length === 3 && parts[2] === "search" && method === "GET") {

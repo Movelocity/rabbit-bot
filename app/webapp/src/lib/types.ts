@@ -1,6 +1,7 @@
 export interface Pool {
   alias: string;
   pool_id: string;
+  platform?: string;
   kind: string;
   title: string;
   archived: boolean;
@@ -9,8 +10,35 @@ export interface Pool {
   last_msg_at: number | null;
   last_msg_local: string | null;
   total: number;
-  /** 后端尚未提供；接口带上该字段后会话列表自动显示未读角标 */
+  /** 游标之后、非自己发、非系统留痕的消息数 */
   unread?: number | null;
+  /** 调度器已读游标（最后处理到的 seq） */
+  cursor?: number | null;
+}
+
+export interface LimitSettings {
+  /** 每天最多调用几次；-1 = 不设这条闸 */
+  dailyLlmCalls: number;
+  /** 折算 token 日额度；-1 = 不设这条闸 */
+  dailyTokens: number;
+  /** 每天最多花多少人民币；0 = 不按钱限额 */
+  dailyCny: number;
+}
+
+export interface LimitToday {
+  day: string;
+  llm_calls: number;
+  tokens: number;
+  cost_usd: number;
+  cost_cny: number;
+  calls_left: number | null;
+  tokens_left: number | null;
+  cny_left: number | null;
+}
+
+export interface LimitStatus extends LimitSettings {
+  usdCny: number;
+  today: LimitToday;
 }
 
 export interface PoolMessage {
@@ -289,6 +317,24 @@ export interface SchedulerSettings {
   privateWakeMs: number;
   groupWakeMs: number;
   taskWakeMs: number;
+}
+
+export interface SchedulerStatus {
+  /** 后端是否注入调度器；否时只有设置、没有运行态 */
+  available: boolean;
+  /** 服务端当前时间，用它对时，避免浏览器时钟漂移 */
+  now: number;
+  paused: boolean;
+  last_tick_at: number | null;
+  next_tick_at: number | null;
+  next_task_at: number | null;
+  next_schedule_at: number | null;
+  debouncing: { pool: string; dueAt: number; count: number }[];
+  recovered: number;
+  pauses_detected: number;
+  tick_ms: number;
+  active_tick_ms: number;
+  active_window_ms: number;
 }
 
 export type ScheduleKind = "cron" | "delay";

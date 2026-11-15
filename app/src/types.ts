@@ -1,4 +1,4 @@
-export type Platform = "feishu" | "mock" | "matrix" | "task" | "schedule";
+export type Platform = "feishu" | "mock" | "matrix" | "web" | "task" | "schedule";
 export type PoolKind = "private" | "group" | "task" | "schedule";
 export type MediaType = "text" | "image" | "audio" | "file" | "sticker" | "video" | "reaction" | "other";
 

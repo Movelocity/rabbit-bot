@@ -3,9 +3,21 @@
  *
  * 流程：
  *   1. writeTaskDoc 把任务写进 <work_dir>/.ufa/tasks/task-<id>.md，文档里带更新契约；
- *   2. startTask 用 opencode/mimo run 拉起一次性进程，抓 session id 落库；
+ *   2. startTask 拉起的其实是两级「脱管」进程，不是执行器本身：
+ *        rabbit-bot ──spawn──> launcher（立刻退出，把孩子甩给 launchd）
+ *                                └─spawn──> reaper（detached，等执行器退出）
+ *                                             └─spawn──> opencode/mimo run
+ *      launcher 一退出，reaper 就被 launchd 收养，不再是 rabbit-bot 的后代；
+ *      pm2 restart 的 treekill 按 ppid 找子孙，找不到它，所以执行器能活过重启。
+ *      reaper 只干三件事：spawn、把 pid/命令行写进 runner.state.json、wait 退出码写回同一文件。
  *   3. resumeTask 用同一个 session id（-s <id>）再启动；
- *   4. stopTask 只负责杀进程树，cancel 时用。
+ *   4. stopTask 杀执行器进程组（执行器自己是组长），cancel 时用；
+ *   5. sweepDeadRunners 负责「重启后接管」：pid 还活着就重新挂上 1s 探活 watcher，
+ *      死了就用状态文件里的退出码补事件和用量，进程没了但没留下退出信息就记「巡检发现进程不存在」。
+ *
+ * 执行器 stdout/stderr 直接重定向到 data/tasks/<id>/runner.jsonl（不走管道）：
+ * 主进程退出/重启时管道会断，执行器写 stdout 收到 EPIPE 会把自己弄死；写文件没有这个问题，
+ * session id 也从同一个文件里 tail 出来。
  *
  * 回环 API 的地址和 token 只通过环境变量交给子进程（RB_API_BASE / RB_API_TOKEN），
  * 任务文档里也只写变量名，不落明文 token。
@@ -14,11 +26,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
 import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
 import { parseRunnerUsage, runnerLogPath, taskUsagePatch } from "./task-usage.ts";
+import { procStartTime } from "./lockfile.ts";
+import {
+  patchRunnerState, readRunnerState, runnerStatePath, writeRunnerState, type RunnerState,
+} from "./runner-state.ts";
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 
 // 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
@@ -27,6 +44,131 @@ export const DEFAULT_CAPTURE_MS = 15000;  // opencode 冷启动首个事件实�
 export const DEFAULT_DATA_DIR = path.join(APP_ROOT, "data");
 
 export type Executor = "opencode" | "mimo";
+
+/** 接管执行器后的探活间隔（ms）；执行器退出后要尽快把事件和退出码写回任务池。 */
+export const DEFAULT_RUNNER_POLL_MS = 1000;
+
+/**
+ * 第一级 launcher：只负责把 reaper 甩出去然后立刻退出。
+ * 它是 rabbit-bot 的直接子进程，退出后 reaper 被 launchd 收养，脱离 pm2 的进程树。
+ * 用 `node -e` 内联而不是额外文件：tsx / dist 两种启动方式都不用管脚本路径。
+ */
+const RUNNER_LAUNCHER_JS = `
+const { spawn } = require("node:child_process");
+const reaper = spawn(process.execPath, ["-e", process.env.RB_REAPER_JS || ""], {
+  detached: true,
+  stdio: "ignore",
+  env: process.env,
+});
+reaper.unref();
+process.exit(0);
+`;
+
+/**
+ * 第二级 reaper：spawn 执行器（自己当组长，便于 stopTask 杀整组）、写状态文件、wait 退出。
+ * 它已经不是 rabbit-bot 的子孙，不能被主进程的句柄/管道绑住，所以状态与退出信息只走文件。
+ * 这里的代码是纯 JS 字符串，不能写 TS 语法；带 \\n 的是要写进日志文件的换行。
+ */
+const RUNNER_REAPER_JS = `
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const spec = JSON.parse(process.env.RB_RUNNER_SPEC || "{}");
+const write = (state) => {
+  try {
+    fs.mkdirSync(spec.dir, { recursive: true });
+    // 主服务会在拿到 pid 后补 boot（ps 启动时间）；这里写 running/exited 时不能把它覆盖掉
+    try {
+      const prev = JSON.parse(fs.readFileSync(spec.state, "utf8"));
+      if (prev && prev.run_id === state.run_id && prev.pid === state.pid && prev.boot && !state.boot) {
+        state = Object.assign({}, state, { boot: prev.boot });
+      }
+    } catch (e) {}
+    const tmp = spec.state + "." + process.pid + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\\n");
+    fs.renameSync(tmp, spec.state);
+  } catch (e) {}
+};
+const base = {
+  v: 1,
+  run_id: spec.run_id || "",
+  task_id: spec.task_id,
+  executor: spec.executor,
+  action: spec.action,
+  boot: "",
+  started_at: Date.now(),
+  cwd: spec.cwd,
+  argv: [spec.bin].concat(spec.args || []),
+  log: spec.log,
+  updated_at: Date.now(),
+};
+let out;
+try {
+  out = fs.openSync(spec.log, "a");
+} catch (e) {
+  write(Object.assign({}, base, {
+    pid: null, status: "failed",
+    error: "打不开执行器日志：" + String((e && e.message) || e),
+  }));
+  process.exit(1);
+}
+let child;
+try {
+  child = spawn(spec.bin, spec.args, {
+    cwd: spec.cwd,
+    detached: true,
+    stdio: ["ignore", out, out],
+    env: process.env,
+  });
+} catch (e) {
+  fs.closeSync(out);
+  write(Object.assign({}, base, {
+    pid: null, status: "failed",
+    error: "启动执行器失败：" + String((e && e.message) || e),
+  }));
+  process.exit(1);
+}
+fs.closeSync(out);
+const pid = child.pid || null;
+const running = Object.assign({}, base, { pid: pid, status: "running" });
+write(running);
+try {
+  fs.appendFileSync(spec.log, JSON.stringify({
+    type: "ufa-dispatch",
+    action: spec.action,
+    executor: spec.executor,
+    pid: pid,
+    cwd: spec.cwd,
+    argv: [spec.bin].concat(spec.args || []),
+    at: base.started_at,
+  }) + "\\n");
+} catch (e) {}
+child.once("error", (e) => {
+  write(Object.assign({}, running, {
+    status: "failed",
+    error: String((e && e.message) || e),
+    updated_at: Date.now(),
+  }));
+  process.exit(1);
+});
+child.once("exit", (code, signal) => {
+  const ms = Date.now() - base.started_at;
+  try {
+    fs.appendFileSync(spec.log, JSON.stringify({
+      type: "ufa-dispatch", note: "process exited", code: code, signal: signal, ms: ms, at: Date.now(),
+    }) + "\\n");
+  } catch (e) {}
+  write(Object.assign({}, running, {
+    status: "exited",
+    exit_code: code,
+    signal: signal,
+    ms: ms,
+    exited_at: Date.now(),
+    updated_at: Date.now(),
+  }));
+  process.exit(0);
+});
+`;
+
 
 export interface DispatchDeps {
   apiBase: string;
@@ -235,48 +377,304 @@ export function isRunnerAlive(pid: number | null | undefined): boolean {
   }
 }
 
-export interface DeadRunnerSweepResult {
+/** pid 活着、且启动时间和状态文件里记的一致，才算「还是那个执行器」（防 pid 复用）。 */
+export function runnerProcessAlive(pid: number | null | undefined, boot: string): boolean {
+  if (!isRunnerAlive(pid)) return false;
+  const expected = String(boot ?? "").trim();
+  if (!expected) return true;
+  const current = procStartTime(pid!);
+  // 刚 spawn 的进程 ps 可能还没准备好：拿不到就按活着算，别误杀
+  if (!current) return true;
+  return current === expected;
+}
+
+/** 任务上的 runner 是否还活着；有状态文件时用 boot 字段防 pid 复用。 */
+export function runnerAlive(task: Pick<Task, "id" | "runner_pid">, dataDir?: string): boolean {
+  if (!task.runner_pid) return false;
+  const state = readRunnerState(dataDir ?? DEFAULT_DATA_DIR, task.id);
+  const boot = state && state.pid === task.runner_pid ? state.boot : "";
+  return runnerProcessAlive(task.runner_pid, boot);
+}
+
+/** 读文件 [offset, EOF]；读不到返回空串，offset 原样带回。 */
+function readLogChunk(file: string, offset: number): { text: string; next: number } {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    if (size <= offset) return { text: "", next: offset };
+    const len = Math.min(size - offset, 1_000_000);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, offset);
+    return { text: buf.toString("utf8"), next: offset + len };
+  } catch {
+    return { text: "", next: offset };
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+/** 从日志文件 [offset, 现在] 里 tail 出 sessionID；到期没抓到返回空串。 */
+async function captureSessionFromLog(file: string, offset: number, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let next = offset;
+  let buffer = "";
+  for (;;) {
+    const chunk = readLogChunk(file, next);
+    if (chunk.text) {
+      next = chunk.next;
+      buffer += chunk.text;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const sid = extractSessionId(line);
+        if (sid) return sid;
+      }
+    }
+    if (Date.now() >= deadline) return "";
+    await sleep(chunk.text ? 0 : 50);
+  }
+}
+
+/** 扫日志尾部找 sessionID（服务重启接管老任务时补齐用）。 */
+function scanSessionFromLog(file: string, maxBytes = 2_000_000): string {
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { return ""; }
+  const { text } = readLogChunk(file, Math.max(0, size - maxBytes));
+  for (const line of text.split("\n")) {
+    const sid = extractSessionId(line);
+    if (sid) return sid;
+  }
+  return "";
+}
+
+/** reaper 落盘状态可能要几十毫秒：启动时轮询等它写出 pid。 */
+async function waitForRunnerState(
+  dataDir: string,
+  taskId: number,
+  runId: string,
+  timeoutMs: number,
+): Promise<RunnerState | null> {
+  const deadline = Date.now() + Math.max(100, timeoutMs);
+  for (;;) {
+    const state = readRunnerState(dataDir, taskId);
+    // 只认这一轮的 run_id：上一轮 reaper 退出时可能迟到写同一个状态文件
+    if (state && state.run_id === runId && (state.status !== "running" || state.pid)) return state;
+    if (Date.now() >= deadline) return null;
+    await sleep(25);
+  }
+}
+
+function seedRunnerState(task: Task, dataDir: string, pid: number): RunnerState {
+  const now = Date.now();
+  return {
+    v: 1,
+    run_id: "",
+    task_id: task.id,
+    pid,
+    executor: task.executor || "opencode",
+    action: "start",
+    boot: procStartTime(pid) ?? "",
+    started_at: task.runner_started_at ?? task.claimed_at ?? now,
+    cwd: task.work_dir,
+    argv: [],
+    log: runnerLogPath(dataDir, task.id),
+    status: "running",
+    updated_at: now,
+  };
+}
+
+interface AttachedRunner {
+  pid: number;
+  timer: NodeJS.Timeout;
+}
+
+/** 本进程正在盯的执行器（task id → watcher）。重启后为空，正好用来判断「这是不是新接管」。 */
+const runnerWatchers = new Map<number, AttachedRunner>();
+
+export function detachRunnerWatch(taskId: number): void {
+  const current = runnerWatchers.get(taskId);
+  if (!current) return;
+  clearInterval(current.timer);
+  runnerWatchers.delete(taskId);
+}
+
+function exitDescription(state: RunnerState | null, via: "watch" | "sweep" | undefined): string {
+  if (state?.status === "exited") {
+    if (state.signal) return `被信号 ${state.signal} 终止`;
+    if (state.exit_code === 0) return "正常退出";
+    return `退出码 ${state.exit_code ?? "?"}`;
+  }
+  if (state?.status === "stopped") return "已停止执行";
+  if (state?.status === "failed") return `启动失败${state.error ? `：${state.error}` : ""}`;
+  return via === "watch" ? "进程已退出（未捕获退出码）" : "巡检发现进程不存在";
+}
+
+/**
+ * 记一次执行器退出：原子认领 → 写任务池事件 → 落用量 → 状态文件补 lost。
+ * 认领用 `UPDATE ... WHERE runner_pid=?`，watcher 和巡检同时看到同一个死 pid 时只会有一个写。
+ */
+function recordRunnerExit(
+  store: Store,
+  task: Task,
+  opts: { dataDir?: string; now?: number; via?: "watch" | "sweep" } = {},
+): boolean {
+  const pid = task.runner_pid;
+  if (!pid) return false;
+  const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
+  const now = opts.now ?? Date.now();
+  // 不限定 status=running：任务可能已经 complete，但执行器进程还在收尾，退出时仍要清 pid、落用量
+  const claimed = store.db.prepare(
+    "UPDATE tasks SET runner_pid=NULL, runner_started_at=NULL, stage=CASE WHEN status='running' THEN 'exited' ELSE stage END, updated_at=? WHERE id=? AND runner_pid=?",
+  ).run(now, task.id, pid);
+  if (Number(claimed.changes) === 0) return false;
+  const state = readRunnerState(dataDir, task.id);
+  const own = state && state.pid === pid ? state : null;
+  const startedAt = own?.started_at || task.runner_started_at || task.claimed_at;
+  const ms = own && Number.isFinite(own.ms) ? Number(own.ms) : startedAt ? Math.max(0, now - startedAt) : 0;
+  const secs = (ms / 1000).toFixed(1);
+  appendTaskEvent(store, task.id, {
+    text: `执行器进程已退出：${exitDescription(own, opts.via)}（pid=${pid}，session=${task.session_id || "（未捕获）"}，${secs}s）`,
+    sender: "dispatcher",
+    senderName: "调度器",
+  });
+  // 进程已经没了，runner.jsonl 是完整的：顺手把用量落库
+  updateTask(store, task.id, taskUsagePatch(parseRunnerUsage(runnerLogPath(dataDir, task.id))));
+  if (own && own.status === "running") {
+    patchRunnerState(dataDir, task.id, { status: "lost", exited_at: now });
+  }
+  return true;
+}
+
+/** 进程刚没时 reaper 可能还没写完退出码：最多等 500ms，再按「未捕获」记。 */
+async function settleRunnerExit(store: Store, task: Task, dataDir: string): Promise<void> {
+  const deadline = Date.now() + 500;
+  for (;;) {
+    const state = readRunnerState(dataDir, task.id);
+    if (state && state.pid === task.runner_pid && state.status !== "running") break;
+    if (Date.now() >= deadline) break;
+    await sleep(50);
+  }
+  recordRunnerExit(store, task, { dataDir, via: "watch" });
+}
+
+/**
+ * 挂一个 1s 探活 watcher：执行器退出后尽快写事件（巡检是 30s 一次，太慢）。
+ * 只认「pid 活 + boot 一致」；任务被停/被取消/pid 换了就自己摘掉。
+ */
+function ensureRunnerWatch(store: Store, task: Task, opts: { dataDir?: string; pollMs?: number } = {}): void {
+  const pid = task.runner_pid;
+  if (!pid) return;
+  const current = runnerWatchers.get(task.id);
+  if (current && current.pid === pid) return;
+  detachRunnerWatch(task.id);
+  const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
+  const every = Math.max(100, opts.pollMs ?? DEFAULT_RUNNER_POLL_MS);
+  const timer = setInterval(() => {
+    try {
+      const fresh = getTask(store, task.id);
+      // 任务已经 complete 时也要继续盯到进程退出：用量要在这时落库、pid 要清掉
+      if (!fresh || fresh.runner_pid !== pid) {
+        detachRunnerWatch(task.id);
+        return;
+      }
+      const state = readRunnerState(dataDir, task.id);
+      const own = state && state.pid === pid ? state : null;
+      if (own && (own.status === "exited" || own.status === "failed" || own.status === "stopped")) {
+        detachRunnerWatch(task.id);
+        recordRunnerExit(store, fresh, { dataDir, via: "watch" });
+        return;
+      }
+      if (runnerProcessAlive(pid, own?.boot ?? "")) return;
+      detachRunnerWatch(task.id);
+      void settleRunnerExit(store, fresh, dataDir);
+    } catch {
+      // store 已关闭 / 临时读失败：摘掉 watcher，下一次巡检会重挂
+      detachRunnerWatch(task.id);
+    }
+  }, every);
+  (timer as any).unref?.();
+  runnerWatchers.set(task.id, { pid, timer });
+}
+
+export interface RunnerSweepResult {
   /** 这轮扫了多少条 running 任务 */
   checked: number;
   /** 确认进程已退出、已清理的任务 id */
   dead: number[];
+  /** 服务重启后重新接管（pid 还活着）的任务 id */
+  attached: number[];
 }
 
 /**
- * 周期性批量巡检：所有 running 且带 runner_pid 的任务，一次全扫。
+ * 周期性批量巡检 + 重启接管：所有 running 且带 runner_pid 的任务，一次全扫。
  *
- * `launch` 里的 exit 回调只在 rabbit-bot 进程还活着、且还持有 child 句柄时才会触发；
- * 进程重启、句柄丢失、或退出信号没被收到时，任务会永远停在 running。
- * 这里按 pid 探活兜底：死掉的就清 runner 状态，并在任务池里发一条调度器消息，
- * 让 UFA 通过任务事件醒来处理（重试 / 换执行器 / 标记失败）。
+ * 执行器现在脱离 rabbit-bot 进程树（见文件头），主进程重启后拿不到 child 句柄和 exit 事件，
+ * 所以这里负责两件事：
+ *   1. pid 还活着且确实是启动时那个进程（boot 一致）→ 重新挂 watcher，这就是「re-attach」；
+ *      老任务没抓到 session 的，从 runner.jsonl 里补；
+ *   2. pid 没了（或已被复用）→ 按状态文件里的退出码补事件 + 用量，清 runner 字段。
  *
- * 用 `UPDATE ... WHERE runner_pid=?` 原子认领，避免和 exit 回调重复处理同一条任务。
+ * 死掉的那条用 `UPDATE ... WHERE runner_pid=?` 原子认领，避免和 watcher 重复处理。
  */
-export function sweepDeadRunners(store: Store, opts: { dataDir?: string; now?: number } = {}): DeadRunnerSweepResult {
+export function sweepDeadRunners(
+  store: Store,
+  opts: { dataDir?: string; now?: number; pollMs?: number } = {},
+): RunnerSweepResult {
   const running = store.db.prepare(
     "SELECT * FROM tasks WHERE status='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
   ).all() as Task[];
   const dead: number[] = [];
+  const attached: number[] = [];
   const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
   for (const task of running) {
     const pid = task.runner_pid;
-    if (pid === null || isRunnerAlive(pid)) continue;
-    const now = opts.now ?? Date.now();
-    const claimed = store.db.prepare(
-      "UPDATE tasks SET runner_pid=NULL, runner_started_at=NULL, stage='exited', updated_at=? WHERE id=? AND status='running' AND runner_pid=?",
-    ).run(now, task.id, pid);
-    if (Number(claimed.changes) === 0) continue; // exit 回调/别的进程已经处理
-    dead.push(task.id);
-    appendTaskEvent(store, task.id, {
-      text: `执行器进程已退出：巡检发现进程不存在（pid=${pid}，session=${task.session_id || "（未捕获）"}）`,
-      sender: "dispatcher",
-      senderName: "调度器",
-    });
-    // 进程已经没了，runner.jsonl 是完整的：顺手把用量落库
-    updateTask(store, task.id, taskUsagePatch(parseRunnerUsage(path.join(dataDir, "tasks", String(task.id), "runner.jsonl"))));
+    if (pid === null) continue;
+    const state = readRunnerState(dataDir, task.id);
+    const own = state && state.pid === pid ? state : null;
+    if (runnerProcessAlive(pid, own?.boot ?? "")) {
+      const already = runnerWatchers.get(task.id)?.pid === pid;
+      if (!own) {
+        const seeded = seedRunnerState(task, dataDir, pid);
+        if (seeded.boot) writeRunnerState(dataDir, seeded);
+      }
+      ensureRunnerWatch(store, task, { dataDir, pollMs: opts.pollMs });
+      if (already) continue;
+      // 这次是本进程第一次看到这个 pid：服务重启后的接管，留一条痕迹给任务池
+      let session = task.session_id;
+      if (!String(session ?? "").trim()) {
+        session = scanSessionFromLog(runnerLogPath(dataDir, task.id));
+        if (session) updateTask(store, task.id, { session_id: session });
+      }
+      appendTaskEvent(store, task.id, {
+        text: `已接回执行器进程（pid=${pid}，session=${session || "（未捕获）"}），不再重启`,
+        sender: "dispatcher",
+        senderName: "调度器",
+      });
+      attached.push(task.id);
+      continue;
+    }
+    if (recordRunnerExit(store, task, { dataDir, now: opts.now, via: "sweep" })) dead.push(task.id);
   }
-  return { checked: running.length, dead };
+  // 已经 complete/cancelled、但执行器还在收尾的任务：接管/清理 pid，退出时把用量补齐。
+  // 不算 attached/dead，也不改任务状态——它们已经不是 running 了。
+  const settled = store.db.prepare(
+    "SELECT * FROM tasks WHERE status!='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
+  ).all() as Task[];
+  for (const task of settled) {
+    const pid = task.runner_pid;
+    if (pid === null) continue;
+    const state = readRunnerState(dataDir, task.id);
+    const own = state && state.pid === pid ? state : null;
+    if (runnerProcessAlive(pid, own?.boot ?? "")) {
+      ensureRunnerWatch(store, task, { dataDir, pollMs: opts.pollMs });
+      continue;
+    }
+    recordRunnerExit(store, task, { dataDir, now: opts.now, via: "sweep" });
+  }
+  return { checked: running.length, dead, attached };
 }
+
 
 export interface LongRunningSweepResult {
   /** 这轮扫了多少条 running 任务 */
@@ -381,105 +779,77 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
   const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);
+  const actualBin = opts.executorBin ?? bin;
   const executor: Executor = fresh.executor === "mimo" ? "mimo" : "opencode";
   const workerId = `${executor}-${fresh.id}`;
   const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
   const logDir = path.join(dataDir, "tasks", String(fresh.id));
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = path.join(logDir, "runner.jsonl");
-  const out = fs.createWriteStream(logFile, { flags: "a" });
-  const startedAt = opts.now ?? Date.now();
+  const stateFile = runnerStatePath(dataDir, fresh.id);
+  // 上一轮的 runner.state.json 先删掉：否则 waitForRunnerState 会立刻读到旧结果
+  fs.rmSync(stateFile, { force: true });
+  // 只从这一轮新写的内容里抓 session，避免读到上一轮日志
+  let logOffset = 0;
+  try { logOffset = fs.statSync(logFile).size; } catch { logOffset = 0; }
+  const budget = Math.max(1000, opts.captureMs ?? DEFAULT_CAPTURE_MS);
+  const deadline = Date.now() + budget;
 
-  let child: ChildProcess;
+  const env = {
+    ...process.env,
+    RB_API_BASE: opts.apiBase,
+    RB_API_TOKEN: opts.token,
+    RB_APP_DIR: APP_ROOT,
+    ...(opts.sharedDir ? {
+      RB_SHARED_DIR: opts.sharedDir,
+      RB_MEMORY_FILE: path.join(path.dirname(opts.sharedDir), "memory.md"),
+    } : {}),
+  };
+
+  const runId = randomUUID();
+  let launcher: ChildProcess;
   try {
-    child = spawn(opts.executorBin ?? bin, args, {
-      cwd: workDir,
+    launcher = spawn(process.execPath, ["-e", RUNNER_LAUNCHER_JS], {
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: "ignore",
       env: {
-        ...process.env,
-        RB_API_BASE: opts.apiBase,
-        RB_API_TOKEN: opts.token,
-        RB_APP_DIR: APP_ROOT,
-        ...(opts.sharedDir ? {
-          RB_SHARED_DIR: opts.sharedDir,
-          RB_MEMORY_FILE: path.join(path.dirname(opts.sharedDir), "memory.md"),
-        } : {}),
+        ...env,
+        RB_REAPER_JS: RUNNER_REAPER_JS,
+        RB_RUNNER_SPEC: JSON.stringify({
+          run_id: runId,
+          task_id: fresh.id,
+          executor,
+          action: opts.resume ? "resume" : "start",
+          bin: actualBin,
+          args,
+          cwd: workDir,
+          log: logFile,
+          state: stateFile,
+          dir: logDir,
+        }),
       },
     });
+    launcher.once("error", () => { /* 后面等不到状态文件会统一报错 */ });
+    launcher.unref();
   } catch (e) {
-    out.end();
-    throw new Error(`启动 ${executor} 失败：${(e as Error).message}`);
-  }
-
-  let sessionId = fresh.session_id;
-  let captured = opts.resume;
-  let buffer = "";
-  let done = false;
-  let timer: NodeJS.Timeout | null = null;
-
-  const captureDone = new Promise<void>((resolve) => {
-    const finish = () => {
-      if (done) return;
-      done = true;
-      if (timer) clearTimeout(timer);
-      resolve();
-    };
-    child.stdout?.on("data", (chunk: Buffer) => {
-      out.write(chunk);
-      if (captured) return;
-      buffer += chunk.toString("utf8");
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const sid = extractSessionId(line);
-        if (sid) {
-          sessionId = sid;
-          captured = true;
-          // 立刻落库。opencode 冷启动到首个事件实测 3.4s，可能晚于捕获窗口——只在窗口结束时
-          // 写一次的话，session_id 会永远是空（任务 #2，2026-11-15），恢复（-s）就不可用。
-          try {
-            updateTask(store, fresh.id, { session_id: sid });
-          } catch { /* 落库失败不该挡执行 */ }
-          finish();
-          break;
-        }
-      }
-    });
-    child.stderr?.on("data", (chunk: Buffer) => out.write(chunk));
-    child.once("error", () => finish());
-    child.once("close", () => {
-      out.end();
-      finish();
-    });
-    // 恢复不需要抓 session：立刻返回，别把 API 请求拖到任务结束
-    if (opts.resume) finish();
-    else timer = setTimeout(finish, opts.captureMs ?? DEFAULT_CAPTURE_MS);
-  });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      child.once("spawn", () => resolve());
-      child.once("error", reject);
-    });
-  } catch (e) {
-    if (timer) clearTimeout(timer);
-    out.end();
     updateTask(store, fresh.id, { runner_pid: null, status: "pending" });
     throw new Error(`启动 ${executor} 失败：${(e as Error).message}`);
   }
 
-  const pid = child.pid ?? null;
-  // 记下实际命令（只有参数，token 在 env 里），e2e / 排查时能确认有没有带 -s
-  fs.appendFileSync(logFile, `${JSON.stringify({
-    type: "ufa-dispatch",
-    action: opts.resume ? "resume" : "start",
-    executor,
-    pid,
-    cwd: workDir,
-    argv: [opts.executorBin ?? bin, ...args],
-    at: startedAt,
-  })}\n`);
+  const state = await waitForRunnerState(dataDir, fresh.id, runId, Math.max(500, deadline - Date.now()));
+  const pid = state?.pid ?? null;
+  if (!state || !pid || state.status === "failed") {
+    const reason = state?.error
+      || (state?.status === "exited" ? "执行器启动后立刻退出，未拿到 pid" : "执行器进程没有起来（未拿到 pid 和状态文件）");
+    updateTask(store, fresh.id, { runner_pid: null, status: "pending" });
+    throw new Error(`启动 ${executor} 失败：${reason}`);
+  }
+
+  // pid 会复用：把 ps 的进程启动时间记进状态文件，重启后靠它确认「还是那个执行器」
+  const boot = state.boot || procStartTime(pid) || "";
+  if (boot && boot !== state.boot) patchRunnerState(dataDir, fresh.id, { boot });
+
+  const startedAt = state.started_at || (opts.now ?? Date.now());
   updateTask(store, fresh.id, {
     status: "running",
     worker_id: workerId,
@@ -493,12 +863,18 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
     doc_path: docPath,
   });
 
-  await captureDone;
+  let sessionId = fresh.session_id;
+  let captured = opts.resume;
+  if (!opts.resume) {
+    // 恢复不需要抓 session：立刻返回，别把 API 请求拖到任务结束
+    sessionId = await captureSessionFromLog(logFile, logOffset, Math.max(0, deadline - Date.now()));
+    captured = !!sessionId;
+  }
 
-  if (!captured) {
+  if (!captured && !opts.resume) {
     fs.appendFileSync(logFile, `${JSON.stringify({
       type: "ufa-dispatch",
-      note: `${opts.captureMs ?? DEFAULT_CAPTURE_MS}ms 内未从事件流抓到 sessionID（pid=${pid ?? "?"}），恢复任务前需要手动补 session_id`,
+      note: `${budget}ms 内未从事件流抓到 sessionID（pid=${pid}），恢复任务前需要手动补 session_id`,
       at: Date.now(),
     })}\n`);
   }
@@ -512,42 +888,14 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   appendTaskEvent(store, fresh.id, {
     text: opts.resume
-      ? `恢复执行，session=${sessionId || "（未捕获）"}，工作目录=${workDir}`
-      : `已启动 ${executor}，session=${sessionId || "（未捕获）"}，工作目录=${workDir}`,
+      ? "恢复执行（沿用 session）"
+      : `已启动 ${executor}（session ${sessionId ? "已捕获" : "未捕获"}）`,
     sender: "dispatcher",
     senderName: "调度器",
   });
 
-  // 自然退出也要留痕：退出码、信号、耗时，别让任务永远停在 running 还没人知道
-  const recordExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    try {
-      const ms = Date.now() - startedAt;
-      const secs = (ms / 1000).toFixed(1);
-      const how = code === 0 ? "正常退出" : signal ? `被信号 ${signal} 终止` : `退出码 ${code ?? "?"}`;
-      appendTaskEvent(store, fresh.id, {
-        text: `执行器进程已退出：${how}（pid=${pid ?? "?"}，session=${sessionId || "（未捕获）"}，${secs}s）`,
-        sender: "dispatcher",
-        senderName: "调度器",
-      });
-      const now = getTask(store, fresh.id);
-      if (pid !== null && now?.runner_pid === pid) {
-        const patch: Parameters<typeof updateTask>[2] = { runner_pid: null, runner_started_at: null };
-        if (now.status === "running") patch.stage = "exited";
-        updateTask(store, fresh.id, patch);
-      }
-      fs.appendFileSync(logFile, `${JSON.stringify({
-        type: "ufa-dispatch", note: "process exited", code, signal, ms, at: Date.now(),
-      })}\n`);
-      // 进程退出后再算：这时 runner.jsonl 是完整的，token / 费用 / 耗时一次落库
-      updateTask(store, fresh.id, taskUsagePatch(parseRunnerUsage(logFile)));
-    } catch (e) {
-      process.stderr.write(`记录执行器退出失败：${(e as Error).message}\n`);
-    }
-  };
-  child.once("exit", recordExit);
-  if (child.exitCode !== null || child.signalCode !== null) recordExit(child.exitCode, child.signalCode);
-
-  child.unref();
+  // 执行器不在本进程树里，拿不到 exit 事件；挂 1s 探活 watcher，退出后从状态文件取退出码
+  ensureRunnerWatch(store, updated, { dataDir });
   return { task: updated, pid, session_id: sessionId, captured };
 }
 
@@ -574,8 +922,13 @@ export async function stopTask(
 ): Promise<Task> {
   const fresh = getTask(store, task.id);
   if (!fresh) throw new Error(`没有任务 #${task.id}`);
+  const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
   const pid = fresh.runner_pid;
-  const wasAlive = !!pid && isRunnerAlive(pid);
+  const state = readRunnerState(dataDir, fresh.id);
+  const own = state && state.pid === pid ? state : null;
+  // 先摘 watcher：停止过程中的退出事件由本函数统一写，避免同一轮出现两条
+  detachRunnerWatch(fresh.id);
+  const wasAlive = !!pid && runnerProcessAlive(pid, own?.boot ?? "");
   const startedAt = fresh.runner_started_at ?? fresh.claimed_at;
   if (pid && wasAlive) {
     killTree(pid, "SIGTERM");
@@ -586,10 +939,13 @@ export async function stopTask(
   const patch: Parameters<typeof updateTask>[2] = { runner_pid: null, runner_started_at: null };
   if (fresh.status === "running") patch.status = "pending";
   updateTask(store, fresh.id, patch);
+  if (own && own.status === "running") {
+    patchRunnerState(dataDir, fresh.id, { status: "stopped", exited_at: opts.now ?? Date.now() });
+  }
   // 关闭也要落一次用量：进程被 SIGTERM/KILL 时不一定还能等到 exit 回调。
   // 已记录过的退出耗时之和 + 本轮实际跑的时长；token 从 runner.jsonl 重算，不会重复累加。
   if (pid !== null) {
-    const usage = parseRunnerUsage(runnerLogPath(opts.dataDir ?? DEFAULT_DATA_DIR, fresh.id));
+    const usage = parseRunnerUsage(runnerLogPath(dataDir, fresh.id));
     if (wasAlive && startedAt) {
       usage.durationMs = usage.exitedMs + Math.max(0, (opts.now ?? Date.now()) - startedAt);
     }

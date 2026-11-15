@@ -20,16 +20,27 @@ import path from "node:path";
 
 export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable; media?: MediaOptions; filesDir?: string }
 
-/** 从 image / post 消息里取第一张图的 image_key；取不到返回 null。 */
-export function imageKeyOf(msgType: string, content: string): string | null {
+/** 从 image / post 消息里取出所有图的 image_key；取不到返回空数组。 */
+export function imageKeysOf(msgType: string, content: string): string[] {
   let obj: any = {};
-  try { obj = JSON.parse(content); } catch { return null; }
-  if (msgType === "image") return typeof obj.image_key === "string" ? obj.image_key : null;
+  try { obj = JSON.parse(content); } catch { return []; }
+  if (msgType === "image") return typeof obj.image_key === "string" && obj.image_key ? [obj.image_key] : [];
   if (msgType === "post") {
     const body = obj.content ? obj : (obj.zh_cn ?? obj.en_us ?? Object.values(obj)[0] ?? {});
-    for (const line of (body as any).content ?? []) for (const el of line ?? []) if (el?.tag === "img" && el.image_key) return el.image_key;
+    const keys: string[] = [];
+    const lines = Array.isArray(body.content) ? body.content : [];
+    for (const line of lines) {
+      if (!Array.isArray(line)) continue;
+      for (const el of line) if (el?.tag === "img" && typeof el.image_key === "string" && el.image_key) keys.push(el.image_key);
+    }
+    return keys;
   }
-  return null;
+  return [];
+}
+
+/** 从 image / post 消息里取第一张图的 image_key；取不到返回 null。 */
+export function imageKeyOf(msgType: string, content: string): string | null {
+  return imageKeysOf(msgType, content)[0] ?? null;
 }
 
 /**
@@ -143,10 +154,15 @@ export function feishuContentToText(msgType: string, content: string, mentions: 
     const body = obj.content ? obj : (obj.zh_cn ?? obj.en_us ?? Object.values(obj)[0] ?? {});
     const parts: string[] = [];
     if (body.title) parts.push(body.title);
-    for (const line of body.content ?? []) {
-      parts.push((line as any[]).map((el) => el.tag === "text" ? em(el.text ?? "") : el.tag === "a" ? el.text ?? "" : el.tag === "at" ? `@${el.user_name ?? ""}` : el.tag === "img" ? "[图片]" : el.tag === "emotion" ? emotion(el.emoji_type) : el.tag === "media" ? "[视频]" : el.tag === "code_block" ? el.text ?? "" : el.tag === "md" ? em(el.text ?? "") : "").join(""));
+    let hasImage = false;
+    const lines = Array.isArray(body.content) ? body.content : [];
+    for (const line of lines) {
+      const els = Array.isArray(line) ? line : [];
+      parts.push(els.map((el) => el.tag === "text" ? em(el.text ?? "") : el.tag === "a" ? el.text ?? "" : el.tag === "at" ? `@${el.user_name ?? ""}` : el.tag === "img" ? "[图片]" : el.tag === "emotion" ? emotion(el.emoji_type) : el.tag === "media" ? "[视频]" : el.tag === "code_block" ? el.text ?? "" : el.tag === "md" ? em(el.text ?? "") : "").join(""));
+      if (els.some((el) => el?.tag === "img")) hasImage = true;
     }
-    return { text: fixMentions(parts.join("\n")), media: "text" };
+    // 富文本里带图（图 + 说明文字）也按图片消息处理，否则适配器不会去下载，只剩一个 [图片] 占位
+    return { text: fixMentions(parts.join("\n")), media: hasImage ? "image" : "text" };
   }
   if (msgType === "file" && obj.file_name) return { text: `[文件:${obj.file_name}]`, media: "file" };
   const ph = PLACEHOLDER[msgType];
@@ -244,22 +260,32 @@ export class FeishuAdapter implements IMAdapter {
       this.log.info(`feishu raw(${msg.message_type}): ${String(msg.content).slice(0, 400)}`);
     const { text: rawText, media } = feishuContentToText(msg.message_type, msg.content, mentions, this.opts.emoji);
     let text = rawText;
-    // 图片：入池前先落盘（压缩后存 data/media），唤醒时直接读，回复路径零等待。
-    // 每张图生成稳定 id，消息文本写成 [图片#img_xxx]，和落盘文件名一一对应。
+    // 图片：入池前先落盘（压缩后存 <runtimeDir>/media/inbox，容器里是 /work/media/inbox），
+    // 唤醒时直接读，回复路径零等待。每张图生成稳定 id，消息文本写成 [图片#img_xxx]。
     let attachment: Attachment | null = null;
+    const imageKeys = imageKeysOf(msg.message_type, msg.content);
     // 临时探针：任何非文本消息都留一行，确认到底走没走进图片分支
-    if (msg.message_type !== "text") this.log.info(`feishu: 非文本消息 ${msg.message_type} → media=${media} opts.media=${this.opts.media ? "有" : "无"}`);
-    if (media === "image" && this.opts.media) {
-      const key = imageKeyOf(msg.message_type, msg.content);
-      const id = key ? mediaId("img", `${msg.message_id}:${key}`) : "";
-      this.log.info(`feishu: 图片消息 ${msg.message_id} id=${id || "(取不到)"} key=${key ? key.slice(0, 18) + "…" : "(取不到)"}`);
-      if (key && id) {
-        attachment = await this.downloadImage(msg.message_id, key, id)
-          .catch((e) => { this.log.warn(`feishu: 图片下载失败（已降级为 [图片]）：${(e as Error).message}`); return null; });
-        if (attachment) text = text.replace("[图片]", `[图片#${id}]`);
+    if (msg.message_type !== "text") this.log.info(`feishu: 非文本消息 ${msg.message_type} → media=${media} 图${imageKeys.length}张 opts.media=${this.opts.media ? "有" : "无"}`);
+    if (imageKeys.length && this.opts.media) {
+      const ids = imageKeys.map((key) => mediaId("img", `${msg.message_id}:${key}`));
+      this.log.info(`feishu: 图片消息 ${msg.message_id} 共 ${imageKeys.length} 张 id=${ids.join(",")}`);
+      const results = await Promise.all(imageKeys.map((key, i): Promise<Attachment | null> =>
+        this.downloadImage(msg.message_id, key, ids[i])
+          .then((a) => (a ? { ...a, id: ids[i] } : null))
+          .catch((e) => { this.log.warn(`feishu: 图片下载失败（保留 [图片] 占位）：${(e as Error).message}`); return null; }),
+      ));
+      const got = results.filter((x): x is Attachment => !!x);
+      if (got.length) {
+        attachment = got[0];
+        // 富文本可能有多张图；按出现顺序把占位替换成各自的稳定 id
+        let n = 0;
+        text = text.replace(/\[图片\]/g, () => {
+          const a = results[n++];
+          return a?.id ? `[图片#${a.id}]` : "[图片]";
+        });
       }
-      this.log.info(`feishu: 图片${attachment ? `已落盘 ${attachment.width}x${attachment.height} ${attachment.bytes}B` : "没拿到"}`);
-    } else if (media === "image") {
+      this.log.info(`feishu: 图片${got.length ? `已落盘 ${got.length} 张（${got.map((a) => `${a.width}x${a.height} ${a.bytes}B`).join("，")}）` : "没拿到"}`);
+    } else if (imageKeys.length) {
       this.log.warn("feishu: 收到图片但没有配置 media（不会下载）");
     } else if (media === "file" || media === "audio" || media === "video") {
       // 文件不自动下载：留 id 和远端信息，Agent 需要时主动拉
@@ -285,7 +311,8 @@ export class FeishuAdapter implements IMAdapter {
   /** 拉取消息里的图片 → 压缩落盘（用图片 id 命名）。8 秒超时或失败返回 null，消息本身照常入池。 */
   private async downloadImage(messageId: string, imageKey: string, id: string): Promise<Attachment | null> {
     const work = (async () => {
-      const tmp = path.join(os.tmpdir(), `rabbit-bot-${messageId}.img`);
+      // 同一条富文本可能带多张图，并发下载时临时文件名要带 id，否则互相覆盖
+      const tmp = path.join(os.tmpdir(), `rabbit-bot-${messageId}-${id}.img`);
       const res: any = await this.client.im.messageResource.get({
         path: { message_id: messageId, file_key: imageKey },
         params: { type: "image" },

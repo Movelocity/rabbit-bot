@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { App } from "../src/app.ts";
+import { App, pickImageEntries } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import { saveImage } from "../src/core/media.ts";
 
@@ -51,4 +51,13 @@ test("handleWake 会把图片消息的图传给引擎", async () => {
   assert.match(calls[0].prompt, new RegExp(`图片#img_[0-9a-f]+`), "提示词要带上图片 id");
   assert.match(calls[0].prompt, new RegExp(`#${saved!.seq} 图片#img_`), "提示词要能对应到消息 seq");
   await app.stop?.();
+});
+
+test("老图片没有 attachment.id：从文件名 img_xxx 反推，提示词里的 id 才能对上文件", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-wake-id-"));
+  const a = saveImage(PNG_1PX, { dir, maxEdge: 1024, maxBytes: 512000 }, "img_abc1234567");
+  const picked = pickImageEntries([{ seq: 9, msg_id: "om_old", media_type: "image", attachment: a }], 4);
+  assert.equal(picked.length, 1);
+  assert.equal(picked[0].id, "img_abc1234567");
+  assert.equal(picked[0].seq, 9);
 });

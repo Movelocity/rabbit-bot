@@ -76,12 +76,13 @@ cp app/config/persona.md ~/.config/rabbit-bot/runtime/persona.md   # 然后改�
 | `runtime/topics/` | 可选的话题库扩展（`topics.enabled=true` 才启用），只放闲聊谈资；业务知识用 `knowledge` 工具 | 不用 |
 | `runtime/shared/` | worker 交上来的汇报（`task-<id>.md`），`read_file` 直接读 | 不用 |
 | `runtime/files/` | 收到的非图片附件 | 不用 |
+| `runtime/media/inbox/` | 收到的图片（压缩后的 jpeg） | 不用 |
 
 规则只有一条：**运行时目录有就用它，没有才用仓库里的默认份。** 没有配置开关。仓库里的
 `config/persona.md`、`config/persona.example.md` 和 `prompts/` 是默认份和模板，clone 下来能直接跑。
 
 运行时目录同时就是沙盒根：容器里 `/work` 就是它，所以 `prompt/`、`topics/`、`skills/`、
-`shared/`、`files/` 在容器和宿主看到的是同一份。`shared/` 是 worker 交汇报的固定落点
+`shared/`、`files/`、`media/inbox/` 在容器和宿主看到的是同一份。`shared/` 是 worker 交汇报的固定落点
 （`/work/shared/task-<id>.md`）。挂载源变了进程启动时会重建容器。
 
 ## 项目级技能组
@@ -106,24 +107,55 @@ RABBIT_BOT_SKIP_SKILLS=1 npm install       # 安装时跳过
 | 飞书私聊 / 群里 @ | 直接发 |
 | Matrix 私聊 / 群里 @ | 直接发（私聊按房间成员数 ≤2 判定） |
 | 本地注入（绕过 IM） | `npm run inject -- "在吗"` |
-| 浏览器管理台 | 打开 `http://127.0.0.1:3738/`（端口见 `config.api.port`） |
+| 网页直聊 | 打开管理台 `http://127.0.0.1:3738/`，登录后到「会话」里的「网页直聊」 |
+| 浏览器管理台 | 同一个入口 `http://127.0.0.1:3738/`（端口见 `config.api.port`） |
 
-## Web 管理台
+## Web 管理台与登录
 
-正式服务启动后，同一个端口也提供本地网页管理台：打开 `http://127.0.0.1:3738/`，
-输入 10 位登录密钥即可。密钥默认在 `app/data/run/api.token`（首次启动自动生成，权限 0600），
-也可以用环境变量 `RABBIT_BOT_API_TOKEN` 覆盖（≥10 位）。页面本身不需要登录就能打开，
-但所有数据接口都要 Bearer token，token 不对会明确提示。
+正式服务启动后，打开 `http://127.0.0.1:3738/` 就是唯一入口：管理台和网页直聊共用一次
+账号密码登录，默认账号 `rabbit-bot`。
 
-忘记了或想换密钥：删掉 `app/data/run/api.token` 后 `pm2 restart rabbit-bot`，会重新生成
-10 位密钥；旧的网页会话随即失效，需要重新输入。旧版本留下的 64 位 token 文件也会在
-重启时自动换成 10 位。
+- **首次使用**：没有配置密码时，页面引导设置一次密码（至少 6 位），哈希存 SQLite，
+  不落明文。设置完成后即可登录。密码忘了：清掉库里 `kv` 表的 `webchat.password.v1`
+  或改用配置密码。
+- **预置密码**：在 `config/local.json` 写 `webChat.password`，或用环境变量
+  `RABBIT_BOT_WEB_PASSWORD`（环境变量优先）。配置了密码就不再走首次引导。
+- **两条鉴权通道**：浏览器登录会话可以访问整个管理台（`/v1/*`）；脚本、任务 worker
+  继续用 `RABBIT_BOT_API_TOKEN`（默认在 `app/data/run/api.token`）。两条通道互不影响。
+- 旧的 `/chat` 入口已合并，访问会 302 到 `/?tab=chat`。
 
-**聊天收发走已启用的 IM（飞书 / Matrix）；任务审批在任务发起的 IM 聊天或固定审批房完成。Web 是可选的本地管理台，负责人格、提示词、记忆和只读面板。**
+**聊天收发走已启用的 IM（飞书 / Matrix）或网页直聊；任务审批在任务发起的 IM 聊天或固定审批房完成。Web 管理台负责查看和管理人格、提示词、记忆、任务与只读面板。**
+
+## 网页直聊
+
+不想接飞书 / Matrix 时，可以直接用网页对话：在管理台「会话」页左侧的「网页直聊」
+分组里发消息，机器人回复会写回同一个池；网页池的发送固定免审，不进入 IM 审批流程。
+独立页面 `/chat` 已取消。
+
+- **配置项**（`config/default.json` 已给默认值）：
+
+  ```json
+  {
+    "webChat": {
+      "enabled": true,
+      "username": "rabbit-bot",
+      "pool": "web-chat",
+      "title": "网页直聊",
+      "sessionDays": 30
+    }
+  }
+  ```
+
+  最终会话池是 `web:<pool>`（默认 `web:web-chat`），在管理台会话页的「网页直聊」分组
+  里固定展示；登录会话默认 30 天，存在 SQLite，重启不掉线。
+- **权限边界**：公网部署时请先预置密码再开放端口，避免别人抢先完成首次引导。
+  浏览器登录会话等同于管理员，不要把它当成只读账号。
+- **链路**：网页消息按私聊入池 → 调度器去抖唤醒 agent → 回复经 web 适配器写回同一个池
+  → 前端轮询展示。网页池出站消息不走发送审核。不需要外部 IM 长连接。
 
 能做的事：
 
-- 会话：看池列表（alias / 标题 / 私聊群聊 / 最后消息时间 / 总数），看消息时间线并区分机器人自己发的；每 3 秒轮询，支持向上翻页。
+- 会话：看池列表（alias / 标题 / 私聊群聊 / 最后消息时间 / 总数），看消息时间线并区分机器人自己发的；每 3 秒轮询，支持向上翻页。「网页直聊」单独成组，可直接在页面输入框发消息。
 - 任务：按 status / executor / 关键词过滤，分页浏览；点“预览详情”在弹窗里看完整字段、最近事件和 worker 快照；`pending_approval` 的任务可在弹窗里改描述后通过并执行 / 驳回。开启 `taskApproval` 后，任务提示会发到任务发起的聊天（或固定的 IM 审批房），主人贴 OK 就直接启动，Web 只是可选的备用入口。
 - 权限：按 status 过滤查看权限申请；**这是运行时权限申请，审批请在已启用的 IM（飞书 / Matrix）里完成，此页只展示**。
 - Worker：只读查看 worker_id / name / kind / status / last_seen_at。
@@ -171,6 +203,11 @@ demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任
 执行器用 `worker_id = <executor>-<task_id>` 回传进度与结果：
 `POST /v1/tasks/:id/touch|progress|complete|fail`。
 审批、任务事件和 Web 看板都基于这套回传，不再有 worker 注册 / 领任务。
+
+执行器不在 rabbit-bot 的进程树里：启动时经过两级 launcher/reaper 脱管（reaper 被
+launchd 收养），`pm2 restart` 的 treekill 杀不到它，所以主服务重启不会带走正在跑的任务。
+pid、命令行和退出码落在 `data/tasks/<id>/runner.state.json`（含 `ps` 启动时间，防 pid 复用），
+主服务启动后由巡检自动 re-attach 还活着的执行器；要停只能走任务 stop/cancel。
 
 ## 目录
 

@@ -54,6 +54,8 @@ export function mainPoolId(cfg: Config): string | null {
 /** 纯函数：这个池要不要审核。主对话永远免审；总开关关掉时一律直接发。 */
 export function reviewRequiredFor(settings: SendReviewSettings, poolId: string): boolean {
   if (!settings.enabled) return false;
+  // 网页直聊是浏览器里的双向对话，回复直接写回 web 池；再走 IM 审批反而卡住会话
+  if (poolId.startsWith("web:")) return false;
   if (settings.primaryPoolId && settings.primaryPoolId === poolId) return false;
   return settings.overrides[poolId] ?? settings.defaultReview;
 }

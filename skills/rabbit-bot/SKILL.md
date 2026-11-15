@@ -37,7 +37,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 - 业务关系/对象/影响面 → UFA 读 `ufa-business-map/SKILL.md`；WA 读 `wa-business-map/SKILL.md`
 - 设计/清洗/评审关系图，或判断图是否太碎 → 读 `business-relation-modeling/SKILL.md`
 - 人设/提示词 → 读 `app/README.md` 的「定制它」；运行时优先，仓库默认份在 `app/prompts/` 和 `app/config/persona.md`
-- 要一个公网链接 / 交文件给他 → 读 `file-link/SKILL.md`（`/work/bin/upl <文件>`，一行 URL）
+- 要一个公网链接 / 交文件给他 → 读 `file-link/SKILL.md`（`upload(path="…")`，一行 URL）
 - 写汇报 / 验收 → 读 `reporting/SKILL.md`（`app/prompts/system.md` 里只留四段结构和五条硬规则）
 - 需求澄清 / 验收标准 / 停损条件 / 该不该接活 → 读 `product-manager/SKILL.md`
 - 项目拆解 / 排序 / 风险触发信号 / 进度按验收块算 → 读 `project-manager/SKILL.md`

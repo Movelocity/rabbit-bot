@@ -34,6 +34,22 @@ pm2 restart rabbit-bot
 - 实测：`kill -9` 后约 4 秒自动回来，长连接重建。
 - 网页登录密钥：首次启动在 `data/run/api.token` 生成 10 位（去掉 0/O/1/I/l）；旧版 64 位文件重启时自动换成 10 位。要强制换新：删文件后 `pm2 restart rabbit-bot`，已登录页面需重新输入。
 
+### 任务执行器（worker）与重启
+
+`pm2 restart` 会用 treekill 按 ppid 杀整棵进程树，所以 `opencode`/`mimo` 执行器不能挂在
+rabbit-bot 下面。dispatch 起任务时走两级脱管（launcher 立刻退出 → reaper 被 launchd 收养 →
+reaper 再起执行器），执行器与主服务没有父子关系：
+
+- `pm2 restart rabbit-bot` 不会杀死正在跑的任务；新进程启动后巡检会自动 re-attach
+  （任务池里能看到「已接回执行器进程」），执行器退出后再补退出事件和用量。
+- pid、命令行、退出码在 `data/tasks/<id>/runner.state.json`；pid 是否还是原进程按
+  `ps -o lstart=` 比对，防 pid 复用。
+- 执行器 stdout/stderr 直接写 `data/tasks/<id>/runner.jsonl`（不走管道），主进程退出不会 EPIPE。
+- 要停执行器只能走任务 stop/cancel（Web「任务」页、`task` 工具或
+  `POST /v1/tasks/<id>/stop`）；它已经不归 pm2 管了。
+- 手工排查：`ps -o pid,ppid,command -p <runner_pid>`，ppid 应该指向一个被 launchd 收养的
+  reaper（ppid=1），不是 rabbit-bot 主进程。
+
 ### 升级 / 改完代码（清单）
 
 按改动范围选最小的一列执行，最后统一 `pm2 restart rabbit-bot`：

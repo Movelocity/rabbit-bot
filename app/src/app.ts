@@ -15,7 +15,7 @@ import {
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
 import { setTaskEventNotifier } from "./core/task-events.ts";
-import { isRunnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
+import { runnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { AgentWatchdog, type WatchdogDecision } from "./core/agent-watchdog.ts";
@@ -76,6 +76,9 @@ export function dayStartOf(now: number, tz = "Asia/Shanghai"): number {
   return now - secOfDay * 1000 - (now % 1000);
 }
 
+/** 任务审批的几种收口：通过、驳回、超时、取消（Web/IM 共用）。 */
+export type TaskDecision = "approved" | "rejected" | "timeout" | "cancelled";
+
 export interface PickedImage { seq: number; id: string; image: ImagePart }
 
 /**
@@ -95,7 +98,9 @@ export function pickImageEntries(
       const image = toImageContent(m.attachment!);
       if (!image) return null;
       const seq = m.seq ?? 0;
-      const id = m.attachment!.id ?? mediaId("img", `${m.msg_id ?? ""}:${seq}`);
+      // 老数据没有 attachment.id：文件名就是 id（img_xxx.jpg），从 path 反推；认不出才退回 hash
+      const fromPath = m.attachment!.path ? path.basename(m.attachment!.path).replace(/\.[^.]+$/, "") : "";
+      const id = m.attachment!.id ?? (/^img_[\w-]+$/.test(fromPath) ? fromPath : mediaId("img", `${m.msg_id ?? ""}:${seq}`));
       return { seq, id, image };
     })
     .filter((x): x is PickedImage => !!x);
@@ -485,6 +490,9 @@ export class App {
   private sweepRunners(): void {
     try {
       const r = sweepDeadRunners(this.store, { dataDir: this.o.cfg.dataDir });
+      if (r.attached.length) {
+        this.log.info(`执行器接管：${r.attached.length} 个进程还活着，已重新挂上探活（${r.attached.map((id) => `#${id}`).join(" ")}）`);
+      }
       if (r.dead.length) {
         this.log.info(`执行器存活巡检：${r.dead.length}/${r.checked} 个进程已退出，任务池已收到调度器消息（${r.dead.map((id) => `#${id}`).join(" ")}）`);
       }
@@ -504,6 +512,29 @@ export class App {
   }
 
   // ---------- 任务发布审批 ----------
+
+  /**
+   * 审批结果只回一句短消息到主聊天，不走模型、不进上下文。
+   * 任务名可能很长，裁决回执只需要任务号和结果，避免挤占上下文。
+   */
+  private notifyTaskDecisionShort(taskId: number, decision: TaskDecision): void {
+    const target = this.resolveTaskNoticeTarget();
+    if (!target) return;
+    const text = decision === "approved"
+      ? `任务 #${taskId} 审批通过，准备启动`
+      : decision === "timeout"
+        ? `任务 #${taskId} 审批超时，已取消`
+        : `任务 #${taskId} 已取消`;
+    void this.hub.sendSystem(target.platform, target.chatId, text)
+      .then((r) => { if (!r.ok) this.log.warn(`任务 #${taskId} 裁决回执发送失败：${r.error ?? "未知原因"}`); })
+      .catch((e) => this.log.warn(`任务 #${taskId} 裁决回执发送失败：${(e as Error).message}`));
+  }
+
+  /** Web/API 裁决后：清掉 IM 里的待审提示，并回一句短线。 */
+  onTaskDecided(taskId: number, decision: TaskDecision): void {
+    this.forgetTaskApproval(taskId);
+    this.notifyTaskDecisionShort(taskId, decision);
+  }
 
   /** 任务被 UFA / API 建好后调这里：把审批请求发到原聊天或固定审批房（不阻塞当前对话）。 */
   notifyTaskApproval(task: Task): void {
@@ -528,6 +559,11 @@ export class App {
    * 主聊天没设（sendReview.primaryPoolId 为空）时退回 taskApproval.roomId。
    */
   private resolveTaskApprovalTarget(_task: Task): TaskApprovalTarget | null {
+    return this.resolveTaskNoticeTarget();
+  }
+
+  /** 审批提示和裁决回执都优先主聊天，主聊天没设时退回固定审批房。 */
+  private resolveTaskNoticeTarget(): TaskApprovalTarget | null {
     const mainId = mainPoolId(this.o.cfg);
     if (mainId) {
       const pool = this.store.getPool(mainId);
@@ -553,12 +589,7 @@ export class App {
     const timeoutMs = Math.max(1000, this.o.cfg.taskApproval.timeoutMs || 86_400_000);
     for (const task of listTasks(this.store, { status: "pending_approval" })) {
       if (task.created_at + timeoutMs <= now) {
-        const target = this.resolveTaskApprovalTarget(task);
-        void this.timeoutTaskFromChat(task).then((out) => {
-          if (out.text && this.o.cfg.taskApproval.notify !== false && target) {
-            void this.hub.sendSystem(target.platform, target.chatId, out.text);
-          }
-        });
+        void this.timeoutTaskFromChat(task);
         continue;
       }
       this.notifyTaskApproval(task);
@@ -593,11 +624,12 @@ export class App {
         apiBase: deps.apiBase, sharedDir: deps.sharedDir, businessDir: deps.businessDir,
       });
       await startTask(this.store, getTask(this.store, current.id)!, deps);
-      return { ok: true, text: `#${current.id}「${taskDisplayName(current)}」已批准，开始执行` };
+      this.notifyTaskDecisionShort(current.id, "approved");
+      return { ok: true };
     } catch (e) {
       const message = (e as Error).message;
       const fresh = getTask(this.store, current.id);
-      if (!fresh || !isRunnerAlive(fresh.runner_pid)) {
+      if (!fresh || !runnerAlive(fresh, this.o.cfg.dataDir)) {
         updateTask(this.store, current.id, {
           status: "pending_approval", runner_pid: null, runner_started_at: null,
         });
@@ -617,7 +649,8 @@ export class App {
     if (current.status !== "pending_approval") return { ok: false };
     updateTask(this.store, current.id, { status: "cancelled" });
     appendNote(this.store, current.id, `飞书审批拒绝（by=${by}），未执行`);
-    return { ok: true, text: `#${current.id}「${taskDisplayName(current)}」已拒绝，没有执行` };
+    this.notifyTaskDecisionShort(current.id, "rejected");
+    return { ok: true };
   }
 
   /** 超时 = 拒绝（fail-closed）；任务已经不在待审状态就不回消息。 */
@@ -626,7 +659,8 @@ export class App {
     if (!current || current.status !== "pending_approval") return { ok: false };
     updateTask(this.store, current.id, { status: "cancelled" });
     appendNote(this.store, current.id, "审批超时，按拒绝处理，未执行");
-    return { ok: false, text: `#${current.id}「${taskDisplayName(current)}」审批超时，按拒绝处理，没有执行` };
+    this.notifyTaskDecisionShort(current.id, "timeout");
+    return { ok: false };
   }
 
   // ---------- 后台记忆梳理 ----------

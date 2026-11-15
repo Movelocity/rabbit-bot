@@ -4,7 +4,32 @@ export function kindLabel(kind: string): string {
   if (kind === "private") return "私聊";
   if (kind === "group") return "群聊";
   if (kind === "task") return "任务";
+  if (kind === "schedule") return "日程";
   return kind || "";
+}
+
+/** 渠道 = 消息从哪个 IM/入口进来；跟池的私聊/群聊类型是两个维度。 */
+export function platformLabel(platform: string | null | undefined): string {
+  const p = String(platform ?? "");
+  if (p === "feishu") return "飞书";
+  if (p === "matrix") return "Matrix";
+  if (p === "web") return "网页";
+  if (p === "mock") return "模拟";
+  if (p === "task") return "任务";
+  if (p === "schedule") return "日程";
+  return p || "未知";
+}
+
+/** 倒计时：<1 小时用 m:ss，长 tick 用 h:mm:ss；负数按 0 处理。 */
+export function countdown(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
 export function formatTs(ms: number | null | undefined): string {
