@@ -583,7 +583,10 @@ export class App {
     if (current.status !== "pending_approval") {
       return { ok: false };
     }
-    appendNote(this.store, current.id, `飞书审批通过（by=${by}）`);
+    // 平台名不能写死：审批提示现在可能发在 Matrix 主聊天（上游 c5ee7e8 之后一律发主聊天），
+    // 写死「飞书」会让审计轨迹和事实对不上（任务 #4，2026-11-15）。
+    const platformLabel = String(this.o.cfg.taskApproval.platform ?? "").trim() === "matrix" ? "Matrix" : "飞书";
+    appendNote(this.store, current.id, `${platformLabel}审批通过（by=${by}）`);
     try {
       const deps = this.taskDispatchDeps();
       writeTaskDoc(this.store, current, {
