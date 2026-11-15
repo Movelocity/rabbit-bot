@@ -23,7 +23,7 @@ import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type Busi
 
 // 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
 export const MIMO_BIN = process.env.MIMO_BIN || path.join(os.homedir(), ".mimocode/bin/mimo");
-export const DEFAULT_CAPTURE_MS = 3000;
+export const DEFAULT_CAPTURE_MS = 15000;  // opencode 冷启动首个事件实测 ~3.4s，3s 窗口实测漏抓（任务 #2）
 export const DEFAULT_DATA_DIR = path.join(APP_ROOT, "data");
 
 export type Executor = "opencode" | "mimo";
@@ -344,7 +344,10 @@ export function sessionTitle(task: Task): string {
 
 function executorArgs(task: Task, prompt: string, resume: boolean): { bin: string; args: string[] } {
   const executor: Executor = task.executor === "mimo" ? "mimo" : "opencode";
-  const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []), "--dir", task.work_dir,
+  // opencode v2 的 `run` 不认 --dir（全局只有 `opencode --directory X run`），
+  // 而 launch() 已经用 spawn({cwd: workDir}) 把工作目录定死了，所以这里不再传目录参数。
+  // 带 --dir 的后果是 81ms 退出、code=1、抓不到 session_id（任务 #1，2026-11-15）。
+  const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []),
     "--title", sessionTitle(task), "--format", "json"];
   args.push("--dangerously-skip-permissions");
   const model = String(task.model ?? "").trim();
@@ -433,6 +436,11 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
         if (sid) {
           sessionId = sid;
           captured = true;
+          // 立刻落库。opencode 冷启动到首个事件实测 3.4s，可能晚于捕获窗口——只在窗口结束时
+          // 写一次的话，session_id 会永远是空（任务 #2，2026-11-15），恢复（-s）就不可用。
+          try {
+            updateTask(store, fresh.id, { session_id: sid });
+          } catch { /* 落库失败不该挡执行 */ }
           finish();
           break;
         }

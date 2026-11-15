@@ -109,8 +109,10 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   const argv: string[] = record.argv;
   assert.equal(argv[0], "run");
   assert.equal(argv[1], `读 ${docPath} 并执行`);
-  assert.ok(argv.includes("--dir"));
-  assert.equal(argv[argv.indexOf("--dir") + 1], workDir);
+  // opencode v2 的 run 不认 --dir / --directory（后者只在子命令前有效），
+  // 工作目录由 spawn 的 cwd 决定：带 --dir 会让进程 81ms 就退出（任务 #1，2026-11-15）。
+  assert.equal(argv.includes("--dir"), false, `argv 不该带 --dir：${argv.join(" ")}`);
+  assert.equal(argv.includes("--directory"), false, `argv 不该带 --directory：${argv.join(" ")}`);
   assert.ok(argv.includes("--title"));
   assert.equal(argv[argv.indexOf("--title") + 1], `#${task.id} 纪要`);
   assert.ok(argv.includes("--format"));
