@@ -245,12 +245,24 @@ export interface UsageCall {
   costUsd: number;
 }
 
+export interface UsageModelRow {
+  model: string;
+  calls: number;
+  cacheHit: number;
+  cacheMiss: number;
+  outTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
 export interface UsageStats {
   bucket: "hour" | "day";
   from: number;
   to: number;
   summary: UsageSummary;
   series: UsagePoint[];
+  /** 区间全量按模型汇总；明细列表有 limit，不能拿来当汇总 */
+  by_model: UsageModelRow[];
 }
 
 export interface TaskStatsSummary {

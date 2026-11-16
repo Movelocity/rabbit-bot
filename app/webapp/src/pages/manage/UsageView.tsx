@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { formatTs, friendlyError, money, num } from "../../lib/format.ts";
-import type { UsageCall, UsagePoint, UsageStats, UsageSummary } from "../../lib/types.ts";
+import type { UsageCall, UsageModelRow, UsagePoint, UsageStats, UsageSummary } from "../../lib/types.ts";
 import {
   Empty,
   Field,
@@ -163,6 +163,7 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
   const [range, setRange] = useState<Range>("24h");
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [series, setSeries] = useState<UsagePoint[]>([]);
+  const [byModel, setByModel] = useState<UsageModelRow[]>([]);
   const [calls, setCalls] = useState<UsageCall[]>([]);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
 
@@ -184,9 +185,10 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
         if (cancelled) return;
         setSummary(stats.summary);
         setSeries(stats.series || []);
+        setByModel(stats.by_model || []);
         setCalls(detail.calls || []);
         setStatus({
-          text: `共 ${detail.calls?.length ?? 0} 条明细 · 最近更新 ${new Date().toLocaleTimeString("zh-CN")}`,
+          text: `共 ${num(stats.summary.calls)} 次调用 · 明细显示最近 ${detail.calls?.length ?? 0} 条 · 更新 ${new Date().toLocaleTimeString("zh-CN")}`,
         });
       } catch (e) {
         if (cancelled) return;
@@ -207,18 +209,7 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
       ]
     : [];
 
-  const modelRows = useMemo(() => {
-    const map = new Map<string, { model: string; tokens: number; calls: number; cost: number }>();
-    for (const call of calls) {
-      const key = call.model || "—";
-      const row = map.get(key) ?? { model: key, tokens: 0, calls: 0, cost: 0 };
-      row.tokens += Number(call.totalTokens) || 0;
-      row.calls += Number(call.calls) || 0;
-      row.cost += Number(call.costUsd) || 0;
-      map.set(key, row);
-    }
-    return [...map.values()].sort((a, b) => b.tokens - a.tokens);
-  }, [calls]);
+  const modelRows = byModel;
 
   return (
     <>
@@ -264,7 +255,7 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
 
       {modelRows.length ? (
         <div className="mb-3">
-          <div className="mb-1.5 text-[13px] font-semibold">按模型</div>
+          <div className="mb-1.5 text-[13px] font-semibold">按模型（当前区间全量）</div>
           <TableWrap>
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
@@ -283,16 +274,16 @@ export function UsageView({ reloadSignal }: { reloadSignal: number }) {
                 {modelRows.map((row) => (
                   <tr key={row.model} className="hover:bg-accent-soft/30">
                     <td className="whitespace-nowrap border-b border-border px-2.5 py-2 font-mono text-[11.5px]">
-                      {row.model}
+                      {row.model || "—"}
                     </td>
                     <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
-                      {num(row.tokens)}
+                      {num(row.totalTokens)}
                     </td>
                     <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
                       {num(row.calls)}
                     </td>
                     <td className="whitespace-nowrap border-b border-border px-2.5 py-2 text-right tabular-nums">
-                      {money(row.cost)}
+                      {money(row.costUsd)}
                     </td>
                   </tr>
                 ))}

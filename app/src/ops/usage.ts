@@ -1,5 +1,5 @@
 /** Token 用量只读视图：逐次事件按小时/天聚合，API 和 Web 共用。 */
-import type { Store, UsageEventRow } from "../core/db.ts";
+import type { Store, UsageEventRow, UsageModelRow } from "../core/db.ts";
 import { fmtLocal } from "../core/time.ts";
 
 const TZ = "Asia/Shanghai";
@@ -83,4 +83,9 @@ export function usageCalls(
   store: Store, from: number, to: number, limit = 200, tz = TZ,
 ): UsageCall[] {
   return store.listUsageEvents(from, to, limit).map((r) => ({ ...r, ts_local: fmtLocal(r.ts, tz) }));
+}
+
+/** 区间全量按模型汇总（不受明细 limit 影响） */
+export function usageByModel(store: Store, from: number, to: number): UsageModelRow[] {
+  return store.listUsageByModel(from, to);
 }

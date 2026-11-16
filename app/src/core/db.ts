@@ -1277,8 +1277,25 @@ export class Store {
     }));
   }
 
-  countUsageEvents(): number {
-    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM usage_events").get() as any)?.n ?? 0);
+  /** 整段时间内按模型汇总：前端「按模型」表用这个，不能再拿被 limit 截断的明细累加。 */
+  listUsageByModel(from: number, to: number): UsageModelRow[] {
+    const rows = this.db.prepare(
+      `SELECT model, SUM(calls) calls, SUM(cache_hit) cache_hit, SUM(cache_miss) cache_miss,
+              SUM(out_tokens) out_tokens, SUM(total_tokens) total_tokens, SUM(cost_usd) cost_usd
+       FROM usage_events WHERE ts>=? AND ts<? GROUP BY model ORDER BY total_tokens DESC`,
+    ).all(from, to) as any[];
+    return rows.map((r) => ({
+      model: String(r.model),
+      calls: Number(r.calls),
+      cacheHit: Number(r.cache_hit),
+      cacheMiss: Number(r.cache_miss),
+      outTokens: Number(r.out_tokens),
+      totalTokens: Number(r.total_tokens),
+      costUsd: Number(r.cost_usd),
+    }));
+  }
+
+  countUsageEvents(): number {    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM usage_events").get() as any)?.n ?? 0);
   }
 
   /**
@@ -1354,6 +1371,16 @@ export class Store {
     tx();
     return repaired;
   }
+}
+
+export interface UsageModelRow {
+  model: string;
+  calls: number;
+  cacheHit: number;
+  cacheMiss: number;
+  outTokens: number;
+  totalTokens: number;
+  costUsd: number;
 }
 
 export interface UsageEventRow {

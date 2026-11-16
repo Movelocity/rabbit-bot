@@ -54,7 +54,7 @@ import { listExecutors } from "./ops/executors.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
-import { usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
+import { usageByModel, usageCalls, usageSeries, usageSummary } from "./ops/usage.ts";
 import {
   effectiveLimitSettings, limitStatus, saveLimitSettings, validateLimitSettings,
 } from "./ops/limit-settings.ts";
@@ -873,6 +873,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               bucket, from, to,
               summary: usageSummary(d.store, from, to, d.cfg.timezone),
               series: usageSeries(d.store, from, to, bucket, d.cfg.timezone),
+              by_model: usageByModel(d.store, from, to),
             });
           }
           throw new HttpError(404, "用法：GET /v1/usage?bucket=hour|day&from=&to=、GET /v1/usage/calls?from=&to=&limit=");
