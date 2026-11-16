@@ -15,6 +15,7 @@
   <a href="https://sqlite.org"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-local-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://pi.dev"><img alt="pi" src="https://img.shields.io/badge/engine-pi-111111"></a>
   <img alt="IM" src="https://img.shields.io/badge/IM-Feishu%20%7C%20Matrix-00A3FF">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
 </div>
