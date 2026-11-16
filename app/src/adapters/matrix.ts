@@ -13,6 +13,7 @@ import type { IMAdapter, RecallResult, SendResult } from "./types.ts";
 import type { Attachment, InboundMessage, MediaType, PoolKind } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
 import { mediaId, saveFile, saveImage, type MediaOptions } from "../core/media.ts";
+import { looksLikeMarkdown, markdownToHtml } from "./markdown.ts";
 
 export interface MatrixOptions {
   homeserver: string; // https://matrix.hollway.top
@@ -85,10 +86,14 @@ export class MatrixAdapter implements IMAdapter {
   async sendText(roomId: string, text: string): Promise<SendResult> {
     // txnId 只需要在同一个房间内唯一；用「进程启动时刻 + 自增」保证重启后不撞
     const txn = `${Date.now().toString(36)}-${++this.txn}`;
-    const r = await this.request("PUT", `/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txn}`, {
-      msgtype: "m.text",
-      body: text,
-    });
+    // 只在真的命中 markdown 标记时才带 formatted_body：纯文本里出现 *、_、# 不该被改写，
+    // 而且 Element 对 body/formatted_body 不一致的处理是「优先 HTML」，转坏了就没法看原文。
+    const content: Record<string, unknown> = { msgtype: "m.text", body: text };
+    if (looksLikeMarkdown(text)) {
+      content.format = "org.matrix.custom.html";
+      content.formatted_body = markdownToHtml(text);
+    }
+    const r = await this.request("PUT", `/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txn}`, content);
     if (!r?.event_id) throw new Error(`Matrix 发送失败：${JSON.stringify(r).slice(0, 200)}`);
     return { msgId: r.event_id as string };
   }
