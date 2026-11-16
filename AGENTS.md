@@ -31,3 +31,4 @@ npm run start:dev     # 用 tsx 直接跑后端
 - **后端（`app/src/`）改完必须 `npm run build`**，再 `pm2 restart rabbit-bot`；`pm2 restart` 不会编译。
 - 只改 `app/config/prompt/*.md` 时 `pm2 restart` 即可。
 - 改完前端或后端，至少跑对应的 typecheck（`npm run typecheck` / `npm run web:typecheck`）；涉及后端逻辑时跑 `npm test`。
+- 代码和测试不得出现真实人名
