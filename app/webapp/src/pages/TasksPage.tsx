@@ -82,6 +82,13 @@ function taskMatches(t: TaskView, executor: string, search: string): boolean {
   return hay.includes(q);
 }
 
+function executorConfirmText(executor: string): string {
+  if (executor === "mimo") return "mimo";
+  if (executor === "codex") return "codex（带 --dangerously-bypass-approvals-and-sandbox）";
+  if (executor === "claude") return "claude（带 --permission-mode bypassPermissions）";
+  return "opencode（带 --dangerously-skip-permissions）";
+}
+
 function buildDetailRows(t: TaskView): DetailRow[] {
   const rows: DetailRow[] = [];
   const add = (label: string, value: ReactNode, mono = false) => {
@@ -245,7 +252,7 @@ function TaskApprovalForm({
         <Modal title={`通过并执行 #${task.id}？`} onClose={() => setConfirming(false)}>
           <p className="m-0 text-sm leading-relaxed text-muted">
             通过后会立即以无审批模式启动{" "}
-            {task.executor === "mimo" ? "mimo" : "opencode（带 --dangerously-skip-permissions）"}
+            {executorConfirmText(task.executor)}
             ，可能执行任意命令。请确认你已经了解风险。
           </p>
           <div className="mt-4 flex justify-end gap-2">
@@ -455,7 +462,12 @@ export function TasksPage({
               { value: "", label: "全部" },
               ...(executors.length
                 ? executors.map((e) => ({ value: e.name, label: e.available ? e.name : `${e.name}（未安装）` }))
-                : [{ value: "opencode", label: "opencode" }, { value: "mimo", label: "mimo" }]),
+                : [
+                  { value: "opencode", label: "opencode" },
+                  { value: "mimo", label: "mimo" },
+                  { value: "codex", label: "codex" },
+                  { value: "claude", label: "claude" },
+                ]),
             ]}
           />
         </Field>

@@ -316,6 +316,10 @@ export interface ExecutorInfo {
   error: string;
 }
 
+export interface ExecutorPreference {
+  executor: string;
+}
+
 export interface Skill {
   name: string;
   description: string;

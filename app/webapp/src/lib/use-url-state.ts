@@ -21,6 +21,7 @@ export const MANAGE_VIEWS = [
   "users",
   "schedules",
   "settings",
+  "executors",
   "skills",
   "work-memory",
 ] as const;

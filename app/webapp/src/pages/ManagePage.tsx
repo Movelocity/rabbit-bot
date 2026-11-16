@@ -2,6 +2,7 @@ import { cx } from "../lib/cx.ts";
 import { MANAGE_VIEWS, type ManageView } from "../lib/use-url-state.ts";
 import { UsersView } from "./manage/UsersView.tsx";
 import { PersonaView } from "./manage/PersonaView.tsx";
+import { ExecutorsView } from "./manage/ExecutorsView.tsx";
 import { SettingsView } from "./manage/SettingsView.tsx";
 import { UsageView } from "./manage/UsageView.tsx";
 import { TaskStatsView } from "./manage/TaskStatsView.tsx";
@@ -12,15 +13,16 @@ import { ModelsView } from "./manage/ModelsView.tsx";
 import { WorkingMemoryView } from "./manage/WorkingMemoryView.tsx";
 
 const LABELS: Record<ManageView, string> = {
-  usage: "用量",
+  usage: "用量统计",
   "task-stats": "任务统计",
   "llm-logs": "模型日志",
-  models: "模型",
-  persona: "提示词编辑",
-  users: "用户",
-  schedules: "日程",
-  settings: "调度",
+  executors: "本地编程工具",
+  models: "对话模型",
+  users: "用户别名",
+  schedules: "日程管理",
+  settings: "调度开关",
   skills: "技能",
+  persona: "提示词编辑",
   "work-memory": "工作记忆",
 };
 
@@ -33,6 +35,7 @@ const HINTS: Record<ManageView, string> = {
   users: "别名优先于通讯录名字；保存后回填。任务 CLI 用户已隐藏。",
   schedules: "cron 重复 / N 分钟后一次；到点写入日程池。",
   settings: "唤醒间隔单位：秒；日额度按调用 / token / 元三条闸，保存后下一轮生效。",
+  executors: "选择新建任务默认使用的本地编程工具，查看安装状态与版本。",
   skills: "只读：只做发现，不在管理台改技能内容。",
   "work-memory": "只读：跨会话共享的 memory.md；写入仍走 Agent 的 working_memory 工具。",
 };
@@ -79,6 +82,7 @@ export function ManagePage({
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}
         {view === "schedules" && <SchedulesView reloadSignal={reloadSignal} />}
+        {view === "executors" && <ExecutorsView reloadSignal={reloadSignal} />}
         {view === "settings" && <SettingsView reloadSignal={reloadSignal} />}
         {view === "skills" && <SkillsView reloadSignal={reloadSignal} />}
         {view === "work-memory" && <WorkingMemoryView reloadSignal={reloadSignal} />}
