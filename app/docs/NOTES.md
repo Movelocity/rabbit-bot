@@ -69,4 +69,4 @@ rabbit-bot 用的是独立的飞书 app，拿不到 Hermes 那边的 open_id，*
 - **pm2 而不是 launchd 原生**：`sandbox`/`launchd` 那套要写 plist、管 KeepAlive，pm2 的 `save/restore` 更直接。自启靠 LaunchAgent 触发 `pm2 resurrect`。
 - **每次新开会话**：见上面「改了提示词但没生效」。代价是跨进程没有对话记忆，全靠池子。
 - **沙盒用容器不用 OS 沙盒**：见上面 `sandbox-exec` 那条。
-- **沙盒有网**：主人明确要的（装包、clone、抓网页）。代价是它能把手上拿到的内容发出去——想收紧就把 `config.sandbox.shell.network` 改 `"none"`。
+- **沙盒有网**：主人明确要的（装包、clone、抓网页）。代价是它能把手上拿到的内容发出去——想收紧就把 `config.exec.shell.network` 改 `"none"`。

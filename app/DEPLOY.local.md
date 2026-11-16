@@ -73,7 +73,7 @@ reaper 再起执行器），执行器与主服务没有父子关系：
 
 判据：`config/prompt/*.md` 改完 `pm2 restart` 就够；**`src/` 下任何改动都要先 `npm run build`**。
 前端（`webapp/src/`）改动要先 `npm run web:build` 把产物写回 `web/`；只改后端不用动前端。
-自查一行：`grep -c chat_gap dist/agent/prompt.js`（有改动就该 >0）。
+自查一行：`grep -c "<你刚改的那句提示词里独有的字符串>" dist/agent/prompt.js`（有改动就该 >0；不要用历史文档里的旧关键词自查）。
 
 **开机自启（2026-10-24 装好）**：`~/Library/LaunchAgents/pm2.$(whoami).plist`，Label `com.PM2`，`RunAtLoad=true` + `LaunchOnlyOnce=true`，开机触发 `pm2 resurrect`。origin 是
 
@@ -97,10 +97,11 @@ npm 11 默认不跑 install scripts，`better-sqlite3`（原生模块）和 `esb
 
 ```bash
 npm install --no-audit --no-fund
-npm install-scripts approve better-sqlite3 esbuild protobufjs fsevents
-npm rebuild better-sqlite3
+npm rebuild better-sqlite3 esbuild protobufjs fsevents
 node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # 冒烟
 ```
+
+旧文档里的 `npm install-scripts approve ...` 不是 npm 自带命令，已失效。
 
 ## IM 接入（飞书 / Matrix）
 

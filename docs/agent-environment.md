@@ -76,10 +76,11 @@ sudo apt-get install -y build-essential python3 make g++ bash coreutils procps l
 ```bash
 cd app
 npm install --no-audit --no-fund
-npm install-scripts approve better-sqlite3 esbuild protobufjs fsevents
-npm rebuild better-sqlite3
+npm rebuild better-sqlite3 esbuild protobufjs fsevents
 node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"
 ```
+
+`npm install-scripts` 不是 npm 自带的命令；旧文档里的 `npm install-scripts approve ...` 已失效，统一用上面的 `npm rebuild`。
 
 ## 3. Docker 沙盒设置
 
@@ -133,17 +134,21 @@ DEEPSEEK_API_KEY=...
 FEISHU_APP_ID=...
 FEISHU_APP_SECRET=...
 # 启用 Matrix 时再填：MATRIX_TOKEN=...
+# 至少 16 位；太短时本地注入口不启动
 RABBIT_BOT_INJECT_TOKEN=...
 EOF
 chmod 600 ~/.config/rabbit-bot/env
 
 docker build -t rabbit-bot-sandbox:latest -f docker/sandbox.Dockerfile docker/
+npm install -g pm2          # 没装过 pm2 才需要
 pm2 start ecosystem.config.cjs
 pm2 save
 npm run doctor
 ```
 
 `pm2 start` 是唯一启动入口，不要再手工 `run.sh`，否则两个实例会抢消息。单实例锁会以退出码 3 拒绝第二个实例。
+
+不接飞书 / Matrix、只用网页直聊时，把 `adapters.feishu.enabled` 和 `adapters.matrix.enabled` 设为 `false`，保留 `webChat.enabled: true`；`run.sh` 预检同样放行。这条路径适合本机试用。
 
 ### 4.2 Windows + WSL2
 
@@ -294,6 +299,7 @@ pm2 restart rabbit-bot
 
 ## 9. 相关文档
 
+- `skills/rabbit-bot/deploy/SKILL.md`：Agent 闭环部署主流程（分层、一句话复制指令、确定性排障决策树）
 - `app/DEPLOY.local.md`：本机历史部署事实与运维经验
 - `app/README.md`：部署、Web 管理台、任务执行模型
 - `app/docs/OPERATIONS.md`：日常命令

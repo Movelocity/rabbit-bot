@@ -185,5 +185,5 @@ sqlite3 app/data/rabbit-bot.db "select id,session_id,note from tasks;"
 - [ ] `resolveTaskApprovalTarget()` 改动后，主聊天和固定审批房两条退路都还通
 - [ ] 参数改动同时改 `test/dispatch.test.ts` 里对 argv 的断言——
       **断言「不该带某个参数」比断言「带了某个参数」更能防回归**
-- [ ] `npm run build && npm test` 全绿（当前 638 条）
+- [ ] `npm run build && npm test` 全绿（条数以 `npm test` 输出为准）
 - [ ] 真机跑一轮上面的三件套，别只看单测

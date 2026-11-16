@@ -8,6 +8,8 @@
 
 前置：Node ≥ 22.19、npm；用 Docker 沙盒时再准备 Docker（`exec.shell.mode=docker`）。密钥和凭据只放仓库外的 env 文件，不要写进 `config/*.json`。
 
+> Agent 闭环部署：读 `skills/rabbit-bot/deploy/SKILL.md`，里面有分层流程、每步期望输出、一句话复制指令和确定性排障决策树。下面的命令是它的精简版。
+
 ### 1. 装依赖并构建
 
 首次部署或 `package-lock.json` 变化后：
@@ -54,8 +56,9 @@ pm2 restart rabbit-bot
 
 只改 `config/prompt/*.md` 或 `persona.md` 不用 `build`，`pm2 restart` 即可。
 
-适配器在 `config/default.json` / `config/local.json` 的 `adapters.feishu.enabled`、`adapters.matrix.enabled` 里开关（默认飞书开、Matrix 关），至少启用一个真实适配器。
+适配器在 `config/default.json` / `config/local.json` 的 `adapters.feishu.enabled`、`adapters.matrix.enabled`、`webChat.enabled` 里开关（默认飞书和网页直聊开、Matrix 关），至少启用一个出口。
 飞书启用但缺 `FEISHU_*`、或 Matrix 启用但缺 `MATRIX_TOKEN`，都会 `exit 2` 不启动（`run.sh` 预检）；已经有实例在跑会 `exit 3`。
+不接 IM、只用网页直聊时，把 `adapters.feishu.enabled` 设为 `false`，保留 `webChat.enabled: true` 即可；这条路径不建 IM 长连接，适合本机试用。
 
 ## 定制它（人设 / 提示词 / 话题库）
 
@@ -128,7 +131,7 @@ RABBIT_BOT_SKIP_SKILLS=1 npm install       # 安装时跳过
 
 ## 网页直聊
 
-不想接飞书 / Matrix 时，可以直接用网页对话：在管理台「会话」页左侧的「网页直聊」
+不想接飞书 / Matrix 时，可以直接用网页对话：关掉 `adapters.feishu.enabled` / `adapters.matrix.enabled`，保留 `webChat.enabled: true`，在管理台「会话」页左侧的「网页直聊」
 分组里发消息，机器人回复会写回同一个池；网页池的发送固定免审，不进入 IM 审批流程。
 独立页面 `/chat` 已取消。
 
@@ -235,7 +238,7 @@ src/adapters/    飞书 / Matrix / mock（sim 与测试用）
 src/ctl.ts       运维命令（pause / resume / status / usage / wakes / plans …）
 scripts/         run.sh（pm2 的前台入口：读 env → 预检 → exec node）、doctor.sh（体检）、inject.sh（注入）、sbx.sh（沙盒容器）
 docker/          沙盒镜像 Dockerfile
-test/            480+ 条，node --test
+test/            离线测试，node --test（条数以 npm test 输出为准）
 data/            运行时数据（db / media / 会话），.gitignore
 prompts/         默认提示词模板（真身在运行时目录）
 ```

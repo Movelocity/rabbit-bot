@@ -1,6 +1,6 @@
 ---
 name: rabbit-bot
-description: rabbit-bot 项目技能组入口。处理 runtime/business 业务地图、UFA/WA 任务与审批、提示词/人设、rabbit-bot 仓库运维时先读本技能，再按路由进入子技能。
+description: rabbit-bot 项目技能组入口。处理 runtime/business 业务地图、UFA/WA 任务与审批、提示词/人设、部署/启动排障、rabbit-bot 仓库运维时先读本技能，再按路由进入子技能。
 ---
 
 # rabbit-bot 项目技能组
@@ -21,6 +21,7 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 | `project-manager` | UFA / WA / 人 | 项目既定、需求砍不掉、要拆解放进时间、排优先级、管风险、按周汇报 | `project-manager/SKILL.md` |
 | `requirement-methods` | UFA / WA / 人 | 要谈验收、判该不该做、定时间预算、砍范围——四份模板直接抄 | `requirement-methods/` |
 | `file-link` | UFA | 要把本地文件变成公网短链（「发我个链接」「这图给我看看」） | `file-link/SKILL.md` |
+| `deploy` | UFA / WA / 人 | 第一次部署、换机器重装、升级、pm2 / Docker 起不来、不接 IM 只想网页直聊、接飞书 | `deploy/SKILL.md` |
 
 ## 项目坐标
 
@@ -43,7 +44,8 @@ description: rabbit-bot 项目技能组入口。处理 runtime/business 业务�
 - 项目拆解 / 排序 / 风险触发信号 / 进度按验收块算 → 读 `project-manager/SKILL.md`
 - 具体怎么把需求谈清 / 排优先级 / 定预算 / 判立项 → `requirement-methods/`（Example Mapping、Impact Mapping、Shape Up Pitch、PR-FAQ）
 - 任务/审批/worker → 读 `app/prompts/system.md`、`docs/SPEC-*`
-- 运维排障 → `app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
+- 部署 / 启动失败 / 升级 / 接飞书 / 网页直聊 → 读 `deploy/SKILL.md`（含一句话复制指令和确定性排障决策树）
+- 运维排障 → `deploy/SKILL.md`、`app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
 
 ## 硬规则
 

@@ -1,6 +1,6 @@
 ---
 name: rabbit-bot
-description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任务、提示词/人设、rabbit-bot 运维时先读本索引，再按读者读子技能。
+description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任务、提示词/人设、部署/启动排障、rabbit-bot 运维时先读本索引，再按读者读子技能。
 ---
 
 # rabbit-bot 项目技能组
@@ -20,6 +20,7 @@ description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任�
 | `product-manager` | UFA / WA / 人 | 需求说不清、判断这活能不能接、替项目把需求和验收定下来 | `{{SKILL_LIBRARY}}/product-manager/SKILL.md` |
 | `project-manager` | UFA / WA / 人 | 项目既定、需求砍不掉、要拆解放进时间、排优先级、管风险、按周汇报 | `{{SKILL_LIBRARY}}/project-manager/SKILL.md` |
 | `requirement-methods` | UFA / WA / 人 | 要谈验收、判该不该做、定时间预算、砍范围——四份模板直接抄 | `{{SKILL_LIBRARY}}/requirement-methods/` |
+| `deploy` | UFA / WA / 人 | 第一次部署、换机器重装、升级、pm2 / Docker 起不来、不接 IM 只想网页直聊、接飞书 | `{{SKILL_LIBRARY}}/deploy/SKILL.md` |
 
 先完整读对应子技能的 `SKILL.md`，再按里面的步骤做。
 
@@ -32,4 +33,5 @@ description: rabbit-bot 项目技能组索引。处理业务地图、UFA/WA 任�
 - 具体怎么把需求谈清 / 排优先级 / 定预算 / 判立项 → `requirement-methods`（Example Mapping、Impact Mapping、Shape Up Pitch、PR-FAQ）
 - 人设/提示词 → `app/README.md` 的「定制它」；运行时优先，仓库默认份在 `app/prompts/` 和 `app/config/persona.md`
 - 任务/审批/worker → `app/prompts/system.md`、`docs/SPEC-*`
-- 运维排障 → `app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
+- 部署 / 启动失败 / 升级 / 接飞书 / 网页直聊 → 读 `deploy`（含一句话复制指令和确定性排障决策树）
+- 运维排障 → `deploy`、`app/scripts/doctor.sh`、`app/logs/app.log`、`app/scripts/run.sh`
