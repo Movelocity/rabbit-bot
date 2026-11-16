@@ -41,7 +41,7 @@ export interface Task {
   end_at: number | null;
   /** 任务工作目录（绝对路径）。每条任务一个一次性进程，在它里面跑。 */
   work_dir: string;
-  /** opencode | mimo */
+  /** opencode | mimo | codex | claude */
   executor: string;
   /** 传给执行器的模型，空 = 用执行器默认 */
   model: string;
@@ -52,7 +52,7 @@ export interface Task {
   runner_started_at: number | null;
   /** 本次执行超过阈值时在任务池提醒过一次的时刻；每次启动/恢复重置 */
   long_run_notified_at: number | null;
-  /** 任务文档路径（<work_dir>/.ufa/tasks/task-<id>.md） */
+  /** 任务文档路径（<runtimeDir>/.ufa/tasks/task-<id>.md） */
   doc_path: string;
   /** 执行耗费：进程退出时从 runner.jsonl 聚合；老任务首次看看板时回填 */
   exec_usage_at: number | null;

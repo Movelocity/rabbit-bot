@@ -88,7 +88,7 @@ setTimeout(() => process.exit(0), 20);
     const fresh = getTask(app.store, task.id)!;
     assert.equal(fresh.status, "running");
     assert.equal(fresh.session_id, "ses_task_approval");
-    assert.ok(fs.existsSync(taskDocPath(fresh)), "审批通过后要补写任务文档");
+    assert.ok(fs.existsSync(taskDocPath(fresh, path.join(dir, "runtime"))), "审批通过后要补写任务文档");
     assert.match(fresh.note, /飞书审批通过/);
     assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id} 审批通过，准备启动`).test(s.content)));
     assert.equal(mock.sent.some((s) => /已批准，开始执行/.test(s.content)), false);

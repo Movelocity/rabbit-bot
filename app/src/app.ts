@@ -602,6 +602,7 @@ export class App {
       token: resolveApiToken(this.o.cfg),
       dataDir: this.o.cfg.dataDir,
       executorBin: this.o.executorBin,
+      runtimeDir: this.o.cfg.runtimeDir,
       sharedDir: sharedDir(this.o.cfg),
       businessDir: businessDir(this.o.cfg),
     };
@@ -621,7 +622,7 @@ export class App {
     try {
       const deps = this.taskDispatchDeps();
       writeTaskDoc(this.store, current, {
-        apiBase: deps.apiBase, sharedDir: deps.sharedDir, businessDir: deps.businessDir,
+        apiBase: deps.apiBase, runtimeDir: deps.runtimeDir, sharedDir: deps.sharedDir, businessDir: deps.businessDir,
       });
       await startTask(this.store, getTask(this.store, current.id)!, deps);
       this.notifyTaskDecisionShort(current.id, "approved");

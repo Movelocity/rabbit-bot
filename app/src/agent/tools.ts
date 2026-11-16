@@ -40,6 +40,8 @@ import {
   DEFAULT_CAPTURE_MS, resumeTask, runnerAlive, stopTask,
   type DispatchDeps,
 } from "../core/dispatch.ts";
+import { EXECUTORS, executorChoices, isExecutor } from "../core/executor.ts";
+import { effectiveExecutorPreference } from "../ops/executor-preference.ts";
 import { resolveApiToken } from "../api-token.ts";
 import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
 import { auditTasks, type PmTaskRow } from "../core/pm.ts";
@@ -86,6 +88,7 @@ function defaultDispatchDeps(cfg: Config): DispatchDeps {
     apiBase: `http://127.0.0.1:${cfg.api?.port ?? 3738}`,
     token: resolveApiToken(cfg),
     dataDir: cfg.dataDir,
+    runtimeDir: cfg.runtimeDir,
     sharedDir: sharedDir(cfg),
     businessDir: businessDir(cfg),
     captureMs: DEFAULT_CAPTURE_MS,
@@ -820,7 +823,7 @@ export function createTools(d: ToolDeps) {
     "  help                                                                看这份说明",
     "",
     "create 的 name 可选：给了就用它当短标签（# 自动补），不给就用系统返回的任务号。",
-    "create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 opencode（默认）或 mimo。",
+    `create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 ${executorChoices()}，不填走设置里的默认 worker（默认 opencode）。`,
     "deliverable / constraints / acceptance / files 只有用户明确说了才填；别替 WA 写实现计划或验收清单，它自己会读仓库约定、WA-BEST-PRACTICES.md 和 handoffs/ 里的旧交接。",
     "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
     "任务按工作目录起一次性进程，进度看任务池；不要自己起常驻 worker。",
@@ -853,7 +856,7 @@ export function createTools(d: ToolDeps) {
       id: Type.Optional(Type.Number({ description: "get、updates、resume、note、cancel、status 用：任务 id" })),
       name: Type.Optional(Type.String({ description: "create 用：可选短标签；不给就用系统返回的任务号" })),
       work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
-      executor: Type.Optional(Type.String({ description: "create 用：opencode（默认）或 mimo" })),
+      executor: Type.Optional(Type.String({ description: `create 用：${executorChoices()}；不填走设置里的默认 worker` })),
       model: Type.Optional(Type.String({ description: "create 用：执行器模型，留空用执行器默认" })),
       goal: Type.Optional(Type.String({ description: "create 用：一句话说清要达成什么" })),
       deliverable: Type.Optional(Type.String({ description: "create 用：交付物长什么样" })),
@@ -885,9 +888,11 @@ export function createTools(d: ToolDeps) {
             let stat: fs.Stats;
             try { stat = fs.statSync(workDir); } catch { return txt(`work_dir 不存在：${workDir}`, { ok: false }); }
             if (!stat.isDirectory()) return txt(`work_dir 不是目录：${workDir}`, { ok: false });
-            const executor = p.executor === undefined ? "opencode" : String(p.executor);
-            if (executor !== "opencode" && executor !== "mimo") {
-              return txt('executor 只能是 "opencode" 或 "mimo"。', { ok: false });
+            const executor = p.executor === undefined
+              ? effectiveExecutorPreference(d.cfg)
+              : String(p.executor);
+            if (!isExecutor(executor)) {
+              return txt(`executor 只能是 ${EXECUTORS.join(" / ")}。`, { ok: false });
             }
             const poolId = d.primaryPool?.() ?? "";
             if (!poolId) return txt("建任务需要知道是哪个池，这一轮没有对应的池。", { ok: false });

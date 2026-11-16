@@ -189,6 +189,13 @@ export interface Config {
     notify?: boolean;
   };
   /**
+   * 建任务时没显式指定 executor 用的默认 worker。
+   * Web 设置保存后写 <dataDir>/run/executor.json，重启仍生效。
+   */
+  tasks?: {
+    preferredExecutor?: string;
+  };
+  /**
    * 任务发布审批：UFA 建的任务先发审批提示，主人贴 OK / No 表情裁决。
    * 审批提示一律发主聊天（sendReview.primaryPoolId，未设时退回 roomId）；关掉时回退 Web 任务页。
    */

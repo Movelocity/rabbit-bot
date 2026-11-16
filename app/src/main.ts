@@ -24,6 +24,7 @@ import { loadLimitSettings } from "./ops/limit-settings.ts";
 import { loadWatchdogSettings } from "./ops/watchdog-settings.ts";
 import { loadSendReviewSettings } from "./ops/send-review-settings.ts";
 import { loadModelSettings } from "./ops/model-settings.ts";
+import { loadExecutorPreference } from "./ops/executor-preference.ts";
 import path from "node:path";
 
 async function main() {
@@ -35,6 +36,8 @@ async function main() {
   loadLimitSettings(cfg, log);
   loadWatchdogSettings(cfg, log);
   loadSendReviewSettings(cfg, log);
+  const preferredExecutor = loadExecutorPreference(cfg, log);
+  log.info(`默认任务执行器：${preferredExecutor}`);
   // 管理台换过模型就按运行时选择启动；没有文件时沿用 config.llm
   const modelSettings = loadModelSettings(cfg);
   log.info(`主模型：${modelSettings.provider}/${modelSettings.model}（可切换 ${modelSettings.choices.length} 个）`);

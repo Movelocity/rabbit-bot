@@ -51,6 +51,8 @@ import {
 } from "./ops/model-settings.ts";
 import { listSkills } from "./ops/skills.ts";
 import { listExecutors } from "./ops/executors.ts";
+import { DEFAULT_EXECUTOR, EXECUTORS, isExecutor } from "./core/executor.ts";
+import { effectiveExecutorPreference, saveExecutorPreference } from "./ops/executor-preference.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
 import { lintBusinessMap, writeBusinessLintReport } from "./ops/business-lint.ts";
 import { boardDir, businessDir, sharedDir } from "./core/runtime.ts";
@@ -211,10 +213,10 @@ function validateWorkDir(raw: unknown): string {
   return workDir;
 }
 
-function validateExecutor(raw: unknown): "opencode" | "mimo" {
-  const executor = raw === undefined ? "opencode" : raw;
-  if (executor !== "opencode" && executor !== "mimo") {
-    throw new HttpError(400, 'executor 只能是 "opencode" 或 "mimo"');
+function validateExecutor(raw: unknown): string {
+  const executor = raw === undefined ? DEFAULT_EXECUTOR : raw;
+  if (!isExecutor(executor)) {
+    throw new HttpError(400, `executor 只能是 ${EXECUTORS.join(" / ")}`);
   }
   return executor;
 }
@@ -538,7 +540,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (body.name !== undefined && typeof body.name !== "string") throw new HttpError(400, "name 要是字符串");
             if (typeof body.goal !== "string" || !body.goal.trim()) throw new HttpError(400, "缺少 goal");
             const workDir = validateWorkDir(body.work_dir);
-            const executor = validateExecutor(body.executor);
+            const executor = body.executor === undefined
+              ? effectiveExecutorPreference(d.cfg)
+              : validateExecutor(body.executor);
             const task = createTask(d.store, {
               userId: typeof body.user_id === "string" ? body.user_id : "",
               poolId: typeof body.pool_id === "string" ? body.pool_id : "",
@@ -559,10 +563,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               d.onTaskCreated?.(task);
               return reply(201, formatTask(task));
             }
-            writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
+            writeTaskDoc(d.store, task, { apiBase, runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, task.id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
-              sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
+              runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
             });
             return reply(201, formatTask(started.task));
           }
@@ -633,7 +637,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             put("model", optString("model"));
 
             const updated = Object.keys(patch).length ? updateTask(d.store, id, patch) : task;
-            writeTaskDoc(d.store, updated, { apiBase, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
+            writeTaskDoc(d.store, updated, { apiBase, runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
             const by = typeof body.by === "string" && body.by.trim() ? body.by.trim() : "web";
             appendNote(d.store, id, changed.length
               ? `Web 审批通过（by=${by}；修改字段：${changed.join(", ")}）`
@@ -642,7 +646,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             try {
               const started = await startTask(d.store, getTask(d.store, id)!, {
                 apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
-                sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
+                runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
               });
               d.onTaskDecided?.(id, "approved");
               return reply(200, formatTask(started.task));
@@ -676,10 +680,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             }
             if (!task.work_dir) throw new HttpError(400, `任务 #${id} 没有 work_dir，不能启动`);
             if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 已在运行`);
-            writeTaskDoc(d.store, task, { apiBase, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
+            writeTaskDoc(d.store, task, { apiBase, runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
             const started = await startTask(d.store, getTask(d.store, id)!, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
-              sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
+              runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
             });
             return reply(200, formatTask(started.task));
           }
@@ -692,7 +696,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 已在运行`);
             const resumed = await resumeTask(d.store, task, {
               apiBase, token: d.token, dataDir: d.cfg.dataDir,
-              sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
+              runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
             });
             return reply(200, formatTask(resumed.task));
           }
@@ -1200,6 +1204,19 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
         case "executors": {
           if (parts.length === 2 && method === "GET") return reply(200, listExecutors());
           throw new HttpError(404, "用法：GET /v1/executors");
+        }
+        case "executor-preference": {
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, { executor: effectiveExecutorPreference(d.cfg) });
+          }
+          if (parts.length === 2 && method === "PUT") {
+            const executor = body.executor;
+            if (!isExecutor(executor)) {
+              throw new HttpError(400, `executor 只能是 ${EXECUTORS.join(" / ")}`);
+            }
+            return reply(200, { executor: saveExecutorPreference(d.cfg, executor) });
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/executor-preference");
         }
         case "pm": {
           if (parts.length === 3 && parts[2] === "audit" && method === "GET") {

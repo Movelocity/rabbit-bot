@@ -1,5 +1,5 @@
 /**
- * 任务回传：本地一次性 coding CLI（opencode / mimo）按 `<executor>-<task_id>` 调
+ * 任务回传：一次性 coding CLI（opencode / mimo / codex / claude）按 `<executor>-<task_id>` 调
  * touch / progress / complete / fail 上报进度与结果。
  *
  * 不再有常驻 worker 注册与领任务：派发由 dispatch.ts 直接把任务标成 running。

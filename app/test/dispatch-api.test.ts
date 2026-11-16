@@ -13,6 +13,7 @@ import { getTask, updateTask } from "../src/core/tasks.ts";
 const dir = path.join(APP_ROOT, ".scratch", "dispatch-api");
 const workDir = path.join(dir, "work");
 fs.mkdirSync(workDir, { recursive: true });
+fs.rmSync(path.join(workDir, ".ufa"), { recursive: true, force: true });
 const fakeBin = path.join(dir, "fake-exec.mjs");
 fs.writeFileSync(fakeBin, `#!/usr/bin/env node
 import fs from "node:fs";
@@ -29,6 +30,7 @@ fs.chmodSync(fakeBin, 0o755);
 const cfg = loadConfig({
   dataDir: dir,
   logDir: path.join(dir, "logs"),
+  runtimeDir: path.join(dir, "runtime"),
   api: { enabled: true, port: 0, host: "127.0.0.1" },
   exec: { dir: path.join(dir, "sandbox") },
 });
@@ -154,8 +156,9 @@ test("approve：可改描述、重写任务文档、留审批痕迹，随后以�
   assert.equal(t.status, "running");
 
   const fresh = getTask(store, id)!;
-  assert.equal(fresh.doc_path, path.join(workDir, ".ufa", "tasks", `task-${id}.md`));
+  assert.equal(fresh.doc_path, path.join(dir, "runtime", ".ufa", "tasks", `task-${id}.md`));
   const doc = fs.readFileSync(fresh.doc_path, "utf8");
+  assert.equal(fs.existsSync(path.join(workDir, ".ufa")), false, "审批/启动不应在工作目录建 .ufa");
   assert.match(doc, /新目标/);
   assert.match(doc, /新约束/);
   assert.match(doc, /新验收/);
@@ -198,4 +201,29 @@ test("approve / reject / start：只有 pending_approval 能审批，start 不�
   assert.equal((await post(`/v1/tasks/${id}/approve`, {})).status, 409);
   assert.equal((await post("/v1/tasks/999999/approve", {})).status, 404);
   assert.equal((await post("/v1/tasks/999999/reject", {})).status, 404);
+});
+
+test("默认 worker 偏好：GET/PUT /v1/executor-preference，建任务不传 executor 时生效", async () => {
+  fs.rmSync(path.join(dir, "run", "executor.json"), { force: true });
+  const before = await call("/v1/executor-preference");
+  assert.equal(before.status, 200);
+  assert.equal(before.body.data.executor, "opencode");
+
+  const bad = await call("/v1/executor-preference", { method: "PUT", body: JSON.stringify({ executor: "other" }) });
+  assert.equal(bad.status, 400);
+
+  const saved = await call("/v1/executor-preference", { method: "PUT", body: JSON.stringify({ executor: "codex" }) });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.executor, "codex");
+  assert.equal((await call("/v1/executor-preference")).body.data.executor, "codex");
+
+  const created = await post("/v1/tasks", { name: "#偏default", goal: "用默认 worker", work_dir: workDir });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.data.executor, "codex");
+
+  const explicit = await post("/v1/tasks", {
+    name: "#偏显式", goal: "显式覆盖", work_dir: workDir, executor: "mimo",
+  });
+  assert.equal(explicit.status, 201, JSON.stringify(explicit.body));
+  assert.equal(explicit.body.data.executor, "mimo");
 });

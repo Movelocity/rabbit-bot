@@ -15,6 +15,7 @@ import {
 
 const root = path.join(APP_ROOT, ".scratch", "dispatch-test");
 const workDir = path.join(root, "work");
+const runtimeDir = path.join(root, "runtime");
 const fakeBin = path.join(root, "fake-exec.mjs");
 fs.mkdirSync(workDir, { recursive: true });
 fs.writeFileSync(fakeBin, `#!/usr/bin/env node
@@ -25,16 +26,37 @@ if (out) {
   fs.writeFileSync(tmp, JSON.stringify({
     argv: process.argv.slice(2),
     cwd: process.cwd(),
-    env: { RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN },
+    env: {
+      RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN,
+      RB_TASK_DIR: process.env.RB_TASK_DIR, RB_TASK_DOC: process.env.RB_TASK_DOC,
+    },
   }));
   fs.renameSync(tmp, out);
 }
-console.log(JSON.stringify({ type: "step_start", sessionID: process.env.FAKE_EXEC_SESSION || "ses_fake_123" }));
+const sid = process.env.FAKE_EXEC_SESSION || "ses_fake_123";
+if (process.env.FAKE_EXEC_FIELD === "codex") {
+  console.log(JSON.stringify({ type: "thread.started", thread_id: sid }));
+} else if (process.env.FAKE_EXEC_FIELD === "claude") {
+  console.log(JSON.stringify({ type: "system", subtype: "init", session_id: sid }));
+} else {
+  console.log(JSON.stringify({ type: "step_start", sessionID: sid }));
+}
 if (process.env.FAKE_EXEC_TOKENS) {
-  console.log(JSON.stringify({ type: "step_finish", timestamp: Date.now(), part: {
-    tokens: { input: 10, output: 5, reasoning: 0, total: 15, cache: { read: 2, write: 1 } },
-    cost: 0.001,
-  } }));
+  if (process.env.FAKE_EXEC_FIELD === "codex") {
+    console.log(JSON.stringify({ type: "turn.completed", usage: {
+      input_tokens: 10, cached_input_tokens: 2, cache_write_input_tokens: 1,
+      output_tokens: 5, reasoning_output_tokens: 0,
+    } }));
+  } else if (process.env.FAKE_EXEC_FIELD === "claude") {
+    console.log(JSON.stringify({ type: "result", subtype: "success", num_turns: 2, duration_ms: 1200, total_cost_usd: 0.004, usage: {
+      input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 5,
+    } }));
+  } else {
+    console.log(JSON.stringify({ type: "step_finish", timestamp: Date.now(), part: {
+      tokens: { input: 10, output: 5, reasoning: 0, total: 15, cache: { read: 2, write: 1 } },
+      cost: 0.001,
+    } }));
+  }
 }
 const sleep = Number(process.env.FAKE_EXEC_SLEEP || 30);
 setTimeout(() => process.exit(0), sleep);
@@ -42,7 +64,14 @@ setTimeout(() => process.exit(0), sleep);
 fs.chmodSync(fakeBin, 0o755);
 
 let seq = 0;
-const recordPath = () => path.join(root, `record-${++seq}.json`);
+const recordPath = () => path.join(root, `record-${process.pid}-${++seq}.json`);
+
+/** resume 不等执行器写完参数就返回；测试读记录前等一下，别和子进程抢。 */
+async function readRecord(file: string, timeoutMs = 3000): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(file) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
 
 function setup() {
   const store = new Store(":memory:");
@@ -63,10 +92,14 @@ function setup() {
 
 test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变量不落明文 token", () => {
   const { store, task } = setup();
-  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
-  assert.equal(docPath, path.join(workDir, ".ufa", "tasks", `task-${task.id}.md`));
+  const legacyDoc = path.join(workDir, ".ufa", "tasks", `task-${task.id}.md`);
+  fs.mkdirSync(path.dirname(legacyDoc), { recursive: true });
+  fs.writeFileSync(legacyDoc, "old doc\n");
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  assert.equal(docPath, path.join(runtimeDir, ".ufa", "tasks", `task-${task.id}.md`));
   assert.equal(fs.existsSync(docPath), true);
   assert.equal(getTask(store, task.id)?.doc_path, docPath);
+  assert.equal(fs.existsSync(legacyDoc), false, "旧位置的任务文档要清掉");
 
   const text = fs.readFileSync(docPath, "utf8");
   assert.match(text, /整理会议纪要/);
@@ -94,7 +127,7 @@ test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变�
 
 test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任务池事件", async () => {
   const { store, task } = setup();
-  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   const out = recordPath();
   process.env.FAKE_EXEC_OUT = out;
   delete process.env.FAKE_EXEC_SLEEP;
@@ -103,6 +136,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
     apiBase: "http://127.0.0.1:9999",
     token: "secret-token-value",
     dataDir: root,
+    runtimeDir,
     executorBin: fakeBin,
   });
 
@@ -110,7 +144,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.equal(result.captured, true);
   assert.equal(typeof result.pid, "number");
 
-  const record = JSON.parse(fs.readFileSync(out, "utf8"));
+  const record = await readRecord(out);
   const argv: string[] = record.argv;
   assert.equal(argv[0], "run");
   assert.equal(argv[1], `读 ${docPath} 并执行`);
@@ -127,6 +161,8 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.equal(record.cwd, workDir);
   assert.equal(record.env.RB_API_BASE, "http://127.0.0.1:9999");
   assert.equal(record.env.RB_API_TOKEN, "secret-token-value");
+  assert.equal(record.env.RB_TASK_DOC, docPath);
+  assert.equal(record.env.RB_TASK_DIR, path.join(runtimeDir, ".ufa", "work", `task-${task.id}`));
 
   const fresh = getTask(store, task.id)!;
   assert.equal(fresh.session_id, "ses_fake_123");
@@ -152,11 +188,11 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
 
 test("进程自然退出：写事件、清 runner_pid、stage=exited", async () => {
   const { store, task } = setup();
-  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   process.env.FAKE_EXEC_OUT = recordPath();
   process.env.FAKE_EXEC_SLEEP = "20";
   await startTask(store, task, {
-    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
   });
   const deadline = Date.now() + 3000;
   let events = listTaskEvents(store, task.id);
@@ -175,26 +211,26 @@ test("进程自然退出：写事件、清 runner_pid、stage=exited", async () 
 
 test("startTask：model 分别走 -m / --model", async () => {
   const { store, task } = setup();
-  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   const out = recordPath();
   process.env.FAKE_EXEC_OUT = out;
   const t = getTask(store, task.id)!;
   updateTask(store, t.id, { model: "provider/model-a" });
   await startTask(store, getTask(store, t.id)!, {
-    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
   });
-  const argv: string[] = JSON.parse(fs.readFileSync(out, "utf8")).argv;
+  const argv: string[] = (await readRecord(out)).argv;
   assert.equal(argv[argv.indexOf("-m") + 1], "provider/model-a");
 
   const { store: store2, task: task2 } = setup();
-  writeTaskDoc(store2, task2, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store2, task2, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   const out2 = recordPath();
   process.env.FAKE_EXEC_OUT = out2;
   updateTask(store2, task2.id, { executor: "mimo", model: "provider/model-b" });
   await startTask(store2, getTask(store2, task2.id)!, {
-    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
   });
-  const argv2: string[] = JSON.parse(fs.readFileSync(out2, "utf8")).argv;
+  const argv2: string[] = (await readRecord(out2)).argv;
   assert.equal(argv2[argv2.indexOf("--model") + 1], "provider/model-b");
   assert.equal(argv2.includes("-m"), false);
   assert.ok(argv2.includes("--dangerously-skip-permissions"), `mimo 启动参数缺无审批 flag：${argv2.join(" ")}`);
@@ -202,20 +238,102 @@ test("startTask：model 分别走 -m / --model", async () => {
   store2.close();
 });
 
+test("startTask / resumeTask：codex 用 exec --json、-C 工作目录，并从 thread_id 抓 session", async () => {
+  const { store, task } = setup();
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  const out = recordPath();
+  process.env.FAKE_EXEC_OUT = out;
+  process.env.FAKE_EXEC_FIELD = "codex";
+  delete process.env.FAKE_EXEC_SLEEP;
+  updateTask(store, task.id, { executor: "codex", model: "gpt-5-codex" });
+  try {
+    const result = await startTask(store, getTask(store, task.id)!, {
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+    });
+    const argv: string[] = (await readRecord(out)).argv;
+    assert.equal(argv[0], "exec");
+    assert.ok(argv.includes("--json"));
+    assert.ok(argv.includes("--skip-git-repo-check"));
+    assert.ok(argv.includes("--dangerously-bypass-approvals-and-sandbox"));
+    assert.equal(argv[argv.indexOf("-C") + 1], workDir);
+    assert.equal(argv[argv.indexOf("-m") + 1], "gpt-5-codex");
+    assert.equal(argv[argv.length - 1], `读 ${docPath} 并执行`);
+    assert.equal(argv.includes("resume"), false, "新任务不该带 resume");
+    assert.equal(result.session_id, "ses_fake_123");
+    assert.equal(getTask(store, task.id)?.worker_id, `codex-${task.id}`);
+
+    const out2 = recordPath();
+    process.env.FAKE_EXEC_OUT = out2;
+    const resumed = await resumeTask(store, getTask(store, task.id)!, {
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+    });
+    const argv2: string[] = (await readRecord(out2)).argv;
+    const at = argv2.indexOf("resume");
+    assert.ok(at > 0, `codex resume 参数缺子命令：${argv2.join(" ")}`);
+    assert.equal(argv2[at + 1], "ses_fake_123");
+    assert.equal(argv2[at + 2], `继续任务，先读 ${docPath}`);
+    assert.equal(resumed.session_id, "ses_fake_123");
+  } finally {
+    delete process.env.FAKE_EXEC_FIELD;
+    store.close();
+  }
+});
+
+test("startTask / resumeTask：claude 用 -p stream-json，从 system/session_id 抓 session，并带 --resume", async () => {
+  const { store, task } = setup();
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  const out = recordPath();
+  process.env.FAKE_EXEC_OUT = out;
+  process.env.FAKE_EXEC_FIELD = "claude";
+  delete process.env.FAKE_EXEC_SLEEP;
+  updateTask(store, task.id, { executor: "claude", model: "claude-sonnet-4-5" });
+  try {
+    const result = await startTask(store, getTask(store, task.id)!, {
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+    });
+    const argv: string[] = (await readRecord(out)).argv;
+    assert.equal(argv[0], "-p");
+    assert.equal(argv[argv.indexOf("--output-format") + 1], "stream-json");
+    assert.ok(argv.includes("--verbose"));
+    assert.equal(argv[argv.indexOf("--permission-mode") + 1], "bypassPermissions");
+    assert.equal(argv[argv.indexOf("--disallowedTools") + 1], "AskUserQuestion");
+    assert.equal(argv[argv.indexOf("--model") + 1], "claude-sonnet-4-5");
+    assert.equal(argv[argv.length - 1], `读 ${docPath} 并执行`);
+    assert.equal(argv.includes("--resume"), false, "新任务不该带 --resume");
+    assert.equal(result.session_id, "ses_fake_123");
+    assert.equal(getTask(store, task.id)?.worker_id, `claude-${task.id}`);
+
+    const out2 = recordPath();
+    process.env.FAKE_EXEC_OUT = out2;
+    const resumed = await resumeTask(store, getTask(store, task.id)!, {
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+    });
+    const argv2: string[] = (await readRecord(out2)).argv;
+    const at = argv2.indexOf("--resume");
+    assert.ok(at > 0, `claude resume 参数缺 --resume：${argv2.join(" ")}`);
+    assert.equal(argv2[at + 1], "ses_fake_123");
+    assert.equal(argv2[argv2.length - 1], `继续任务，先读 ${docPath}`);
+    assert.equal(resumed.session_id, "ses_fake_123");
+  } finally {
+    delete process.env.FAKE_EXEC_FIELD;
+    store.close();
+  }
+});
+
 test("resumeTask：用同一个 session id 带 -s，提示词要求先读任务文档", async () => {
   const { store, task } = setup();
-  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   process.env.FAKE_EXEC_OUT = recordPath();
   updateTask(store, task.id, { session_id: "ses_keep_me" });
 
   const out = recordPath();
   process.env.FAKE_EXEC_OUT = out;
   const result = await resumeTask(store, getTask(store, task.id)!, {
-    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
   });
 
   assert.equal(result.session_id, "ses_keep_me");
-  const argv: string[] = JSON.parse(fs.readFileSync(out, "utf8")).argv;
+  const argv: string[] = (await readRecord(out)).argv;
   assert.equal(argv[0], "run");
   assert.equal(argv[1], `继续任务，先读 ${docPath}`);
   assert.equal(argv[argv.indexOf("-s") + 1], "ses_keep_me");
@@ -229,9 +347,9 @@ test("resumeTask：用同一个 session id 带 -s，提示词要求先读任务�
 
 test("resumeTask：没有 session_id 直接报错", async () => {
   const { store, task } = setup();
-  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   await assert.rejects(
-    () => resumeTask(store, task, { apiBase: "http://x", token: "t", dataDir: root, executorBin: fakeBin }),
+    () => resumeTask(store, task, { apiBase: "http://x", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin }),
     /session_id/,
   );
   store.close();
@@ -273,14 +391,14 @@ test("UFA task create：只登记 pending_approval，等 Web 审批，不产生 
 
 test("stopTask：杀进程树、清 runner_pid、running 回到 pending，并落耗时/token", async () => {
   const { store, task } = setup();
-  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   process.env.FAKE_EXEC_OUT = recordPath();
   process.env.FAKE_EXEC_SLEEP = "10000";
   process.env.FAKE_EXEC_TOKENS = "1";
   fs.rmSync(path.join(root, "tasks", String(task.id)), { recursive: true, force: true });
   try {
     const started = await startTask(store, task, {
-      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
     });
     assert.equal(typeof started.pid, "number");
     assert.equal(isRunnerAlive(started.pid), true);
@@ -338,14 +456,14 @@ test("sweepDeadRunners：进程还活着不动，重复扫也不会重复写消�
 
 test("任务先 complete、执行器后退出：watcher 仍要清 runner_pid 并落用量", async () => {
   const { store, task } = setup();
-  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999" });
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
   process.env.FAKE_EXEC_OUT = recordPath();
   process.env.FAKE_EXEC_SLEEP = "800";
   process.env.FAKE_EXEC_TOKENS = "1";
   fs.rmSync(path.join(root, "tasks", String(task.id)), { recursive: true, force: true });
   try {
     const started = await startTask(store, task, {
-      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, executorBin: fakeBin,
+      apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
     });
     assert.equal(typeof started.pid, "number");
     // 执行器还在跑的时候先把任务标成 done：后续退出事件不能把任务状态改回去

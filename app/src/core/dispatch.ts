@@ -2,11 +2,11 @@
  * 任务派发：每条任务一个一次性进程，不常驻 worker。
  *
  * 流程：
- *   1. writeTaskDoc 把任务写进 <work_dir>/.ufa/tasks/task-<id>.md，文档里带更新契约；
+ *   1. writeTaskDoc 把任务写进 <runtimeDir>/.ufa/tasks/task-<id>.md，文档里带更新契约；
  *   2. startTask 拉起的其实是两级「脱管」进程，不是执行器本身：
  *        rabbit-bot ──spawn──> launcher（立刻退出，把孩子甩给 launchd）
  *                                └─spawn──> reaper（detached，等执行器退出）
- *                                             └─spawn──> opencode/mimo run
+ *                                             └─spawn──> opencode/mimo/codex/claude run
  *      launcher 一退出，reaper 就被 launchd 收养，不再是 rabbit-bot 的后代；
  *      pm2 restart 的 treekill 按 ppid 找子孙，找不到它，所以执行器能活过重启。
  *      reaper 只干三件事：spawn、把 pid/命令行写进 runner.state.json、wait 退出码写回同一文件。
@@ -37,13 +37,19 @@ import {
   patchRunnerState, readRunnerState, runnerStatePath, writeRunnerState, type RunnerState,
 } from "./runner-state.ts";
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
+import { normalizeExecutor, type Executor } from "./executor.ts";
+
+export type { Executor } from "./executor.ts";
 
 // 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
 export const MIMO_BIN = process.env.MIMO_BIN || path.join(os.homedir(), ".mimocode/bin/mimo");
+// codex 一般装在 PATH（~/.local/bin 等）；装在别处时用 CODEX_BIN 覆盖
+export const CODEX_BIN = process.env.CODEX_BIN || "codex";
+// claude 走宿主全局安装（PATH 上的 claude）；装在别处时用 CLAUDE_BIN 覆盖
+export const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
 export const DEFAULT_CAPTURE_MS = 15000;  // opencode 冷启动首个事件实测 ~3.4s，3s 窗口实测漏抓（任务 #2）
 export const DEFAULT_DATA_DIR = path.join(APP_ROOT, "data");
 
-export type Executor = "opencode" | "mimo";
 
 /** 接管执行器后的探活间隔（ms）；执行器退出后要尽快把事件和退出码写回任务池。 */
 export const DEFAULT_RUNNER_POLL_MS = 1000;
@@ -175,11 +181,13 @@ export interface DispatchDeps {
   token: string;
   /** runner 日志根目录：<dataDir>/tasks/<id>/runner.jsonl。默认 app/data */
   dataDir?: string;
+  /** 运行时目录：任务文档和临时文件放这儿，不写进 work_dir。默认从 sharedDir 推 */
+  runtimeDir?: string;
   /** worker 汇报文件落点（宿主绝对路径），作为 RB_SHARED_DIR 交给执行器 */
   sharedDir?: string;
   /** 业务地图目录；传了才会在任务文档里写“业务上下文” */
   businessDir?: string;
-  /** 测试注入：替换 opencode/mimo 可执行文件 */
+  /** 测试注入：替换执行器可执行文件（opencode / mimo / codex / claude） */
   executorBin?: string;
   /** 启动后多少毫秒内没抓到 sessionID 就放弃（默认 3000） */
   captureMs?: number;
@@ -205,17 +213,50 @@ function parseFiles(files: string): string[] {
   }
 }
 
-export function taskDocPath(task: Pick<Task, "id" | "work_dir">): string {
+/**
+ * 运行时目录：优先取显式 runtimeDir；否则从 sharedDir 推（<runtimeDir>/shared）。
+ * 拿不到时返回空串，调用方退回旧位置（只用于测试/旧调用，生产路径一定会传）。
+ */
+function resolveRuntimeDir(opts: { runtimeDir?: string; sharedDir?: string }): string {
+  const explicit = String(opts.runtimeDir ?? "").trim();
+  if (explicit) return path.resolve(explicit);
+  const shared = String(opts.sharedDir ?? "").trim();
+  return shared ? path.dirname(path.resolve(shared)) : "";
+}
+
+/**
+ * 任务文档路径：统一放运行时目录，避免在 work_dir 里留 .ufa。
+ * 没给运行时目录时保留旧路径兜底（测试直接调用 writeTaskDoc 的场景）。
+ */
+export function taskDocPath(task: Pick<Task, "id" | "work_dir">, runtimeDir?: string): string {
+  const runtime = String(runtimeDir ?? "").trim();
+  if (runtime) return path.join(path.resolve(runtime), ".ufa", "tasks", `task-${task.id}.md`);
   return path.join(String(task.work_dir ?? ""), ".ufa", "tasks", `task-${task.id}.md`);
 }
 
+/** 新文档写好后清掉旧位置：work_dir/.ufa/tasks/task-<id>.md，空目录顺手收走。 */
+function cleanupLegacyTaskDoc(task: Pick<Task, "id" | "work_dir">, docPath: string): void {
+  const workDir = String(task.work_dir ?? "").trim();
+  if (!workDir) return;
+  const legacyDoc = path.join(workDir, ".ufa", "tasks", `task-${task.id}.md`);
+  if (path.resolve(legacyDoc) === path.resolve(docPath)) return;
+  try { fs.rmSync(legacyDoc, { force: true }); } catch { /* 清不掉不影响新文档 */ }
+  for (const dir of [path.dirname(legacyDoc), path.join(workDir, ".ufa")]) {
+    try {
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+    } catch { /* 目录非空/无权限都跳过 */ }
+  }
+}
+
 /** 任务文档：人/执行器都能直接照着做，更新方式用 curl 写死，token 只引用环境变量。 */
-export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string; map?: BusinessMap | null } = {}): string {
+export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?: string; sharedDir?: string; businessDir?: string; map?: BusinessMap | null } = {}): string {
   const id = task.id;
-  const executor = task.executor || "opencode";
+  const executor = normalizeExecutor(task.executor);
   const workerId = `${executor}-${id}`;
   const apiBase = opts.apiBase || "http://127.0.0.1:3738";
   const shared = String(opts.sharedDir ?? "").trim();
+  const runtime = resolveRuntimeDir(opts);
+  const scratch = runtime ? path.join(runtime, ".ufa", "work", `task-${id}`) : "";
   // 正式路径用 SQLite 里的地图；显式传 map=null 表示「确认没有地图」，
   // 不传才回退到按目录读文件（测试/旧调用）。
   const business = opts.map !== undefined
@@ -269,6 +310,13 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
       "如果执行器被限制只能写工作目录，就先在工作目录生成，再复制到上面的 shared 产出目录。",
       "",
     ] : []),
+    ...(scratch ? [
+      "## 临时文件",
+      "",
+      `临时脚本、中间产物、截图放 \`$RB_TASK_DIR\`（宿主路径 \`${scratch}\`），不要在工作目录里建 \`.ufa\`。`,
+      "任务文档用 `$RB_TASK_DOC` 指路，避免把仓库根目录当草稿纸。",
+      "",
+    ] : []),
     "## 任务 id",
     String(id),
     "",
@@ -311,7 +359,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
     "",
     "本任务审批通过后以无审批模式执行，执行阶段没有运行时审批，不要调用 approvals 接口等待批准。",
     "",
-    "只能在上面「工作目录」指定的目录内读写和运行命令，不得越出工作目录；越界视为违规，任务会按失败处理。",
+    "只能在上面「工作目录」指定的目录内读写和运行命令，不得越出工作目录；任务文档、`$RB_TASK_DIR`、`$RB_SHARED_DIR` 是明确的例外。越界视为违规，任务会按失败处理。",
     "",
     "## 执行要求",
     "",
@@ -331,14 +379,16 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; sharedDir?: 
 }
 
 /** 写任务文档并回填 doc_path；目录不存在就建。返回绝对路径。 */
-export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string; sharedDir?: string; businessDir?: string } = {}): string {
+export function writeTaskDoc(store: Store, task: Task, opts: { apiBase?: string; runtimeDir?: string; sharedDir?: string; businessDir?: string } = {}): string {
   const workDir = String(task.work_dir ?? "").trim();
   if (!workDir) throw new Error("任务没有 work_dir，不能写任务文档");
   if (!path.isAbsolute(workDir)) throw new Error(`work_dir 必须是绝对路径：${workDir}`);
-  const docPath = taskDocPath(task);
+  const runtimeDir = resolveRuntimeDir(opts);
+  const docPath = taskDocPath(task, runtimeDir);
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
   const map = loadBusinessMap(store);
-  fs.writeFileSync(docPath, renderTaskDoc(task, { ...opts, map: map ?? undefined }), "utf8");
+  fs.writeFileSync(docPath, renderTaskDoc(task, { ...opts, runtimeDir, map: map ?? undefined }), "utf8");
+  cleanupLegacyTaskDoc(task, docPath);
   updateTask(store, task.id, { doc_path: docPath });
   return docPath;
 }
@@ -348,6 +398,7 @@ function pickSessionId(value: unknown): string | null {
   const o = value as Record<string, any>;
   const candidates = [
     o.sessionID, o.session_id, o.sessionId,
+    o.thread_id, o.threadId,
     o.part?.sessionID, o.part?.session_id,
     o.session?.id,
   ];
@@ -472,7 +523,7 @@ function seedRunnerState(task: Task, dataDir: string, pid: number): RunnerState 
     run_id: "",
     task_id: task.id,
     pid,
-    executor: task.executor || "opencode",
+    executor: normalizeExecutor(task.executor),
     action: "start",
     boot: procStartTime(pid) ?? "",
     started_at: task.runner_started_at ?? task.claimed_at ?? now,
@@ -741,14 +792,42 @@ export function sessionTitle(task: Task): string {
 }
 
 function executorArgs(task: Task, prompt: string, resume: boolean): { bin: string; args: string[] } {
-  const executor: Executor = task.executor === "mimo" ? "mimo" : "opencode";
+  const executor = normalizeExecutor(task.executor);
+  const model = String(task.model ?? "").trim();
+  if (executor === "codex") {
+    // codex exec 是非交互入口；--json 输出 JSONL（首条 thread.started 带 thread_id），
+    // 工作目录用 -C 显式指定，--skip-git-repo-check 允许在非 git 目录里跑。
+    const args = [
+      "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
+      "-C", String(task.work_dir ?? ""),
+    ];
+    if (model) args.push("-m", model);
+    if (resume) args.push("resume", task.session_id, prompt);
+    else args.push(prompt);
+    return { bin: CODEX_BIN, args };
+  }
+  if (executor === "claude") {
+    // claude -p 是打印模式；stream-json 逐行输出，system init 带 session_id，
+    // result 带 usage / total_cost_usd。CLI 用宿主机全局安装的 claude（或 CLAUDE_BIN 指定）。
+    // 无审批执行，并禁掉交互式提问工具，避免跑任务时等人回答。
+    const args = [
+      "-p",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--permission-mode", "bypassPermissions",
+      "--disallowedTools", "AskUserQuestion",
+    ];
+    if (model) args.push("--model", model);
+    if (resume) args.push("--resume", task.session_id);
+    args.push(prompt);
+    return { bin: CLAUDE_BIN, args };
+  }
   // opencode v2 的 `run` 不认 --dir（全局只有 `opencode --directory X run`），
   // 而 launch() 已经用 spawn({cwd: workDir}) 把工作目录定死了，所以这里不再传目录参数。
   // 带 --dir 的后果是 81ms 退出、code=1、抓不到 session_id（任务 #1，2026-11-15）。
   const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []),
     "--title", sessionTitle(task), "--format", "json"];
   args.push("--dangerously-skip-permissions");
-  const model = String(task.model ?? "").trim();
   if (model) args.push(executor === "mimo" ? "--model" : "-m", model);
   return { bin: executor === "mimo" ? MIMO_BIN : "opencode", args };
 }
@@ -775,12 +854,16 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   // 文档缺失就补一份（dispatch 正常路径会先写，这里兜底显式 start/resume）
   let docPath = fresh.doc_path && fs.existsSync(fresh.doc_path) ? fresh.doc_path : "";
-  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase, sharedDir: opts.sharedDir, businessDir: opts.businessDir });
+  if (!docPath) docPath = writeTaskDoc(store, getTask(store, fresh.id)!, { apiBase: opts.apiBase, runtimeDir: opts.runtimeDir, sharedDir: opts.sharedDir, businessDir: opts.businessDir });
+
+  const runtimeDir = resolveRuntimeDir(opts);
+  const scratchDir = runtimeDir ? path.join(runtimeDir, ".ufa", "work", `task-${fresh.id}`) : "";
+  if (scratchDir) fs.mkdirSync(scratchDir, { recursive: true });
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
   const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);
   const actualBin = opts.executorBin ?? bin;
-  const executor: Executor = fresh.executor === "mimo" ? "mimo" : "opencode";
+  const executor: Executor = normalizeExecutor(fresh.executor);
   const workerId = `${executor}-${fresh.id}`;
   const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
   const logDir = path.join(dataDir, "tasks", String(fresh.id));
@@ -800,6 +883,8 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
     RB_API_BASE: opts.apiBase,
     RB_API_TOKEN: opts.token,
     RB_APP_DIR: APP_ROOT,
+    RB_TASK_DOC: docPath,
+    ...(scratchDir ? { RB_TASK_DIR: scratchDir } : {}),
     ...(opts.sharedDir ? {
       RB_SHARED_DIR: opts.sharedDir,
       RB_MEMORY_FILE: path.join(path.dirname(opts.sharedDir), "memory.md"),
