@@ -30,15 +30,15 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --rb-bg: #101613;
-    --rb-surface: #161e1a;
-    --rb-surface-2: #1d2722;
-    --rb-surface-3: #25322b;
-    --rb-border: #2d3b34;
-    --rb-line-strong: #3d4e45;
-    --rb-text: #e8efeb;
-    --rb-muted: #9db0a6;
-    --rb-faint: #7a8f84;
+    --rb-bg: #0d1219;
+    --rb-surface: #111923;
+    --rb-surface-2: #17202d;
+    --rb-surface-3: #1d293a;
+    --rb-border: #233145;
+    --rb-line-strong: #2f425c;
+    --rb-text: #f4f7fa;
+    --rb-muted: #aab6c6;
+    --rb-faint: #8793a3;
     --rb-accent: #5fc9b6;
     --rb-accent-ink: #8ee0d1;
     --rb-accent-soft: #173c35;
