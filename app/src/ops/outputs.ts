@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.ts";
+import { isInside } from "../core/platform.ts";
 import { outputsDir } from "../core/runtime.ts";
 
 export interface OutputEntry {
@@ -50,25 +51,21 @@ function rootDir(cfg: Config): string {
   return fs.realpathSync(root);
 }
 
-function inside(root: string, abs: string): boolean {
-  return abs === root || abs.startsWith(root + path.sep);
-}
-
 function resolve(root: string, rel: string): string {
   if (typeof rel !== "string") throw new OutputPathError("路径不能为空");
   const norm = rel.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
   if (path.isAbsolute(norm) || /^[a-zA-Z]:/.test(norm)) throw new OutputPathError("只收相对路径");
   if (norm.split("/").includes("..")) throw new OutputPathError("不许用 ..");
   const abs = path.resolve(root, norm);
-  if (!inside(root, abs)) throw new OutputPathError("跑到产出目录外面了");
+  if (!isInside(root, abs)) throw new OutputPathError("跑到产出目录外面了");
   if (fs.existsSync(abs)) {
     const real = fs.realpathSync(abs);
-    if (!inside(root, real)) throw new OutputPathError("符号链接指向产出目录外");
+    if (!isInside(root, real)) throw new OutputPathError("符号链接指向产出目录外");
     return real;
   }
   let q = path.dirname(abs);
   while (!fs.existsSync(q) && q !== path.dirname(q)) q = path.dirname(q);
-  if (!inside(root, fs.realpathSync(q))) throw new OutputPathError("父目录指向产出目录外");
+  if (!isInside(root, fs.realpathSync(q))) throw new OutputPathError("父目录指向产出目录外");
   return abs;
 }
 

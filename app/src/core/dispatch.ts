@@ -33,6 +33,7 @@ import { getTask, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
 import { parseRunnerUsage, runnerLogPath, taskUsagePatch } from "./task-usage.ts";
 import { procStartTime } from "./lockfile.ts";
+import { killTree, resolveExecutable, spawnPlan } from "./platform.ts";
 import {
   patchRunnerState, readRunnerState, runnerStatePath, writeRunnerState, type RunnerState,
 } from "./runner-state.ts";
@@ -42,7 +43,7 @@ import { normalizeExecutor, type Executor } from "./executor.ts";
 export type { Executor } from "./executor.ts";
 
 // 不写死用户名：默认用当前用户 home；换机器或装在别处时用 MIMO_BIN 覆盖
-export const MIMO_BIN = process.env.MIMO_BIN || path.join(os.homedir(), ".mimocode/bin/mimo");
+export const MIMO_BIN = process.env.MIMO_BIN || resolveExecutable(path.join(os.homedir(), ".mimocode/bin/mimo"));
 // codex 一般装在 PATH（~/.local/bin 等）；装在别处时用 CODEX_BIN 覆盖
 export const CODEX_BIN = process.env.CODEX_BIN || "codex";
 // claude 走宿主全局安装（PATH 上的 claude）；装在别处时用 CLAUDE_BIN 覆盖
@@ -122,6 +123,7 @@ try {
   child = spawn(spec.bin, spec.args, {
     cwd: spec.cwd,
     detached: true,
+    shell: !!spec.shell,
     stdio: ["ignore", out, out],
     env: process.env,
   });
@@ -355,6 +357,17 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     `  -d '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
     "```",
     "",
+    ...(process.platform === "win32" ? [
+      "### 原生 Windows（PowerShell；推荐优先用 WSL2）",
+      "",
+      "```powershell",
+      '$headers = @{ Authorization = "Bearer $env:RB_API_TOKEN" }',
+      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/progress" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","stage":"working","note":"开始执行"}'`,
+      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/complete" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","result":"写清楚做了什么、结果如何","artifact":"产出物路径或链接"}'`,
+      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/fail" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
+      "```",
+      "",
+    ] : []),
     "### 4. 执行边界",
     "",
     "本任务审批通过后以无审批模式执行，执行阶段没有运行时审批，不要调用 approvals 接口等待批准。",
@@ -772,15 +785,6 @@ export function sweepLongRunningTasks(
   return { checked: running.length, warned };
 }
 
-function killTree(pid: number, signal: NodeJS.Signals): void {
-  // detached 子进程是进程组组长：先杀整组，失败再退回到单 pid
-  try {
-    process.kill(-pid, signal);
-    return;
-  } catch { /* 不是组长或已经没了 */ }
-  try { process.kill(pid, signal); } catch { /* 已经没了 */ }
-}
-
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** 会话标题：任务号 + 短名（老任务没名字就用目标），让人一眼看出这条会话在干什么。 */
@@ -862,7 +866,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
   const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);
-  const actualBin = opts.executorBin ?? bin;
+  const plan = spawnPlan(resolveExecutable(opts.executorBin ?? bin), args);
   const executor: Executor = normalizeExecutor(fresh.executor);
   const workerId = `${executor}-${fresh.id}`;
   const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
@@ -905,8 +909,9 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
           task_id: fresh.id,
           executor,
           action: opts.resume ? "resume" : "start",
-          bin: actualBin,
-          args,
+          bin: plan.file,
+          args: plan.args,
+          shell: plan.shell,
           cwd: workDir,
           log: logFile,
           state: stateFile,

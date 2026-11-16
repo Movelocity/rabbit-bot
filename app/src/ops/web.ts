@@ -1,10 +1,10 @@
 /** 联网搜索 / 抓正文（DeepSeek 官方接口）：宿主 API 和沙盒 rb 客户端共用。 */
 import fs from "node:fs";
-import path from "node:path";
+import { envFile } from "../core/platform.ts";
 
 /** pm2 里的进程有这些变量，交互 shell 没有：从仓库外的 env 文件补 */
 export function loadEnvFile(): void {
-  const f = path.join(process.env.HOME ?? "", ".config", "rabbit-bot", "env");
+  const f = envFile();
   if (!fs.existsSync(f)) return;
   for (const line of fs.readFileSync(f, "utf8").split("\n")) {
     const m = /^\s*(?:export\s+)?([A-Z0-9_]+)=(.*)$/.exec(line);

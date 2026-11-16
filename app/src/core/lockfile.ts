@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { procStartTimeCommand } from "./platform.ts";
 
 export interface LockPayload {
   pid: number;
@@ -32,15 +33,16 @@ export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
 /** 进程启动时间（原样字符串，只用来比对）。拿不到返回 null。 */
 export function procStartTime(pid: number): string | null {
+  const cmd = procStartTimeCommand(pid);
   try {
-    const out = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2000 }).trim();
+    const out = execFileSync(cmd.bin, cmd.args, { encoding: "utf8", timeout: 2000, windowsHide: true }).trim();
     return out || null;
   } catch {
     return null;

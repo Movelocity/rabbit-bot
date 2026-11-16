@@ -7,6 +7,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { isInside } from "./platform.ts";
 
 export interface SandboxEntry {
   path: string;
@@ -55,7 +56,7 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
   }).filter(Boolean);
   const maxReadChars = opts.maxReadChars ?? 8000;
 
-  const inside = (abs: string): boolean => abs === realRoot || abs.startsWith(realRoot + path.sep);
+  const inside = (abs: string): boolean => isInside(realRoot, abs);
 
   /** 把调用方给的名字解析成根内绝对路径；越界一律抛 SandboxPathError。 */
   const resolve = (rel: string): string => {
@@ -69,8 +70,8 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
     const ov = opts.overlays?.[seg];
     if (ov && fs.existsSync(ov)) {
       const ovRoot = fs.realpathSync(ov);
-      const insideOv = (a: string) => a === ovRoot || a.startsWith(ovRoot + path.sep);
-      const trusted = (a: string) => trustedRoots.some((r) => a === r || a.startsWith(r + path.sep));
+      const insideOv = (a: string) => isInside(ovRoot, a);
+      const trusted = (a: string) => trustedRoots.some((r) => isInside(r, a));
       const absOv = path.resolve(ovRoot, norm.slice(seg.length + 1));
       if (!insideOv(absOv)) throw new SandboxPathError("跑到沙盒外面了");
       if (fs.existsSync(absOv)) {

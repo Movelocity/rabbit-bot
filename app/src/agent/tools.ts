@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
+import { expandHome, isInside } from "../core/platform.ts";
 import { imageRoots, resolveImagePath } from "../ops/images.ts";
 import { shellRunnerOptions, readSandboxFile, writeSandboxFile, resolveSandboxPath, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
@@ -283,7 +284,7 @@ export function createTools(d: ToolDeps) {
             const r = await d.hub.downloadAttachment(p.id);
             if (!r.ok) return txt(`下载失败：${r.error}`, { ok: false });
             const abs = r.path!;
-            const shown = abs.startsWith(filesDir(d.cfg) + path.sep)
+            const shown = isInside(filesDir(d.cfg), abs)
               ? path.join("files", path.relative(filesDir(d.cfg), abs))
               : abs;
             return txt(
@@ -1068,7 +1069,7 @@ export function createTools(d: ToolDeps) {
         if (!raw || (!raw.startsWith("~") && !path.isAbsolute(raw))) {
           return txt("scope=host 要绝对路径或 ~/...", { ok: false });
         }
-        const target = path.resolve(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw);
+        const target = path.resolve(expandHome(raw));
         if (!hostReadAllowed(d.cfg, target)) {
           if (!d.approval?.enabled) {
             return txt(`宿主读取不在白名单：${target}。审批没开，先让主人把根目录加到 exec.shell.host.readRoots。`, { ok: false, needAllow: true });

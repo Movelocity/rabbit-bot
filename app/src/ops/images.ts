@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.ts";
 import type { Store } from "../core/db.ts";
+import { isInside } from "../core/platform.ts";
 import { mediaInboxDir } from "../core/runtime.ts";
 import { fmtLocal } from "../core/time.ts";
 import { clampInt } from "./common.ts";
@@ -39,7 +40,7 @@ export function listImages(store: Store, dataDir: string, opts: ListImagesOption
   const roots = opts.roots ?? { media: [path.join(dataDir, "media")], inbox: [path.join(dataDir, "inbox")] };
   const items: { name: string; kind: string; bytes: number; mtime: number; note?: string }[] = [];
   const seenAbs = new Set<string>();
-  const inInbox = (abs: string) => roots.inbox.some((r) => abs === r || abs.startsWith(r + path.sep));
+  const inInbox = (abs: string) => roots.inbox.some((r) => isInside(r, abs));
 
   if (src === "media" || src === "all") {
     const rows = store.db.prepare("select seq, ts, attachment from messages where attachment is not null order by seq desc limit 500").all() as any[];
@@ -91,7 +92,7 @@ export function resolveImagePath(dataDir: string, target: string, roots?: ImageR
     for (const rel of names) {
       if (!rel) continue;
       const abs = path.resolve(root, rel);
-      if (!abs.startsWith(root + path.sep)) continue;
+      if (!isInside(root, abs)) continue;
       if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;
     }
   }

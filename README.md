@@ -101,6 +101,7 @@ Node ≥ 22.19 · TypeScript · SQLite · [pi](https://pi.dev) · React 管理�
 |---|---|
 | [需求文档.md](需求文档.md) | 产品边界与设计依据 |
 | [app/README.md](app/README.md) | 部署、配置、管理台、任务模型 |
+| [docs/agent-environment.md](docs/agent-environment.md) | **多环境部署**：macOS / Linux / Windows WSL2、Docker、常见踩坑 |
 | [docs/](docs/) | 架构、记忆、主动开口、沙盒、业务地图 |
 | [docs/TROUBLESHOOT-executor-and-approval.md](docs/TROUBLESHOOT-executor-and-approval.md) | **踩坑手册**：执行器秒退、审批不发、session_id 空 |
 | [skills/rabbit-bot/](skills/rabbit-bot/) | UFA / WA 工作手册 |

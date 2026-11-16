@@ -1,9 +1,9 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
 import type { GateConfig } from "./core/gate.ts";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandHome, hostModeSupported } from "./core/platform.ts";
 
 export interface ModelChoice {
   provider: string;
@@ -265,10 +265,6 @@ function readJson(p: string): unknown {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
-function expandHome(p: string): string {
-  return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
-}
-
 /** `~` 展开成家目录，绝对路径原样，相对路径按仓库根解析。 */
 function resolvePath(p: string): string {
   if (p.startsWith("~") || path.isAbsolute(p)) return path.resolve(expandHome(p));
@@ -370,6 +366,9 @@ export function validateConfig(cfg: Config): void {
   pos(cfg.exec.maxTotalBytes, "exec.maxTotalBytes");
   const mode = cfg.exec.shell.mode;
   if (mode !== "docker" && mode !== "host") throw new Error('config: exec.shell.mode 只能是 "docker" 或 "host"');
+  if (mode === "host" && !hostModeSupported()) {
+    throw new Error("config: Windows 原生不支持 exec.shell.mode=host，请改用 docker 模式或把服务部署到 WSL2");
+  }
   if (cfg.exec.shell.enabled) {
     pos(cfg.exec.shell.timeoutMs, "exec.shell.timeoutMs");
     pos(cfg.exec.shell.ufaMaxTimeoutMs, "exec.shell.ufaMaxTimeoutMs");

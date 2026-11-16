@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Executor } from "../core/executor.ts";
+import { resolveExecutable, spawnPlan } from "../core/platform.ts";
 
 export interface ExecutorInfo {
   name: Executor;
@@ -26,17 +27,13 @@ function claudeBin(): string {
   return process.env.CLAUDE_BIN || "claude";
 }
 
-function which(cmd: string): string {
-  const out = spawnSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8", timeout: 5000 });
-  return out.status === 0 ? out.stdout.trim() : "";
-}
-
 function probe(name: ExecutorInfo["name"], bin: string): ExecutorInfo {
-  const resolved = path.isAbsolute(bin) ? bin : which(bin) || bin;
+  const resolved = resolveExecutable(bin);
   if (path.isAbsolute(resolved) && !fs.existsSync(resolved)) {
     return { name, bin: resolved, available: false, version: "", error: "未安装" };
   }
-  const out = spawnSync(resolved, ["--version"], { encoding: "utf8", timeout: 10000 });
+  const plan = spawnPlan(resolved, ["--version"]);
+  const out = spawnSync(plan.file, plan.args, { encoding: "utf8", timeout: 10000, shell: plan.shell, windowsHide: true });
   if (out.error) {
     return { name, bin: resolved, available: false, version: "", error: out.error.message };
   }

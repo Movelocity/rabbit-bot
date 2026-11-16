@@ -15,8 +15,10 @@
  * 模型能看到 ~/.config/rabbit-bot/env 和任意宿主路径。只在 config/local.json 里开。
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertHostModeSupported, killTree } from "./platform.ts";
 
 export type SandboxMode = "docker" | "host";
 
@@ -68,6 +70,31 @@ const SANDBOX_PIDS = "64";
 const SANDBOX_TMP_SIZE = "2g";
 const SANDBOX_RESOURCES_LABEL = "rabbit-bot.sandbox-resources";
 const SANDBOX_RESOURCES = `mem=${SANDBOX_MEMORY};swap=${SANDBOX_MEMORY_SWAP};cpus=${SANDBOX_CPUS};pids=${SANDBOX_PIDS};tmp=${SANDBOX_TMP_SIZE}`;
+const SANDBOX_MOUNTS_LABEL = "rabbit-bot.sandbox-mounts";
+
+function dockerSource(host: string, platform = process.platform): string {
+  const abs = (platform === "win32" ? path.win32 : path).resolve(host);
+  return platform === "win32" ? abs.replace(/\\/g, "/") : abs;
+}
+
+export function mountFingerprint(volumes: VolumeSpec[], platform = process.platform): string {
+  const items = volumes.map((v) => `${dockerSource(v.host, platform)}\u0000${v.container}\u0000${v.mode ?? "rw"}`).sort();
+  return createHash("sha1").update(items.join("\u0001")).digest("hex").slice(0, 16);
+}
+
+export function sandboxMountArgs(volume: VolumeSpec, platform = process.platform): string[] {
+  const mode = (volume.mode ?? "rw") === "ro" ? ",readonly" : "";
+  return ["--mount", `type=bind,source=${dockerSource(volume.host, platform)},target=${volume.container}${mode}`];
+}
+
+export function sandboxUserArgs(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+  gid: number | undefined = process.getgid?.(),
+): string[] {
+  if (platform === "win32" || typeof uid !== "number") return [];
+  return ["--user", `${uid}:${typeof gid === "number" ? gid : uid}`];
+}
 
 interface RawResult {
   code: number;
@@ -138,12 +165,8 @@ function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, 
     child.on("close", (code, signal) => finish(code ?? 1, signal ?? undefined));
     timer = setTimeout(() => {
       timedOut = true;
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        try { child.kill("SIGKILL"); } catch { /* 已经退出 */ }
-      }
+      if (child.pid) killTree(child.pid, "SIGKILL");
+      else try { child.kill("SIGKILL"); } catch { /* 已经退出 */ }
     }, timeoutMs);
   });
 }
@@ -191,11 +214,19 @@ async function envMatches(container: string, env: Record<string, string>): Promi
  * 运行时目录（人设/话题库）第一次接进来时不重建，容器里看到的还是旧的空壳。
  */
 async function mountsMatch(container: string, volumes: ShellRunnerOptions["volumes"]): Promise<boolean> {
-  // 连读写模式一起比：shared-skills 从 rw 改成 ro 也要重建容器
-  const r = await run("docker", ["inspect", "-f", "{{range .Mounts}}{{.Source}}=>{{.Destination}}={{.RW}};{{end}}", container], 15000);
+  // Docker Desktop/WSL 下 .Mounts[].Source 可能是 /run/desktop/mnt/host/c/... 或盘符大小写不同，
+  // 所以不比较原始 Source：期望挂载的规范化 hash 写进 label，容器侧只比 label + Destination + RW。
+  const r = await run("docker", [
+    "inspect", "-f",
+    `{{index .Config.Labels "${SANDBOX_MOUNTS_LABEL}"}}|{{range .Mounts}}{{.Destination}}={{.RW}};{{end}}`,
+    container,
+  ], 15000);
   if (r.code !== 0) return false;
-  const cur = new Set(r.out.trim().split(";").filter(Boolean));
-  const want = new Set(volumes.map((v) => `${v.host}=>${v.container}=${(v.mode ?? "rw") === "rw"}`));
+  const sep = r.out.indexOf("|");
+  if (sep < 0) return false;
+  if (r.out.slice(0, sep).trim() !== mountFingerprint(volumes)) return false;
+  const cur = new Set(r.out.slice(sep + 1).trim().split(";").filter(Boolean));
+  const want = new Set(volumes.map((v) => `${v.container}=${(v.mode ?? "rw") === "rw"}`));
   if (cur.size !== want.size) return false;
   for (const w of want) if (!cur.has(w)) return false;
   return true;
@@ -232,6 +263,7 @@ export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<
       "run", "-d",
       "--name", opts.container,
       "--label", `${SANDBOX_RESOURCES_LABEL}=${SANDBOX_RESOURCES}`,
+      "--label", `${SANDBOX_MOUNTS_LABEL}=${mountFingerprint(opts.volumes)}`,
       "--network", opts.network,
       "--add-host", "host.docker.internal:host-gateway",
       "--memory", SANDBOX_MEMORY, "--memory-swap", SANDBOX_MEMORY_SWAP,
@@ -243,9 +275,9 @@ export async function ensureSandboxContainer(opts: ShellRunnerOptions): Promise<
       "--security-opt", "no-new-privileges",
       "--restart", "unless-stopped",
       ...Object.entries(desired).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-      ...opts.volumes.flatMap((v) => ["-v", `${v.host}:${v.container}:${v.mode ?? "rw"}`]),
+      ...opts.volumes.flatMap((v) => sandboxMountArgs(v)),
       "-w", opts.workdir ?? "/work",
-      "--user", `${process.getuid?.() ?? 501}:${process.getgid?.() ?? 20}`,
+      ...sandboxUserArgs(),
       opts.image,
       "sleep", "infinity",
     ],
@@ -326,6 +358,7 @@ function hostEnv(opts: ShellRunnerOptions, extra?: Record<string, string>): Node
  * 只在配置 mode="host" 时走到这里，给本地开发省掉 docker 那一层。
  */
 export async function runOnHost(cmd: string, opts: ShellRunnerOptions): Promise<ShellRunnerResult> {
+  assertHostModeSupported();
   const trimmed = checkCmd(cmd);
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
   const r = await runGroup("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
@@ -353,6 +386,7 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
 
   if ((opts.mode ?? "docker") === "host") {
+    assertHostModeSupported();
     const [bin, ...prefix] = opts.hostPrefix ?? [];
     if (!bin) throw new Error("host 模式需要 hostPrefix（rb 客户端入口）");
     // hostPrefix 顶替 argv[0]（容器里是 /usr/local/bin/rb，宿主上是 node docker/rb.mjs）

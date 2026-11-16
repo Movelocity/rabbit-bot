@@ -264,4 +264,5 @@ prompts/         默认提示词模板（真身在运行时目录）
 
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) —— 运维命令全表、故障排查
 - [docs/NOTES.md](docs/NOTES.md) —— 踩过的坑和当时的判断
+- [../docs/agent-environment.md](../docs/agent-environment.md) —— 多环境部署（macOS / Linux / Windows WSL2）
 - [DEPLOY.local.md](DEPLOY.local.md) —— 这台机器上的部署事实（端口、路径、容器参数、自启）

@@ -3,10 +3,11 @@
  * npm run idle —— 看聊天活跃度算得对不对。
  * 打印 24 小时直方图 + 当前值 + 样本量，不然这套只能靠猜。
  */
+import { fileURLToPath } from "node:url";
 import { Store } from "../dist/core/db.js";
 import { computeIdle } from "../dist/core/idle.js";
 
-const store = new Store(new URL("../data/rabbit-bot.db", import.meta.url).pathname);
+const store = new Store(fileURLToPath(new URL("../data/rabbit-bot.db", import.meta.url)));
 const now = Date.now();
 const m = computeIdle(store, now, "Asia/Shanghai");
 

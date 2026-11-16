@@ -13,6 +13,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { APP_ROOT, type Config, type ModelChoice } from "./config.ts";
 import type { Store } from "./core/db.ts";
+import { isInside } from "./core/platform.ts";
 import type { Hub } from "./core/hub.ts";
 import type { Logger } from "./core/logger.ts";
 import { WebAuth, effectiveWebChat } from "./core/web-auth.ts";
@@ -139,7 +140,7 @@ function serveStatic(pathname: string, res: http.ServerResponse, method: string)
     return false;
   }
   const abs = path.resolve(WEB_ROOT, rel);
-  if (!abs.startsWith(WEB_ROOT + path.sep)) return false;
+  if (!isInside(WEB_ROOT, abs)) return false;
   let stat: fs.Stats;
   try {
     stat = fs.statSync(abs);

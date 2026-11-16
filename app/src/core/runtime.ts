@@ -8,9 +8,9 @@
  * 判断只看「文件在不在」，不读配置开关——多一个开关就多一种配置错误的可能。
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { APP_ROOT, type Config } from "../config.ts";
+import { expandHome } from "./platform.ts";
 
 export function runtimeDir(cfg: Config): string {
   return path.resolve(cfg.runtimeDir);
@@ -156,7 +156,7 @@ export function ensureHostSandboxLinks(cfg: Config): string[] {
       if (e?.code !== "ENOENT") continue;
     }
     fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link, "dir");
+    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
     made.push(`${name} -> ${target}`);
   }
   return made;
@@ -171,7 +171,7 @@ export function ensureHostSandboxLinks(cfg: Config): string[] {
 export function externalSkillsDir(cfg: Config): string | null {
   const raw = cfg.exec.sharedSkillsDir?.trim();
   if (!raw) return null;
-  const abs = raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(raw);
+  const abs = raw.startsWith("~") ? path.resolve(expandHome(raw)) : path.resolve(raw);
   try { return fs.statSync(abs).isDirectory() ? abs : null; } catch { return null; }
 }
 

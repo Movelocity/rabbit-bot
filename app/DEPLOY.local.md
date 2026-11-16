@@ -3,6 +3,7 @@
 上游作者文档是 `README.md` 与 `需求文档.md`；这里只记**这台机器上的实际情况**。
 
 > **文档分工**：这份只记这台机器上的部署事实（路径、端口、容器参数、自启现状）。
+> 多环境（macOS / Linux / Windows WSL2）安装与排错见 [../docs/agent-environment.md](../docs/agent-environment.md)。
 > 日常命令见 [docs/OPERATIONS.md](docs/OPERATIONS.md)，踩过的坑见 [docs/NOTES.md](docs/NOTES.md)，项目概览见 [README.md](README.md)。
 
 ## 位置与运行时

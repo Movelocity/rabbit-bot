@@ -1,15 +1,15 @@
 /** 宿主读取白名单：配置里的根目录 + 主人审批过的路径。 */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { Config } from "../config.ts";
+import { expandHome, isInside } from "./platform.ts";
 
 const ALLOW_FILE = "host-read-allow.json";
 
 function expand(p: string): string {
   const raw = String(p ?? "").trim();
   if (!raw) return "";
-  return path.resolve(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw);
+  return path.resolve(expandHome(raw));
 }
 
 function allowFile(cfg: Config): string {
@@ -27,14 +27,14 @@ export function hostReadRoots(cfg: Config): string[] {
 
 export function hostReadAllowed(cfg: Config, target: string): boolean {
   const abs = expand(target);
-  return hostReadRoots(cfg).some((root) => abs === root || abs.startsWith(root + path.sep));
+  return hostReadRoots(cfg).some((root) => isInside(root, abs));
 }
 
 export function rememberHostReadRoot(cfg: Config, target: string): void {
   const abs = expand(target);
   if (!abs) return;
   const roots = hostReadRoots(cfg);
-  if (roots.some((root) => abs === root || abs.startsWith(root + path.sep))) return;
+  if (roots.some((root) => isInside(root, abs))) return;
   roots.push(abs);
   const file = allowFile(cfg);
   fs.mkdirSync(path.dirname(file), { recursive: true });
