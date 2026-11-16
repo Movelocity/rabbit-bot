@@ -284,7 +284,7 @@ export function Field({
 export function StatusText({ text, error }: { text?: string; error?: boolean }) {
   return (
     <p
-      className={cx("my-2 min-h-5 text-[13px]", error ? "text-bad" : "text-muted")}
+      className={cx("my-2 text-[13px]", error ? "text-bad" : "text-muted")}
       role={error ? "alert" : "status"}
     >
       {text || ""}

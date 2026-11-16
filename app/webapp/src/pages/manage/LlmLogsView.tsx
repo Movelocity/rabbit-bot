@@ -174,11 +174,6 @@ export function LlmLogsView({ reloadSignal }: { reloadSignal: number }) {
 
   return (
     <div className="min-w-0">
-      <div className="mb-2.5 flex flex-wrap items-center justify-end gap-2">
-        <Button variant="ghost" size="sm" disabled={sessionsLoading} onClick={() => void loadSessions()}>
-          {sessionsLoading ? "读取中…" : "刷新会话"}
-        </Button>
-      </div>
 
       <StatusText text={status.text} error={status.error} />
 
