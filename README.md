@@ -41,12 +41,7 @@
 
 ## 一条消息的旅程
 
-```
-飞书 / Matrix ──→ 聊天池(SQLite) ──→ 调度器 ──→ 单实例队列 ──→ pi Agent
-                                      ↑                              │
-                         tick / 私聊去抖 / 群@ / 日程                 │
-                                      └────── send(pool, text) ←─────┘
-```
+![rabbit-bot 核心概念架构：消息入池、三类唤醒、UFA 表达、WA 干活与任务事件回流](docs/assets/architecture.jpg)
 
 没轮到它，就不烧 token；轮到它，也只读该读的未读和近期上下文。
 
