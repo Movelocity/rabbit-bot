@@ -76,7 +76,11 @@ async function main() {
   const madeDirs = ensureSkillDataDirs(cfg);
   if (madeDirs.length) log.info(`补了 ${madeDirs.length} 个技能 data 目录`);
   if (cfg.adapters.feishu.enabled)
-    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: mediaInboxDir(cfg), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes }, filesDir: filesDir(cfg) }, log));
+    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: mediaInboxDir(cfg), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes }, filesDir: filesDir(cfg),
+      knownChats: () => app.store.listPools({ includeArchived: true }).filter((p) => p.platform === "feishu")
+        .map((p) => ({ id: p.external_id, kind: p.kind === "private" ? "private" as const : "group" as const, title: p.title })),
+      isStored: (id) => app.store.hasMessage("feishu", id),
+    }, log));
   if (cfg.adapters.matrix.enabled && process.env.MATRIX_TOKEN)
     app.hub.addAdapter(
       new MatrixAdapter(

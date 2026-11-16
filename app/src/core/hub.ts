@@ -3,6 +3,7 @@
  * 以及 send 工具用的“发送 → 等待确认 → 收集期间新消息”。
  */
 import type { IMAdapter } from "../adapters/types.ts";
+import type { AdapterStatus } from "../adapters/types.ts";
 import type { Config } from "../config.ts";
 import type { Store } from "./db.ts";
 import { parseEmoji, type EmojiTable } from "./emoji.ts";
@@ -68,6 +69,14 @@ export class Hub {
   constructor(private store: Store, private cfg: Config, private log: Logger, readonly emoji: EmojiTable) {}
 
   addAdapter(a: IMAdapter) { this.adapters.set(a.platform, a); }
+  /** 给管理台顶栏用：各适配器连接状态；不返回消息内容 */
+  adapterStatus(): AdapterStatus[] {
+    const out: AdapterStatus[] = [];
+    for (const a of this.adapters.values()) {
+      try { const s = a.status?.(); if (s) out.push(s); } catch { /* 状态读取失败不影响收发 */ }
+    }
+    return out;
+  }
   async startAdapters() {
     for (const a of this.adapters.values()) await a.start((m) => this.ingest(m));
   }

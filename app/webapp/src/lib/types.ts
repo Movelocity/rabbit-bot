@@ -337,8 +337,30 @@ export interface SchedulerStatus {
   active_window_ms: number;
 }
 
-export type ScheduleKind = "cron" | "delay";
-export type ScheduleStatus = "active" | "cancelled" | "done";
+export interface AdapterGap {
+  from: number;
+  to: number;
+  missed: number;
+  checked_at: number;
+  error?: string;
+}
+
+export interface AdapterStatus {
+  platform: string;
+  state: "connecting" | "connected" | "reconnecting" | "stopped";
+  since: number;
+  connected_at: number | null;
+  disconnected_at: number | null;
+  last_error?: string;
+  last_gap: AdapterGap | null;
+}
+
+export interface AdapterStatusResponse {
+  now: number;
+  adapters: AdapterStatus[];
+}
+
+export type ScheduleKind = "cron" | "delay";export type ScheduleStatus = "active" | "cancelled" | "done";
 
 export interface Schedule {
   id: number;

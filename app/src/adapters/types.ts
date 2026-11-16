@@ -9,6 +9,21 @@ export interface RecallResult { ok: boolean; error?: string }
 /** 一条消息内的富文本片段：文字 + 平台内置表情 */
 export type RichPart = { type: "text"; text: string } | { type: "emoji"; id: string; key: string };
 
+/** 断开重连后核对出的漏收窗口：missed 是平台有、本地没有的条数（表情回复不在此列） */
+export interface AdapterGap { from: number; to: number; missed: number; checked_at: number; error?: string }
+
+/** 适配器连接状态：给管理台顶栏显示，不包含消息内容 */
+export interface AdapterStatus {
+  platform: Platform;
+  state: "connecting" | "connected" | "reconnecting" | "stopped";
+  /** 进入当前状态的时刻 */
+  since: number;
+  connected_at: number | null;
+  disconnected_at: number | null;
+  last_error?: string;
+  last_gap: AdapterGap | null;
+}
+
 export interface IMAdapter {
   readonly platform: Platform;
   /** 开始接收消息；适配器把平台消息转换成 InboundMessage 交给 sink */
@@ -25,4 +40,6 @@ export interface IMAdapter {
   recall?(externalChatId: string, msgId: string): Promise<RecallResult>;
   /** 按需下载消息里的远端附件（可选；未实现表示该平台不支持主动下载） */
   downloadRemote?(ref: RemoteAttachment): Promise<{ path: string; bytes: number }>;
+  /** 长连接 / 收消息状态（可选；未实现表示该平台没有可展示的连接态） */
+  status?(): AdapterStatus;
 }

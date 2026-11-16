@@ -946,6 +946,13 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET|PUT /v1/scheduler、GET /v1/scheduler/status");
         }
+        case "adapters": {
+          // 顶栏的飞书连接状态：连接态 + 断开窗口漏收条数，不返回消息内容
+          if (parts.length === 3 && parts[2] === "status" && method === "GET") {
+            return reply(200, { now: Date.now(), adapters: d.hub?.adapterStatus() ?? [] });
+          }
+          throw new HttpError(404, "用法：GET /v1/adapters/status");
+        }
         case "watchdog": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveWatchdogSettings(d.cfg));
           if (parts.length === 2 && method === "PUT") {

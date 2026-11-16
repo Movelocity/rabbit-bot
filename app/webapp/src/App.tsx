@@ -14,6 +14,8 @@ import { useUrlState, type Tab } from "./lib/use-url-state.ts";
 import { cx } from "./lib/cx.ts";
 import { Button } from "./components/ui.tsx";
 import { SchedulerTickStatus } from "./components/SchedulerTickStatus.tsx";
+import { FeishuStatus } from "./components/FeishuStatus.tsx";
+import { ApiStatus } from "./components/ApiStatus.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
 import { TasksPage } from "./pages/TasksPage.tsx";
@@ -143,8 +145,6 @@ export default function App() {
     return <LoginPage key={loginError} initialError={loginError} onAuthed={handleAuthed} />;
   }
 
-  const healthText =
-    health === "ok" ? "API 正常" : health === "bad" ? "API 异常" : "连接中…";
   const hint =
     tab === "manage" ? MANAGE_HINTS[manageView] : TAB_HINTS[tab] ?? "";
 
@@ -165,23 +165,8 @@ export default function App() {
             <div className="max-sm:hidden">
               <SchedulerTickStatus />
             </div>
-            <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
-              <span
-                className={cx(
-                  "size-[8px] flex-none rounded-full",
-                  health === "ok" &&
-                    "bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-ok)_18%,transparent)]",
-                  health === "bad" &&
-                    "bg-bad shadow-[0_0_0_3px_color-mix(in_srgb,var(--rb-bad)_18%,transparent)]",
-                  health === "checking" && "bg-muted",
-                )}
-              />
-              <span className="whitespace-nowrap">{healthText}</span>
-              <span className="text-border">·</span>
-              <span className="truncate font-mono text-[11.5px] text-muted">
-                {window.location.origin}
-              </span>
-            </div>
+            <FeishuStatus />
+            <ApiStatus health={health} />
           </div>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             退出

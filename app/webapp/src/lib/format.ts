@@ -32,8 +32,19 @@ export function countdown(ms: number | null | undefined): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
-export function formatTs(ms: number | null | undefined): string {
-  if (!ms) return "";
+/** 已持续时长：45s / 12m / 1h28m / 2d3h。用于「断开多久了」这类读数。 */
+export function duration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h${String(m % 60).padStart(2, "0")}m`;
+  return `${Math.floor(h / 24)}d${h % 24}h`;
+}
+
+export function formatTs(ms: number | null | undefined): string {  if (!ms) return "";
   try {
     return new Date(Number(ms)).toLocaleString("zh-CN", {
       year: "numeric",

@@ -9,7 +9,7 @@
  * Markdown：出站文本包含 markdown 标记（如 ** 加粗）时发富文本 post 的 md 标签，由飞书渲染。
  */
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { IMAdapter, RecallResult, RichPart, SendResult } from "./types.ts";
+import type { IMAdapter, RecallResult, RichPart, SendResult, AdapterStatus, AdapterGap } from "./types.ts";
 import { inboundEmojiText, type EmojiTable } from "../core/emoji.ts";
 import type { InboundMessage, MediaType, Attachment, RemoteAttachment } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
@@ -18,7 +18,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable; media?: MediaOptions; filesDir?: string }
+export interface FeishuOptions { appId: string; appSecret: string; domain: "feishu" | "lark"; fetchSenderName: boolean; reactions?: boolean; logRawEmoji?: boolean; emoji?: EmojiTable; media?: MediaOptions; filesDir?: string;
+  /** 断开重连后核对漏收要扫的会话；不给就只扫本次进程见过的会话 */
+  knownChats?: () => { id: string; kind: "private" | "group"; title: string }[];
+  /** 某条平台消息是否已入池，用来区分「断线期间漏收」和「已经收到但重投」 */
+  isStored?: (msgId: string) => boolean;
+}
 
 /** 从 image / post 消息里取出所有图的 image_key；取不到返回空数组。 */
 export function imageKeysOf(msgType: string, content: string): string[] {
@@ -185,6 +190,12 @@ export class FeishuAdapter implements IMAdapter {
   /** 串行处理入站事件：事件回调立即返回（尽快 ack，减少重投），处理按到达顺序进行 */
   private chain: Promise<void> = Promise.resolve();
   private disconnectedAt: number | null = null;
+  private state: AdapterStatus["state"] = "stopped";
+  private stateSince = Date.now();
+  private connectedAt: number | null = null;
+  private lastError: string | undefined;
+  private lastGap: AdapterGap | null = null;
+  private gapChecking = false;
 
   constructor(private opts: FeishuOptions, private log: Logger) {
     const domain = opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -192,6 +203,7 @@ export class FeishuAdapter implements IMAdapter {
   }
 
   async start(sink: (m: InboundMessage) => void) {
+    this.setState("connecting");
     try {
       const info: any = await this.client.request({ method: "GET", url: "/open-apis/bot/v3/info" });
       this.botOpenId = info?.bot?.open_id ?? "";
@@ -215,17 +227,32 @@ export class FeishuAdapter implements IMAdapter {
     const domain = this.opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
     this.ws = new lark.WSClient({
       appId: this.opts.appId, appSecret: this.opts.appSecret, domain, loggerLevel: lark.LoggerLevel.warn, autoReconnect: true,
-      onReady: () => this.log.info("feishu: 长连接已建立"),
+      onReady: () => {
+        this.connectedAt = Date.now();
+        this.disconnectedAt = null;
+        this.setState("connected");
+        this.log.info("feishu: 长连接已建立");
+      },
       onReconnecting: () => {
         this.disconnectedAt ??= Date.now();
+        this.setState("reconnecting");
         this.log.warn("feishu: 长连接重连中（不影响定时唤醒与发送，发送走 HTTP）");
       },
       onReconnected: () => {
-        const s = this.disconnectedAt ? Math.round((Date.now() - this.disconnectedAt) / 1000) : 0;
+        const from = this.disconnectedAt ?? 0;
+        const to = Date.now();
+        const s = from ? Math.round((to - from) / 1000) : 0;
         this.disconnectedAt = null;
-        this.log.info(`feishu: 长连接已恢复（断开约 ${s}s；期间的消息平台会补推，重复的按 message_id 去重）`);
+        this.connectedAt = to;
+        this.setState("connected");
+        this.log.info(`feishu: 长连接已恢复（断开约 ${s}s；平台只重投最近约 5 分钟的事件，更早的靠断开窗口核对）`);
+        // 事件重投窗口有限：断开久了更早的消息不会再来，主动按会话扫一遍才知道漏了多少
+        if (from && to - from > 2000) void this.checkGap(from, to);
       },
-      onError: (e) => this.log.error("feishu: 长连接失败", e),
+      onError: (e) => {
+        this.lastError = (e as Error)?.message ?? String(e);
+        this.log.error("feishu: 长连接失败", e);
+      },
     });
     await this.ws.start({ eventDispatcher: dispatcher });
   }
@@ -249,7 +276,69 @@ export class FeishuAdapter implements IMAdapter {
     await this.chain;
   }
 
-  async stop() { try { (this.ws as any)?.close?.(); } catch { /* ignore */ } this.ws = null; }
+  private setState(s: AdapterStatus["state"]) {
+    if (this.state === s) return;
+    this.state = s;
+    this.stateSince = Date.now();
+  }
+
+  status(): AdapterStatus {
+    return {
+      platform: this.platform,
+      state: this.state,
+      since: this.stateSince,
+      connected_at: this.connectedAt,
+      disconnected_at: this.disconnectedAt,
+      ...(this.lastError ? { last_error: this.lastError } : {}),
+      last_gap: this.lastGap,
+    };
+  }
+
+  /** 断开窗口内平台有、本地没有的消息条数：用消息列表接口核对，只统计，不回填（回填会打乱 seq 顺序）。 */
+  private async checkGap(from: number, to: number) {
+    if (this.gapChecking) return;
+    this.gapChecking = true;
+    let missed = 0;
+    let error: string | undefined;
+    try {
+      const chats = new Map<string, { id: string; kind: "private" | "group"; title: string }>();
+      for (const c of this.opts.knownChats?.() ?? []) chats.set(c.id, c);
+      for (const [id, kind] of this.chatKinds) if (!chats.has(id)) chats.set(id, { id, kind, title: this.chatTitles.get(id) ?? "" });
+      for (const chat of chats.values()) {
+        let pageToken = "";
+        let pages = 0;
+        try {
+          do {
+            const res: any = await this.client.im.v1.message.list({
+              params: {
+                container_id_type: "chat", container_id: chat.id,
+                start_time: String(Math.floor(from / 1000)), end_time: String(Math.ceil(to / 1000)),
+                sort_type: "ByCreateTimeAsc", page_size: 50,
+                ...(pageToken ? { page_token: pageToken } : {}),
+              },
+            });
+            for (const m of res?.data?.items ?? []) {
+              if (m?.sender?.sender_type === "app") continue;
+              if (this.opts.isStored?.(m.message_id)) continue;
+              missed++;
+            }
+            pageToken = res?.data?.page_token ?? "";
+            if (!res?.data?.has_more) break;
+          } while (pageToken && ++pages < 20);
+        } catch (e) { error = (e as Error).message; }
+      }
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      this.gapChecking = false;
+      this.lastGap = { from, to, missed, checked_at: Date.now(), ...(error ? { error } : {}) };
+      const mins = Math.max(1, Math.round((to - from) / 60_000));
+      if (missed > 0) this.log.warn(`feishu: 断开 ${mins} 分钟内核对到 ${missed} 条消息本地没有（平台不会重投，已丢）`);
+      else this.log.info(`feishu: 断开 ${mins} 分钟核对完成：没有漏收${error ? `（部分会话核对失败：${error}）` : ""}`);
+    }
+  }
+
+  async stop() { try { (this.ws as any)?.close?.(); } catch { /* ignore */ } this.ws = null; this.setState("stopped"); }
 
   private async toInbound(data: any): Promise<InboundMessage> {
     const msg = data.message;
