@@ -103,18 +103,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     const pool = store.getPool(pid)!;
     blocks.push(`近期上下文 [${poolLabel(store, pool)}]：\n` + ctx.map((m) => fmtMsg(store, m, false)).join("\n"));
   }
-  // 记记忆要 user_id，但消息里只带名字。不给她这个，她要么猜、要么干脆不记
-  const people = new Map<string, { name: string; owner: boolean }>();
-  for (const m of x.unread) {
-    if (!m.from_self && m.user_id) {
-      // 用身份映射后的显示名：sender_name 可能是平台给的「用户144b」，别名才是本人名字
-      const name = store.userDisplayName(m.platform, m.sender_id) || m.sender_name;
-      people.set(m.user_id, { name, owner: isOwnerId(m.sender_id) });
-    }
-  }
-  if (people.size) {
-    blocks.push(`正在跟你说话的人：${[...people].map(([id, p]) => `${p.name}（user_id=${id}${p.owner ? "，主人" : ""}）`).join("、")}`);
-  }
   // 长期记忆不整段注入：只给最近 5 条索引，细节让她自己 search / trace。
   // 只对真人聊天池注入；任务池和日程池没有长期记忆，注入了只会添噪。
   const memMsg = [...x.unread].reverse().find((m) => !m.from_self && m.user_id);

@@ -52,14 +52,14 @@ test("身份映射：同一人跨平台映射到同一 user_id", () => {
 test("resolveUser 拿到新名字时同时更新 users 和 identities", () => {
   const s = new Store(":memory:");
   const u = s.resolveUser("feishu", "ou_h", "用户449b");
-  assert.equal(s.resolveUser("feishu", "ou_h", "贺伟康"), u);
-  assert.equal(s.userDisplayName("feishu", "ou_h"), "贺伟康");
-  assert.equal(s.listUsers().find((x) => x.user_id === u)!.display_name, "贺伟康");
-  assert.equal(s.listIdentities().find((i) => i.platform === "feishu" && i.platform_user_id === "ou_h")!.display_name, "贺伟康");
+  assert.equal(s.resolveUser("feishu", "ou_h", "张三"), u);
+  assert.equal(s.userDisplayName("feishu", "ou_h"), "张三");
+  assert.equal(s.listUsers().find((x) => x.user_id === u)!.display_name, "张三");
+  assert.equal(s.listIdentities().find((i) => i.platform === "feishu" && i.platform_user_id === "ou_h")!.display_name, "张三");
 
   // users 为空时回退 identities；两边都没有就是空
   s.db.prepare("UPDATE users SET display_name='' WHERE user_id=?").run(u);
-  assert.equal(s.userDisplayName("feishu", "ou_h"), "贺伟康");
+  assert.equal(s.userDisplayName("feishu", "ou_h"), "张三");
   s.db.prepare("UPDATE identities SET display_name='' WHERE platform='feishu' AND platform_user_id='ou_h'").run();
   assert.equal(s.userDisplayName("feishu", "ou_h"), "");
 });
@@ -68,22 +68,22 @@ test("人工别名不会被后续自动名冲掉", () => {
   const s = new Store(":memory:");
   const u = s.resolveUser("feishu", "ou_h", "用户449b");
   s.renameUser(u, "老大");
-  s.resolveUser("feishu", "ou_h", "贺伟康");
+  s.resolveUser("feishu", "ou_h", "张三");
   assert.equal(s.userDisplayName("feishu", "ou_h"), "老大");
   const row = s.listUsers().find((x) => x.user_id === u)!;
   assert.equal(row.alias, "老大");
-  assert.equal(row.display_name, "贺伟康");
+  assert.equal(row.display_name, "张三");
 });
 
 test("唤醒上下文也用人工别名，不靠 @ 或平台原名", () => {
   const s = new Store(":memory:");
   const m = s.insertMessage(msg({ sender_id: "ou_alias", sender_name: "用户449b" }))!;
-  const u = s.resolveUser("feishu", "ou_alias", "贺伟康");
+  const u = s.resolveUser("feishu", "ou_alias", "张三");
   s.renameUser(u, "老大");
-  s.resolveUser("feishu", "ou_alias", "贺伟康改的名");
+  s.resolveUser("feishu", "ou_alias", "张三改的名");
   const line = fmtMsg(s, m);
   assert.match(line, /老大/);
-  assert.doesNotMatch(line, /用户449b|贺伟康/);
+  assert.doesNotMatch(line, /用户449b|张三/);
 });
 
 test("池消息显示映射后的名字：旧消息也能补，sender_name 保留原名", () => {
@@ -92,25 +92,25 @@ test("池消息显示映射后的名字：旧消息也能补，sender_name 保�
   const alias = s.poolAlias(m.pool_id);
   assert.equal(readPool(s, alias).messages[0].sender, "用户449b");
 
-  s.renameUser(m.user_id!, "贺伟康");
+  s.renameUser(m.user_id!, "张三");
   const read = readPool(s, alias).messages[0];
-  assert.equal(read.sender, "贺伟康");
+  assert.equal(read.sender, "张三");
   assert.equal(read.sender_name, "用户449b");
 
   const found = searchPool(s, "hi", alias);
-  assert.equal(found.messages[0].sender, "贺伟康");
+  assert.equal(found.messages[0].sender, "张三");
   assert.equal(found.messages[0].sender_name, "用户449b");
 });
 
 test("renameUser 同步 identities，backfill 连历史 sender_name 一起改", () => {
   const s = new Store(":memory:");
   const m = s.insertMessage(msg({ msg_id: "old2", sender_id: "ou_h", sender_name: "用户449b" }))!;
-  const renamed = s.renameUser(m.user_id!, "贺伟康", { backfill: true })!;
-  assert.equal(renamed.display_name, "贺伟康");
+  const renamed = s.renameUser(m.user_id!, "张三", { backfill: true })!;
+  assert.equal(renamed.display_name, "张三");
   assert.equal(renamed.backfilled, 1);
-  assert.deepEqual(renamed.identities.map((i) => i.display_name), ["贺伟康"]);
-  assert.equal(s.getMessageBySeq(m.seq)!.sender_name, "贺伟康");
-  assert.equal(readPool(s, s.poolAlias(m.pool_id)).messages[0].sender, "贺伟康");
+  assert.deepEqual(renamed.identities.map((i) => i.display_name), ["张三"]);
+  assert.equal(s.getMessageBySeq(m.seq)!.sender_name, "张三");
+  assert.equal(readPool(s, s.poolAlias(m.pool_id)).messages[0].sender, "张三");
   assert.equal(s.renameUser("u_nope", "x"), null);
   assert.equal(s.renameUser(m.user_id!, "   "), null);
 });

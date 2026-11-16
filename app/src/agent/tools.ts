@@ -201,7 +201,7 @@ export function createTools(d: ToolDeps) {
               if (why) return txt(coerciveFeedback(why), { ok: false, blocked: "coercive" });
             }
             const wake = d.currentWake?.();
-            // 任务汇报只能进主聊天：任务事件唤醒时，她容易把「润森盛」这类项目汇报顺手发进项目群。
+            // 任务汇报只能进主聊天：任务事件唤醒时，她容易把项目汇报顺手发进项目群。
             // 提示词管不住（群规则在 message 场景，tick 只读 scene-tick），这里用代码兜底。
             const isTaskReport = !!wake && (
               wake.type === "task-updated"

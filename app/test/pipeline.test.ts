@@ -505,7 +505,7 @@ test("记忆只给近期索引：带 #id 和首行，细节仍让她自己查", 
   assert.doesNotMatch(p, /说法对照/, "不单独注入说法对照块");
   assert.match(p, /近期记忆索引/, "给近期记忆索引");
   assert.match(p, /#2 他对花生过敏/, "索引带 #id 和首行，方便决定要不要 search/trace");
-  assert.ok(p.includes(`user_id=${uid}`), "仍要告诉她 user_id，方便自己用 memory search");
+  assert.ok(p.includes(`(${uid})`), "消息行里带 user_id，方便自己用 memory search");
   await t.done();
 });
 
