@@ -36,7 +36,7 @@ pm2 restart rabbit-bot
 
 ### 任务执行器（worker）与重启
 
-`pm2 restart` 会用 treekill 按 ppid 杀整棵进程树，所以 `opencode`/`mimo` 执行器不能挂在
+`pm2 restart` 会用 treekill 按 ppid 杀整棵进程树，所以 `opencode`/`mimo`/`codex`/`claude` 执行器不能挂在
 rabbit-bot 下面。dispatch 起任务时走两级脱管（launcher 立刻退出 → reaper 被 launchd 收养 →
 reaper 再起执行器），执行器与主服务没有父子关系：
 
@@ -49,6 +49,9 @@ reaper 再起执行器），执行器与主服务没有父子关系：
   `POST /v1/tasks/<id>/stop`）；它已经不归 pm2 管了。
 - 手工排查：`ps -o pid,ppid,command -p <runner_pid>`，ppid 应该指向一个被 launchd 收养的
   reaper（ppid=1），不是 rabbit-bot 主进程。
+- claude 执行器用宿主全局安装的 Claude Code CLI：PATH 上的 `claude`，或 env 里用 `CLAUDE_BIN`
+  指定路径。鉴权在 `~/.config/rabbit-bot/env` 里配 `ANTHROPIC_API_KEY`（或 `ANTHROPIC_AUTH_TOKEN` +
+  `ANTHROPIC_BASE_URL`）。宿主没装全局 CLI 时，管理台会把 claude 标成未安装。
 
 ### 升级 / 改完代码（清单）
 

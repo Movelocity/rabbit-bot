@@ -4,7 +4,8 @@
 
 ## 开工
 
-1. 先读任务文档 `<work_dir>/.ufa/tasks/task-<id>.md`，再读仓库的 `AGENTS.md` / `README`。
+1. 先读任务文档（路径在启动指令里，通常是 `<runtimeDir>/.ufa/tasks/task-<id>.md`，也可看 `$RB_TASK_DOC`），再读仓库的 `AGENTS.md` / `README`。任务文档不写进项目根目录，避免污染工作区。
+   临时脚本和中间产物放 `$RB_TASK_DIR`（`<runtimeDir>/.ufa/work/task-<id>/`），不要在工作目录里建 `.ufa`。
 2. 到 shared 里找同主题的旧交接：
    `rg -l "关键词" "$RB_SHARED_DIR" -g 'task-*.md'`
    新交接在 `handoffs/`，老任务可能还留在 shared 根；都算线索。
@@ -72,7 +73,7 @@ curl -s -H "Authorization: Bearer $RB_API_TOKEN" "$RB_API_BASE/v1/business/lint"
 
 ## 做事
 
-- 只在 `work_dir` 内读写和运行命令，不越界。
+- 只在 `work_dir` 内读写和运行命令，不越界；任务文档、`$RB_TASK_DIR`、`$RB_SHARED_DIR` 是明确的例外。
 - 先看现有实现、约定和测试，再改；小步改，别顺手重构、别扩大范围。
 - 常规实现细节自己定；只有改对外接口、跨模块、产品/设计方向没定、缺权限/资源时，才停下来报 `blocked`。
 - 不编结果：没跑过的验证不写“已通过”，没测过的指标不报。

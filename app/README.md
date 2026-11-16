@@ -164,6 +164,7 @@ RABBIT_BOT_SKIP_SKILLS=1 npm install       # 安装时跳过
 - 记忆：按当前池和用户查看，可直接改正文或删除（新增/过期仍走 IM）。
 - 人格：可直接编辑人设和系统提示词，保存到运行时目录；下一轮换新会话生效。
 - 调度：私聊唤醒间隔、群聊 tick 周期、任务群 tick 周期三个值（按秒展示）；保存后立即生效，并写入 `<dataDir>/run/scheduler.json`，重启后仍保留。被 @ 的消息仍走快速去抖。任务事件按任务群周期 batch 进下一次 tick，不对每条进度单独唤醒。
+- 执行器：探测 `opencode` / `mimo` / `codex` / `claude`；可选新建任务的默认 worker，保存到 `<dataDir>/run/executor.json`，重启后仍保留。显式指定 executor 的任务不受影响。`claude` 需要宿主全局安装 Claude Code CLI（PATH 上的 `claude`，或用 `CLAUDE_BIN` 指定路径）。
 - 技能：只读列表（名字、描述、SKILL.md / data 路径）。
 - 业务知识：只读预览 `runtime/business` 的业务地图：左侧分类/列表，右侧详情；支持搜索和只读关系图（点节点看详情）。
 - 顶栏显示 API 健康状态和当前连接地址；移动端可用。
@@ -198,8 +199,9 @@ demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任
 
 ## 任务执行模型
 
-每个任务一个一次性进程，不常驻 worker：建任务时给 `work_dir`，系统写
-`.ufa/tasks/task-<id>.md` 并启动 `opencode` / `mimo`，恢复时复用同一个 session id。
+每个任务一个一次性进程，不常驻 worker：建任务时给 `work_dir`，系统把任务文档写到运行时目录
+`<runtimeDir>/.ufa/tasks/task-<id>.md` 并启动 `opencode` / `mimo` / `codex` / `claude`（默认 worker 可在管理台设置里选），
+恢复时复用同一个 session id。
 执行器用 `worker_id = <executor>-<task_id>` 回传进度与结果：
 `POST /v1/tasks/:id/touch|progress|complete|fail`。
 审批、任务事件和 Web 看板都基于这套回传，不再有 worker 注册 / 领任务。
@@ -208,6 +210,21 @@ demo 模式不连任何真实 IM、不需要 LLM 凭据，提供只读会话/任
 launchd 收养），`pm2 restart` 的 treekill 杀不到它，所以主服务重启不会带走正在跑的任务。
 pid、命令行和退出码落在 `data/tasks/<id>/runner.state.json`（含 `ps` 启动时间，防 pid 复用），
 主服务启动后由巡检自动 re-attach 还活着的执行器；要停只能走任务 stop/cancel。
+
+### claude 执行器
+
+`claude` 执行器参考 `multica` 的方式，直接以 `-p --output-format stream-json` 驱动 Claude Code，
+从 `system` 事件抓 `session_id`，从 `result` 事件抓 usage / `total_cost_usd`。CLI 用宿主全局安装的
+`claude`（PATH 上能找到），装在别处时用 `CLAUDE_BIN` 指定路径。
+
+鉴权沿用 Claude Code 自己的方式，在 `~/.config/rabbit-bot/env`（或 pm2 环境）里配：
+
+```bash
+ANTHROPIC_API_KEY=...            # 或 ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL（代理 / 网关）
+# CLAUDE_BIN=/path/to/claude     # 可选：全局 claude 不在 PATH 时指定
+```
+
+宿主没装 `claude` 时，管理台探测会显示未安装；先装好全局 CLI（或在 env 里配 `CLAUDE_BIN`）再重启。
 
 ## 目录
 

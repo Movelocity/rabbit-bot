@@ -26,7 +26,7 @@
   `export type Executor = "opencode" | "mimo"`），**默认 `opencode`**；`mimo` 是同一角色的备用 CLI。
   WA 起的是一个一次性进程，工作目录 = 任务的 `work_dir`，产物落在任务文档和 `shared/`。
 - 所以「UFA 派活给 WA」翻译过来是：**花小鱼调 `task` 工具建任务 → 审批通过后本机 opencode 起来干活 → 回报进任务池**。
-  UFA 和 WA 不在同一个进程里，也不共享上下文：交接只有任务文档（`.ufa/tasks/task-<id>.md`）和面板事件。
+  UFA 和 WA 不在同一个进程里，也不共享上下文：交接只有任务文档（`<runtimeDir>/.ufa/tasks/task-<id>.md`）和面板事件。
 
 
 ### 为什么不能合成一个
