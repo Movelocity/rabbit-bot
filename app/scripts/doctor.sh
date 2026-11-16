@@ -36,7 +36,7 @@ else
 fi
 
 say "沙盒 shell"
-SHELL_MODE=$(npx tsx -e 'import { loadConfig } from "./src/config.ts"; const s = loadConfig({}).sandbox.shell; console.log(s.enabled ? s.mode : "off")' 2>/dev/null || echo "读取失败")
+SHELL_MODE=$(npx tsx -e 'import { loadConfig } from "./src/config.ts"; const s = loadConfig({}).exec.shell; console.log(s.enabled ? s.mode : "off")' 2>/dev/null || echo "读取失败")
 echo "  mode: ${SHELL_MODE}"
 if [ "$SHELL_MODE" = "host" ]; then
   printf '  \033[33m⚠ host 模式：命令直接跑在宿主机上，没有隔离，仅本地开发用\033[0m\n'
@@ -49,7 +49,7 @@ elif [ "$SHELL_MODE" = "off" ] || [ "$SHELL_MODE" = "读取失败" ]; then
   echo "  shell 没开，跳过"
 else
   docker inspect -f '  {{.State.Status}} | 镜像 {{.Config.Image}} | 网络 {{.HostConfig.NetworkMode}} | 内存 {{.HostConfig.Memory}}' rabbit-bot-sbx 2>/dev/null ||
-    echo "  容器不存在（下次 sb run 会按 config.sandbox.shell 自建）"
+    echo "  容器不存在（下次 sb run 会按 config.exec.shell 自建）"
 fi
 
 say "REST API"

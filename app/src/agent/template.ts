@@ -32,7 +32,10 @@ export function useRuntimePrompts(cfg: Config): string {
 const cache = new Map<string, { mtime: number; text: string }>();
 
 function readTemplate(name: string): string {
-  const file = path.join(dir, `${name}.md`);
+  let file = path.join(dir, `${name}.md`);
+  // 运行时 prompt/ 目录可能是空的（首次启动时 ensureRuntime 只建目录）：
+  // 缺哪个模板就回落到仓库默认份，不能因为建了空目录就让每次唤醒都 ENOENT。
+  if (dir !== DEFAULT_DIR && !fs.existsSync(file)) file = path.join(DEFAULT_DIR, `${name}.md`);
   const st = fs.statSync(file); // 不存在就直接抛，别用空串糊过去
   const hit = cache.get(file);
   if (hit && hit.mtime === st.mtimeMs) return hit.text;
@@ -53,9 +56,13 @@ export function render(name: string, vars: Record<string, string>): string {
   return out.trim();
 }
 
-/** 模板文件清单（doctor / 文档用） */
+/** 模板文件清单（doctor / 文档用）：运行时覆盖 + 仓库默认份的并集 */
 export function listTemplates(): string[] {
-  try {
-    return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, "")).sort();
-  } catch { return []; }
+  const names = new Set<string>();
+  for (const d of [dir, DEFAULT_DIR]) {
+    try {
+      for (const f of fs.readdirSync(d)) if (f.endsWith(".md")) names.add(f.replace(/\.md$/, ""));
+    } catch { /* 目录不存在就跳过 */ }
+  }
+  return [...names].sort();
 }

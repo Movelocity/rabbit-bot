@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { render, setTemplateDir, templateDir, listTemplates } from "../src/agent/template.ts";
+import { render, setTemplateDir, templateDir, listTemplates, useRuntimePrompts } from "../src/agent/template.ts";
+import type { Config } from "../src/config.ts";
 
 /** 真模板目录：别的用例会把它指到临时夹具上，这条要自己拨回来 */
 const REAL_DIR = templateDir();
@@ -58,6 +59,24 @@ test("同一文件改了就重新读，没改就用缓存", () => {
   } finally {
     setTemplateDir(path.resolve(import.meta.dirname, "..", "config", "prompt"));
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("运行时 prompt 目录为空时回落到仓库默认模板", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rb-tpl-empty-"));
+  const runtimePrompt = path.join(root, "prompt");
+  fs.mkdirSync(runtimePrompt, { recursive: true });
+  try {
+    const cfg = { runtimeDir: root } as unknown as Config;
+    assert.equal(useRuntimePrompts(cfg), runtimePrompt);
+    assert.ok(listTemplates().includes("wake"), "空运行时目录也要能列出仓库默认模板");
+    const s = render("wake", {
+      blocks: "", handoff_block: "", now: "", reasons: "", state_block: "", wake_type: "tick",
+    });
+    assert.ok(s.length > 0, "缺模板时应该回落到仓库默认份，而不是抛 ENOENT");
+  } finally {
+    setTemplateDir(REAL_DIR);
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

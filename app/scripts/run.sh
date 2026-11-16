@@ -14,7 +14,7 @@ load_env() { if [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi; }
 
 preflight() {
   load_env
-  local flags feishu_enabled matrix_enabled
+  local flags feishu_enabled matrix_enabled webchat_enabled
   local miss=()
 
   # 预检要用编译后的 loadConfig()，没有就先构建
@@ -27,12 +27,12 @@ preflight() {
   if ! flags=$(cd "$APP_DIR" && node -e '
     const { loadConfig } = require("./dist/config.js");
     const c = loadConfig();
-    console.log(`${c.adapters.feishu.enabled ? 1 : 0} ${c.adapters.matrix.enabled ? 1 : 0}`);
+    console.log(`${c.adapters.feishu.enabled ? 1 : 0} ${c.adapters.matrix.enabled ? 1 : 0} ${c.webChat?.enabled !== false ? 1 : 0}`);
   '); then
     echo "读取配置失败（dist/config.js 或配置有误），不启动。" >&2
     exit 2
   fi
-  read -r feishu_enabled matrix_enabled <<< "$flags"
+  read -r feishu_enabled matrix_enabled webchat_enabled <<< "$flags"
 
   if [ "$feishu_enabled" = "1" ]; then
     for v in FEISHU_APP_ID FEISHU_APP_SECRET; do [ -n "${!v:-}" ] || miss+=("$v"); done
@@ -41,8 +41,8 @@ preflight() {
     [ -n "${MATRIX_TOKEN:-}" ] || miss+=("MATRIX_TOKEN")
   fi
 
-  if [ "$feishu_enabled" != "1" ] && [ "$matrix_enabled" != "1" ]; then
-    echo "飞书和 Matrix 适配器都关着，至少启用一个真实适配器，不启动。" >&2
+  if [ "$feishu_enabled" != "1" ] && [ "$matrix_enabled" != "1" ] && [ "$webchat_enabled" != "1" ]; then
+    echo "飞书、Matrix 和网页直聊都关着，至少启用一个出口（adapters.*.enabled 或 webChat.enabled），不启动。" >&2
     exit 2
   fi
   if [ ${#miss[@]} -gt 0 ]; then
