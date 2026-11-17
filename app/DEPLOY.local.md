@@ -127,11 +127,11 @@ node -e "require('better-sqlite3')(':memory:').exec('create table t(a)')"   # �
 |---|---|
 | 模型 | `deepseek/deepseek-flash`（`config/local.json` 覆盖了名字与人设：爱马士） |
 | 模型窗口 | `contextWindow = 1,000,000`，`maxTokens = 384,000` |
-| **交接阈值** | `handoff.contextTokenLimit = 60000`（`config/default.json`） |
+| **交接阈值** | `handoff.contextTokenLimit = 200000`（`config/default.json`） |
 | pi 自动压缩 | **关闭**（`engine.ts`：`compaction: { enabled: false }`，按需求 §9） |
 
-到 60k 后走自己的交接：关工具 → 用 `HANDOFF_PROMPT` 让模型写交接文档（多一次 LLM 调用）→ 存 `data/handoffs/handoff-*.md` + `handoffs` 表 → dispose 旧会话 → 新会话首轮注入 `【上一会话的交接文档】`。
-检查发生在**轮次结束后**，所以实际触发点是 60k + 最后一轮的量。
+到 200k 后走自己的交接：关工具 → 用 `HANDOFF_PROMPT` 让模型写交接文档（多一次 LLM 调用）→ 存 `data/handoffs/handoff-*.md` + `handoffs` 表 → dispose 旧会话 → 新会话首轮注入 `【上一会话的交接文档】`。
+检查发生在**轮次结束后**，所以实际触发点是 200k + 最后一轮的量。
 
 ## 限额与调度
 

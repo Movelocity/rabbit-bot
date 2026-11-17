@@ -42,7 +42,7 @@
     "cooldownMs": 600000
   },
   "handoff": {
-    "contextTokenLimit": 60000,
+    "contextTokenLimit": 200000,
     "sessionTokenLimit": 600000
   },
   "loopGuard": {
