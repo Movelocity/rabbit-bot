@@ -3,8 +3,9 @@
  *
  * 硬规矩：
  *   1. 超时 = 拒绝（fail-closed），不是默认放行
- *   2. 审批提示走系统消息、不进池；只有被闸门认领的裁决动作不进她的会话，
- *      同一聊天里的正常文字照常入池——审批房可能就是私聊，不能整房吞消息
+ *   2. 审批提示走系统消息、不入未读也不唤醒她；但要按「自己发过的话」留在池里，
+ *      否则飞书收不到自己发的消息，她就看不到自己发过审批提示。只有被闸门认领的裁决动作
+ *      不进她的会话，同一聊天里的正常文字照常入池——审批房可能就是私聊，不能整房吞消息
  *   3. 一条任务对应一条提示消息，表情必须贴在那条上，避免多任务时批错
  */
 import type { InboundMessage } from "../types.ts";
@@ -91,7 +92,7 @@ export class TaskApprovalGate {
   constructor(
     private cfg: TaskApprovalConfig,
     private log: Logger,
-    /** 往发起聊天/审批房发一条系统通知（不经过池、不入她的对话） */
+    /** 往发起聊天/审批房发一条系统通知（不入未读、不唤醒，但按自己发的消息入池留痕） */
     private send: (
       target: TaskApprovalTarget,
       text: string,

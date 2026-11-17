@@ -212,7 +212,8 @@ export class App {
     this.taskApproval = new TaskApprovalGate(
       cfg.taskApproval,
       this.log,
-      (target, text) => this.hub.sendSystem(target.platform, target.chatId, text),
+      // 任务审批提示要让 agent 自己也看得到（Matrix 靠 sync 回灌天然可见，飞书不回收自己的消息）
+      (target, text) => this.hub.sendSystem(target.platform, target.chatId, text, { remember: true }),
       {
         onApprove: (task, by) => this.approveTaskFromChat(task, by),
         onReject: (task, by) => this.rejectTaskFromChat(task, by),
@@ -514,8 +515,9 @@ export class App {
   // ---------- 任务发布审批 ----------
 
   /**
-   * 审批结果只回一句短消息到主聊天，不走模型、不进上下文。
-   * 任务名可能很长，裁决回执只需要任务号和结果，避免挤占上下文。
+   * 审批结果只回一句短消息到主聊天，不走模型。
+   * 任务名可能很长，裁决回执只需要任务号和结果，避免挤占上下文；
+   * 回执本身要入池留痕（她得知道自己批准/取消了什么），但不进未读、不触发唤醒。
    */
   private notifyTaskDecisionShort(taskId: number, decision: TaskDecision): void {
     const target = this.resolveTaskNoticeTarget();
@@ -525,7 +527,7 @@ export class App {
       : decision === "timeout"
         ? `任务 #${taskId} 审批超时，已取消`
         : `任务 #${taskId} 已取消`;
-    void this.hub.sendSystem(target.platform, target.chatId, text)
+    void this.hub.sendSystem(target.platform, target.chatId, text, { remember: true })
       .then((r) => { if (!r.ok) this.log.warn(`任务 #${taskId} 裁决回执发送失败：${r.error ?? "未知原因"}`); })
       .catch((e) => this.log.warn(`任务 #${taskId} 裁决回执发送失败：${(e as Error).message}`));
   }

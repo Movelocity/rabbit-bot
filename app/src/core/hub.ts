@@ -5,14 +5,14 @@
 import type { IMAdapter } from "../adapters/types.ts";
 import type { AdapterStatus } from "../adapters/types.ts";
 import type { Config } from "../config.ts";
-import type { Store } from "./db.ts";
+import { Store } from "./db.ts";
 import { parseEmoji, type EmojiTable } from "./emoji.ts";
 import { isOwnerId } from "./owners.ts";
 import { waitBefore, visibleLen } from "./pacing.ts";
 import type { RichPart } from "../adapters/types.ts";
 import type { Logger } from "./logger.ts";
 import type { Scheduler } from "./scheduler.ts";
-import type { InboundMessage, Pool, StoredMessage } from "../types.ts";
+import type { InboundMessage, Platform, Pool, StoredMessage } from "../types.ts";
 import type { ProposeResult, ReviewDecision, SendReviewRequest } from "./send-review.ts";
 import path from "node:path";
 
@@ -112,21 +112,45 @@ export class Hub {
     return saved;
   }
 
-  /** 直接往某个聊天发一条系统通知（审批用）：不经过池、不走节奏、不入她的话 */
+  /**
+   * 直接往某个聊天发一条系统通知：不走节奏、不触发唤醒。
+   * remember=true 时按「自己发的消息」入池，她下次醒来能看见（任务审批用）。
+   * 默认不入池：host shell 审批提示属于「不该变成聊天素材」的那类（见 docs/SPEC-host-shell-approval.md）。
+   */
   async sendSystem(
     platform: string,
     chatId: string,
     text: string,
+    opts: { remember?: boolean } = {},
   ): Promise<{ ok: boolean; error?: string; msgId?: string }> {
     const adapter = this.adapters.get(platform);
     if (!adapter) return { ok: false, error: `平台 ${platform} 没有可用的适配器` };
     try {
       // msgId 要往上带：审批闸门靠它认「表情贴在哪一条上」
       const r = await adapter.sendText(chatId, text);
+      if (opts.remember) this.rememberSystem(adapter.platform, chatId, text, r?.msgId);
       return { ok: true, msgId: r?.msgId };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  }
+
+  /**
+   * 系统通知也要按「自己发的消息」入池，下一次唤醒时她才看得到自己发过什么。
+   *
+   * Matrix 靠 sync 把机器人自己的消息回灌，本来就是入池的；飞书不会回投自己发的消息，
+   * 同一个通知在飞书里等于被隐藏——她看不到审批提示和裁决回执，接不上后面的对话。
+   * 这里显式补一条 from_self（不是未读、不触发唤醒），把两边行为对齐。
+   */
+  private rememberSystem(platform: Platform, chatId: string, text: string, msgId?: string) {
+    const pool = this.store.getPool(Store.poolIdFor(platform, chatId));
+    if (!pool) return; // 没聊过的聊天不凭空建池
+    this.store.insertMessage({
+      platform, external_chat_id: chatId, pool_kind: pool.kind, pool_title: pool.title,
+      msg_id: msgId || `system:${platform}:${chatId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      sender_id: "self", sender_name: this.cfg.agent.name, ts: Date.now(), text, reply_to: null,
+      mentions: [], is_mention_me: false, media_type: "text", from_self: true,
+    });
   }
 
   /** 收集所有池的未读并推进游标（send 返回值、唤醒时读池都走这里） */

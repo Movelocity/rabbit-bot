@@ -18,7 +18,7 @@ const OWNER = "ou_owner";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test("任务审批：贴 OK 后真正启动执行器；审批消息不进池", async () => {
+test("任务审批：贴 OK 后真正启动执行器；审批提示入池但不算未读", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-bot-task-approval-"));
   const workDir = path.join(dir, "work");
   fs.mkdirSync(workDir, { recursive: true });
@@ -62,6 +62,13 @@ setTimeout(() => process.exit(0), 20);
     assert.ok(prompt, "群聊里建的任务，审批消息也应当发到主聊天");
     assert.equal(mock.sent.some((s) => s.chat === GROUP && /【任务待审批】/.test(s.content)), false);
 
+    // 审批提示要留在池里：飞书不会回投自己发的消息，不补这一条的话 agent 看不到自己发过审批提示
+    const mainPoolId = `mock:${MAIN}`;
+    const promptRow = app.store.recentMessages(mainPoolId, 30).find((m) => /【任务待审批】/.test(m.text));
+    assert.ok(promptRow, "审批提示要入池，下一次唤醒能看到");
+    assert.equal(promptRow!.from_self, true);
+    assert.equal(app.store.unread(mainPoolId).length, 0, "审批提示不是未读，不能触发唤醒");
+
     (mock as any).sink({
       platform: "mock",
       external_chat_id: MAIN,
@@ -91,6 +98,9 @@ setTimeout(() => process.exit(0), 20);
     assert.ok(fs.existsSync(taskDocPath(fresh, path.join(dir, "runtime"))), "审批通过后要补写任务文档");
     assert.match(fresh.note, /飞书审批通过/);
     assert.ok(mock.sent.some((s) => new RegExp(`任务 #${task.id} 审批通过，准备启动`).test(s.content)));
+    const receipt = app.store.recentMessages(mainPoolId, 30).find((m) => new RegExp(`任务 #${task.id} 审批通过`).test(m.text));
+    assert.ok(receipt, "裁决回执也要入池，她知道刚才批的是哪条");
+    assert.equal(receipt!.from_self, true);
     assert.equal(mock.sent.some((s) => /已批准，开始执行/.test(s.content)), false);
   } finally {
     await app.stop();
