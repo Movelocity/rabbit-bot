@@ -77,7 +77,7 @@ import {
 import { resolveSendReviewConfig, sendReviewReady } from "./core/send-review.ts";
 import type { Scheduler } from "./core/scheduler.ts";
 
-const MAX_BODY = 512 * 1024;
+const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_PORT = 3738;
 const MAX_BUSINESS_EDGES = 1000;
 
@@ -170,12 +170,14 @@ const safeEqual = (a: string, b: string): boolean => {
 
 function readBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
-    let raw = "";
+    const chunks: Buffer[] = [];
+    let size = 0;
     let done = false;
     req.on("data", (chunk: Buffer) => {
       if (done) return;
-      raw += chunk.toString("utf8");
-      if (raw.length > MAX_BODY) {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > MAX_BODY) {
         done = true;
         reject(new HttpError(413, `body 太大（上限 ${MAX_BODY} 字节）`));
         req.destroy();
@@ -183,6 +185,7 @@ function readBody(req: http.IncomingMessage): Promise<any> {
     });
     req.on("end", () => {
       if (done) return;
+      const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw.trim()) return resolve({});
       try { resolve(JSON.parse(raw)); } catch { reject(new HttpError(400, "不是合法 JSON")); }
     });

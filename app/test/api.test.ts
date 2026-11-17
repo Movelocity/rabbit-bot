@@ -270,6 +270,24 @@ test("记忆：PUT 改正文，DELETE 删除", async () => {
   assert.equal(after.body.data.length, 0);
 });
 
+test("请求体：多字节正文按字节累积，超过 2MiB 返回 413", async () => {
+  // 25 万汉字约 750KB，超过 512KB 的旧上限；逐块 toString 会在块边界切坏多字节字符
+  const content = "重".repeat(250_000);
+  const ok = await call("/v1/memories", {
+    method: "POST",
+    body: JSON.stringify({ user: "u-big-body", content, pool: "p1" }),
+  });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body).slice(0, 200));
+  const found = await call("/v1/memories?user=u-big-body&pool=p1");
+  assert.equal(found.body.data[0].content, content);
+
+  // 超限时服务端直接 destroy 连接，客户端拿不到响应体，只能看到请求失败
+  await assert.rejects(() => call("/v1/memories", {
+    method: "POST",
+    body: JSON.stringify({ user: "u-big-body", content: "a".repeat(2 * 1024 * 1024 + 1024) }),
+  }));
+});
+
 test("记忆：全局列表按创建倒序、支持过滤分页", async () => {
   const user = "u-global";
   const first = await call("/v1/memories", {
