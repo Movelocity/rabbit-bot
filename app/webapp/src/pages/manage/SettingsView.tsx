@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../../lib/api-context.tsx";
 import { friendlyError, num } from "../../lib/format.ts";
 import type {
-  LimitStatus, MemoryReviewSettings, SchedulerSettings, SendReviewSettings, SendReviewSettingsResponse, WatchdogSettings,
+  ContextLimitSettings, LimitStatus, MemoryReviewSettings, SchedulerSettings, SendReviewSettings,
+  SendReviewSettingsResponse, WatchdogSettings,
 } from "../../lib/types.ts";
 import {
   Button, Card, CardBody, CardHead, CardTitle, Field, Input, Kpi, KpiGrid, Select, StatusText,
@@ -52,6 +53,10 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   const [limitsStatus, setLimitsStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
   const [limitsSaving, setLimitsSaving] = useState(false);
 
+  const [contextLimit, setContextLimit] = useState<ContextLimitSettings | null>(null);
+  const [contextLimitStatus, setContextLimitStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [contextLimitSaving, setContextLimitSaving] = useState(false);
+
   const apply = useCallback((s: SchedulerSettings) => {
     setPrivateSec(String(Math.round(Number(s.privateWakeMs) / 1000)));
     setGroupSec(String(Math.round(Number(s.groupWakeMs) / 1000)));
@@ -64,18 +69,21 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     setWatchdogStatus({ text: "加载中…" });
     setSendReviewStatus({ text: "加载中…" });
     setLimitsStatus({ text: "加载中…" });
+    setContextLimitStatus({ text: "加载中…" });
     try {
-      const [s, m, w, sr, ls] = await Promise.all([
+      const [s, m, w, sr, ls, cl] = await Promise.all([
         request<SchedulerSettings>("/v1/scheduler"),
         request<MemoryReviewSettings>("/v1/memory-review"),
         request<WatchdogSettings>("/v1/watchdog"),
         request<SendReviewSettingsResponse>("/v1/send-review"),
         request<LimitStatus>("/v1/limits"),
+        request<ContextLimitSettings>("/v1/context-limit"),
       ]);
       apply(s);
       setMemoryReview(m);
       setWatchdog(w);
       setLimits(ls);
+      setContextLimit(cl);
       setSendReview({
         enabled: sr.enabled,
         defaultReview: sr.defaultReview,
@@ -88,12 +96,14 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
       setWatchdogStatus({ text: "" });
       setSendReviewStatus({ text: "" });
       setLimitsStatus({ text: "" });
+      setContextLimitStatus({ text: "" });
     } catch (e) {
       setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setMemoryStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setWatchdogStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setSendReviewStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       setLimitsStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
+      setContextLimitStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
     }
   }, [request, apply]);
 
@@ -225,6 +235,25 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
     }
   };
 
+  const saveContextLimit = async () => {
+    if (!contextLimit) return;
+    setContextLimitSaving(true);
+    setContextLimitStatus({ text: "保存中…" });
+    try {
+      setContextLimit(
+        await request<ContextLimitSettings>("/v1/context-limit", {
+          method: "PUT",
+          body: { tokenLimit: contextLimit.tokenLimit },
+        }),
+      );
+      setContextLimitStatus({ text: "已保存，下一轮唤醒生效" });
+    } catch (e) {
+      setContextLimitStatus({ text: `保存失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setContextLimitSaving(false);
+    }
+  };
+
   const setLimitNumber = (key: keyof Pick<LimitStatus, "dailyLlmCalls" | "dailyTokens" | "dailyCny">, raw: string) => {
     setLimits((x) => (x ? { ...x, [key]: raw === "" ? 0 : Number(raw) } : x));
   };
@@ -341,6 +370,45 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
             <p className="text-sm text-muted">正在读取额度…</p>
           )}
           <StatusText text={limitsStatus.text} error={limitsStatus.error} />
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHead>
+          <CardTitle>上下文交接</CardTitle>
+        </CardHead>
+        <CardBody>
+          <p className="mb-3 text-sm text-muted">
+            上下文涨到这一档就写交接文档、换一个新会话，避免越聊越贵。默认 100k。
+          </p>
+          {contextLimit ? (
+            <>
+              <div className="grid grid-cols-[minmax(120px,220px)_minmax(180px,300px)] gap-3 max-[820px]:grid-cols-1">
+                <Field label="上下文上限">
+                  <Select
+                    value={String(contextLimit.tokenLimit)}
+                    onValueChange={(value) => setContextLimit((x) => (x ? { ...x, tokenLimit: Number(value) } : x))}
+                    options={[
+                      { value: "60000", label: "60k" },
+                      { value: "100000", label: "100k" },
+                      { value: "200000", label: "200k" },
+                      { value: "500000", label: "500k" },
+                      { value: "800000", label: "800k" },
+                    ]}
+                    ariaLabel="上下文交接阈值"
+                  />
+                </Field>
+              </div>
+              <div className="my-3">
+                <Button variant="primary" disabled={contextLimitSaving} onClick={() => void saveContextLimit()}>
+                  {contextLimitSaving ? "保存中…" : "保存"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted">正在读取上下文阈值…</p>
+          )}
+          <StatusText text={contextLimitStatus.text} error={contextLimitStatus.error} />
         </CardBody>
       </Card>
 

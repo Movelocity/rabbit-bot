@@ -34,7 +34,7 @@ const HINTS: Record<ManageView, string> = {
   persona: "人设与提示词；保存后下一轮生效。",
   users: "别名优先于通讯录名字；保存后回填。任务 CLI 用户已隐藏。",
   schedules: "cron 重复 / N 分钟后一次；到点写入日程池。",
-  settings: "唤醒间隔单位：秒；日额度按调用 / token / 元三条闸，保存后下一轮生效。",
+  settings: "唤醒间隔单位：秒；日额度按调用 / token / 元三条闸；上下文交接可选 60k～800k，保存后下一轮生效。",
   executors: "选择新建任务默认使用的本地编程工具，查看安装状态与版本。",
   skills: "只读：只做发现，不在管理台改技能内容。",
   "work-memory": "只读：跨会话共享的 memory.md；写入仍走 Agent 的 working_memory 工具。",

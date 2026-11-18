@@ -21,6 +21,7 @@ import { ensureRuntime, ensureHostSandboxLinks, ensureSharedWorkspace, runtimeSu
 import { useRuntimePrompts } from "./agent/template.ts";
 import { loadSchedulerSettings } from "./ops/scheduler-settings.ts";
 import { loadLimitSettings } from "./ops/limit-settings.ts";
+import { loadContextLimitSettings } from "./ops/context-limit-settings.ts";
 import { loadWatchdogSettings } from "./ops/watchdog-settings.ts";
 import { loadSendReviewSettings } from "./ops/send-review-settings.ts";
 import { loadModelSettings } from "./ops/model-settings.ts";
@@ -34,6 +35,8 @@ async function main() {
   loadSchedulerSettings(cfg, log);
   // 管理台调过的日额度：同样是运行时覆盖，避免改一次额度就要改仓库配置
   loadLimitSettings(cfg, log);
+  // 上下文交接阈值：管理台选的档位覆盖 config 里的默认值
+  loadContextLimitSettings(cfg, log);
   loadWatchdogSettings(cfg, log);
   loadSendReviewSettings(cfg, log);
   const preferredExecutor = loadExecutorPreference(cfg, log);

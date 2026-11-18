@@ -61,6 +61,9 @@ import { usageByModel, usageCalls, usageSeries, usageSummary } from "./ops/usage
 import {
   effectiveLimitSettings, limitStatus, saveLimitSettings, validateLimitSettings,
 } from "./ops/limit-settings.ts";
+import {
+  applyContextLimitSettings, effectiveContextLimitSettings, saveContextLimitSettings, validateContextLimitSettings,
+} from "./ops/context-limit-settings.ts";
 import { createSchedule, formatSchedule, isScheduleStatus } from "./core/schedules.ts";
 import {
   applySchedulerSettings, effectiveSchedulerSettings, saveSchedulerSettings, validateSchedulerSettings,
@@ -910,6 +913,25 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             return reply(200, limitStatus(d.cfg, d.store));
           }
           throw new HttpError(404, "用法：GET|PUT /v1/limits");
+        }
+        case "context-limit": {
+          if (parts.length === 2 && method === "GET") return reply(200, effectiveContextLimitSettings(d.cfg));
+          if (parts.length === 2 && method === "PUT") {
+            let settings;
+            try {
+              settings = validateContextLimitSettings(body);
+            } catch (e) {
+              throw new HttpError(400, (e as Error).message);
+            }
+            try {
+              saveContextLimitSettings(d.cfg, settings);
+            } catch (e) {
+              throw new HttpError(500, `写入上下文阈值失败：${(e as Error).message}`);
+            }
+            applyContextLimitSettings(d.cfg, settings);
+            return reply(200, effectiveContextLimitSettings(d.cfg));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/context-limit");
         }
         case "scheduler": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveSchedulerSettings(d.cfg));

@@ -41,6 +41,11 @@ export interface LimitStatus extends LimitSettings {
   today: LimitToday;
 }
 
+export interface ContextLimitSettings {
+  /** 上下文涨到多少 token 就触发交接（另起新会话） */
+  tokenLimit: number;
+}
+
 export interface PoolMessage {
   seq: number;
   ts: number;

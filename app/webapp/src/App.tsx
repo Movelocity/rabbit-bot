@@ -59,7 +59,7 @@ const MANAGE_HINTS: Record<string, string> = {
   users: "别名优先于通讯录名字 · 任务 CLI 用户已隐藏",
   persona: "人设与提示词 · 保存后下一轮生效",
   schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",
-  settings: "唤醒间隔 · 日额度 · 保存后下一轮生效",
+  settings: "唤醒间隔 · 日额度 · 上下文交接 · 保存后下一轮生效",
   skills: "只读 · 技能只做发现",
   "work-memory": "只读 · 跨会话共享的 memory.md",
 };
