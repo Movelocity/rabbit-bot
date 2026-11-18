@@ -88,9 +88,9 @@ Anthropic 近期在《Building always-on agents》里把常驻系统归纳为 In
 
 ---
 
-## 30 秒跑起来
+## 30 秒先跑个 demo
 
-不需要 API Key、不需要申请飞书或 Matrix 账号、也不需要 Docker：
+demo 用内置的 mock 适配器 + 桩 LLM，不连真实 IM，也不消耗 API Key：
 
 ```bash
 cd app
@@ -98,8 +98,27 @@ npm install
 npm run demo
 ```
 
-内置的 mock 适配器 + 桩 LLM 会走完一整套管线：**多源入池 → 读窗口合批 → 批次唤醒 → 选择性回复 0~N 个池子 → 派发 WA 后台任务 → 审计日志**。  
-接真实飞书或 Matrix 详见 [app/README.md](app/README.md)。
+会走完一整套管线：**多源入池 → 读窗口合批 → 批次唤醒 → 选择性回复 0~N 个池子 → 派发 WA 后台任务 → 审计日志**。
+
+## 接真实使用
+
+正式跑要先在 `app/config/local.json` 里配模型服务商和模型：
+
+```json
+{
+  "llm": { "provider": "deepseek", "model": "deepseek-flash" }
+}
+```
+
+`provider/model` 得在 pi 的模型目录里（`npm run ctl -- models` 可查）。然后在 `~/.config/rabbit-bot/env` 里配这家服务商的 key 和 IM 凭据：
+
+```bash
+DEEPSEEK_API_KEY=...      # provider 用 openrouter 时改 OPENROUTER_API_KEY
+FEISHU_APP_ID=...
+FEISHU_APP_SECRET=...
+```
+
+部署、管理和执行器配置详见 [app/README.md](app/README.md)。
 
 ---
 
