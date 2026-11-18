@@ -62,8 +62,8 @@ test("GET /v1/scheduler 返回三个值", async () => {
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.data, {
     privateWakeMs: 5000,
-    groupWakeMs: 180000,
-    taskWakeMs: 180000,
+    groupWakeMs: 300000,
+    taskWakeMs: 15000,
   });
 });
 
@@ -172,10 +172,10 @@ test("旧 scheduler.json 缺 taskWakeMs 时用默认值加载", () => {
     exec: { dir: path.join(oldDir, "sandbox") },
   });
   const loaded = loadSchedulerSettings(freshCfg);
-  assert.deepEqual(loaded, { privateWakeMs: 9000, groupWakeMs: 120000, taskWakeMs: 180000 });
+  assert.deepEqual(loaded, { privateWakeMs: 9000, groupWakeMs: 120000, taskWakeMs: 15000 });
   assert.equal(freshCfg.scheduler.privateWakeMs, 9000);
   assert.equal(freshCfg.scheduler.tickMs, 120000);
-  assert.equal(freshCfg.scheduler.taskTickMs, 180000);
+  assert.equal(freshCfg.scheduler.taskTickMs, 15000);
 });
 
 test("未传 scheduler 时 PUT 仍能持久化", async () => {

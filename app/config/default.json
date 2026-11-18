@@ -10,8 +10,8 @@
     "desktopDir": "~/Desktop"
   },
   "scheduler": {
-    "tickMs": 180000,
-    "taskTickMs": 180000,
+    "tickMs": 300000,
+    "taskTickMs": 15000,
     "privateWakeMs": 5000,
     "activeTickMs": 60000,
     "activeWindowMs": 600000,

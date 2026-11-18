@@ -16,8 +16,8 @@ export interface SchedulerSettings {
 
 export const DEFAULT_SCHEDULER_SETTINGS: SchedulerSettings = {
   privateWakeMs: 5000,
-  groupWakeMs: 180000,
-  taskWakeMs: 180000,
+  groupWakeMs: 300000,
+  taskWakeMs: 15000,
 };
 
 const MIN_MS = 1000;
