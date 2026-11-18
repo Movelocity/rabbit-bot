@@ -96,6 +96,7 @@ export class PiEngine implements AgentEngine {
   private session: AgentSession | null = null;
   private reflectSession: AgentSession | null = null;
   private pendingHandoff: string | null = null;
+  private pendingHandoffId: number | null = null;
   private loopGuardImpl: "pi-death-loop-guard" | "builtin" = "builtin";
   private readonly piDir: string;
   private readonly cwd: string;
@@ -109,11 +110,25 @@ export class PiEngine implements AgentEngine {
     this.cwd = runtimeDir(d.cfg);
     this.sessionDir = path.join(d.cfg.dataDir, "sessions");
     for (const p of [this.piDir, this.cwd, this.sessionDir, path.join(d.cfg.dataDir, "handoffs")]) fs.mkdirSync(p, { recursive: true });
+    // 交接文档不能是重启单点：上一进程写好后没等到下一次唤醒就没了（pendingHandoff 原是纯内存），
+    // 启动时把库里最新一份未消费的捡回来，新会话照常带上交接继续。
+    const restore = d.store.latestUnconsumedHandoff();
+    if (restore) {
+      this.pendingHandoff = restore.content;
+      this.pendingHandoffId = restore.id;
+      d.log.info(`启动捡回未消费交接 #${restore.id}，下一次唤醒将带给新会话`);
+    }
   }
 
   get loopGuard() { return this.loopGuardImpl; }
 
-  takePendingHandoff() { const h = this.pendingHandoff; this.pendingHandoff = null; return h; }
+  takePendingHandoff() {
+    const h = this.pendingHandoff;
+    if (h !== null && this.pendingHandoffId !== null) this.d.store.markHandoffConsumed(this.pendingHandoffId);
+    this.pendingHandoff = null;
+    this.pendingHandoffId = null;
+    return h;
+  }
 
   private systemPromptText(): string {
     return typeof this.d.systemPrompt === "function" ? this.d.systemPrompt() : this.d.systemPrompt;
@@ -339,10 +354,13 @@ export class PiEngine implements AgentEngine {
       fs.writeFileSync(file, content + "\n");
       id = this.d.store.addHandoff(content, ctxTokens, file);
       this.pendingHandoff = content;
+      this.pendingHandoffId = id;
       this.d.log.info(`交接文档 #${id} 已存档：${file}`);
     } else {
       this.d.log.warn(`交接文档为空（${r.error ?? r.abortReason ?? "未知"}），仍然新开会话`);
-      this.pendingHandoff = this.d.store.latestHandoff()?.content ?? null;
+      const prev = this.d.store.latestUnconsumedHandoff();
+      this.pendingHandoff = prev?.content ?? null;
+      this.pendingHandoffId = prev?.id ?? null;
     }
     s.dispose();
     this.session = null;

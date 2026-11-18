@@ -57,9 +57,9 @@ async function setup(over: any = {}) {
       return { ok: false, code: 1, output: JSON.stringify({ ok: false, error: (e as Error).message }) };
     }
   };
-  const app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true, rbExec });
+  let app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true, rbExec });
   appRef = app;
-  const mock = new MockAdapter();
+  let mock = new MockAdapter();
   app.hub.addAdapter(mock);
   const wakes: any[] = [];
   app.onWakeDone = (e) => wakes.push(e);
@@ -68,7 +68,18 @@ async function setup(over: any = {}) {
   const grp = (text: string, mention = false, from = "bob") => mock.inject({ chat: "grp", kind: "group", from, text, mentionMe: mention, ts: clock.now() });
   const settle = async (ms = 0) => { clock.advance(ms); await new Promise((r) => setTimeout(r, 5)); await app.queue.idle(); };
   const done = async () => { await app.stop(); fs.rmSync(dataDir, { recursive: true, force: true }); };
-  return { app, mock, wakes, clock, cfg, dm, grp, settle, done };
+  /** 模拟进程重启：同一个 dataDir（库不动），新 App = 新内存态。engine 构造时该从库里捡回未消费交接。 */
+  const restart = async () => {
+    await app.stop();
+    app = new App({ cfg, model, modelRuntime, clock, logger: new Logger(null, true), inMemorySessions: true, rbExec });
+    appRef = app;
+    mock = new MockAdapter();
+    app.hub.addAdapter(mock);
+    app.onWakeDone = (e) => wakes.push(e);
+    await app.start();
+    return app; // 返回对象里的 app 字段是初值，重启后要拿这一个
+  };
+  return { app, mock, wakes, clock, cfg, dm, grp, settle, done, restart };
 }
 
 test("私聊连发 → 去抖合并为一次唤醒 → send 发出（含 [emoji:中文id] 解析）", async () => {
@@ -150,6 +161,21 @@ test("上下文达到上限 → 写交接文档存档 → 新会话带交接继�
   await t.settle(30_000);
   assert.equal(t.wakes[1].handoffIncluded, true);
   assert.deepEqual(t.mock.sent.map((s) => s.content), ["收到：第一句", "收到：第二句"]);
+  await t.done();
+});
+
+test("交接未消费就重启 → 新进程第一次唤醒照样拿到文档（重启不是失忆）", async () => {
+  const t = await setup({ handoff: { contextTokenLimit: 300 } });
+  t.dm("第一句");
+  await t.settle(30_000);
+  const hid = t.wakes[0].handoffId;
+  assert.ok(hid, "应触发交接");
+  // 下一次唤醒还没来，进程就停了：修复前 pendingHandoff 随内存蒸发，交接文档白写
+  const app2 = await t.restart();
+  t.dm("第二句");
+  await t.settle(30_000);
+  assert.equal(t.wakes[1].handoffIncluded, true);
+  assert.equal((app2.store.listHandoffs().find((h: any) => h.id === hid) as any).consumed, 1);
   await t.done();
 });
 

@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS business_actions (
 CREATE TABLE IF NOT EXISTS business_terms (
   term TEXT PRIMARY KEY, object_id TEXT NOT NULL, note TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT);
+CREATE TABLE IF NOT EXISTS handoffs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, tokens INTEGER, content TEXT NOT NULL, file TEXT, consumed INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS wake_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage_daily (day TEXT PRIMARY KEY, llm_calls INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, cache_miss INTEGER NOT NULL DEFAULT 0, out_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -269,6 +269,7 @@ export class Store {
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
+    try { this.db.exec("ALTER TABLE handoffs ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
     // 额度计算（2026-11-07）：缓存命中/未命中/输出三段分开记，cost_usd 是官方单价算出来的。
     // 老库补列，新库已在 SCHEMA 里。
     for (const col of [
@@ -1227,7 +1228,12 @@ export class Store {
   latestHandoff(): { id: number; content: string } | undefined {
     return this.db.prepare("SELECT id,content FROM handoffs ORDER BY id DESC LIMIT 1").get() as any;
   }
-  listHandoffs(): any[] { return this.db.prepare("SELECT id,created_at,tokens,file,length(content) len FROM handoffs ORDER BY id").all(); }
+  /** 最新一份「还没被任何新会话取走」的交接：进程重启后靠它把断掉的交接捡回来。 */
+  latestUnconsumedHandoff(): { id: number; content: string } | undefined {
+    return this.db.prepare("SELECT id,content FROM handoffs WHERE consumed=0 ORDER BY id DESC LIMIT 1").get() as any;
+  }
+  markHandoffConsumed(id: number) { this.db.prepare("UPDATE handoffs SET consumed=1 WHERE id=?").run(id); }
+  listHandoffs(): any[] { return this.db.prepare("SELECT id,created_at,tokens,file,length(content) len,consumed FROM handoffs ORDER BY id").all(); }
   addWakeLog(entry: unknown) { this.db.prepare("INSERT INTO wake_log(ts,json) VALUES(?,?)").run(Date.now(), JSON.stringify(entry)); }
   recentWakeLogs(n: number): any[] { return (this.db.prepare("SELECT json FROM wake_log ORDER BY id DESC LIMIT ?").all(n) as any[]).map((r) => JSON.parse(r.json)); }
   getUsage(day: string): {
