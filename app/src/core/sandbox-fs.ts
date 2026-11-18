@@ -100,9 +100,16 @@ export function createSandboxFs(opts: SandboxFsOptions): SandboxFs {
     return abs;
   };
 
+  /**
+   * 配额统计只算「她自己的东西」：跳过点开头条目。
+   * `.ufa/`（UFA 任务工作区）、`.secrets/` 是框架内部区，她在沙盒边界里删不动；
+   * 把它们计进 maxTotalBytes 等于「框架拉屎、她被判超限」——done 任务留下的
+   * 4GB 级日志副本曾把整棵 runtime 顶到 8.3GB，她的每次写入都被拒（2026-11-18）。
+   */
   const treeBytes = (dir: string): number => {
     let n = 0;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith(".")) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) n += treeBytes(abs);
       else if (e.isFile()) n += fs.statSync(abs).size;

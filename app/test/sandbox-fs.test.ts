@@ -55,6 +55,20 @@ test("单文件大小和总大小上限生效", () => {
   assert.throws(() => fsbox.write("a.txt", "123456789"), SandboxPathError);
 });
 
+test("配额不统计点开头的框架内部目录（.ufa/.secrets 她删不动，不该替框架背账）", () => {
+  const { root } = mk();
+  fs.mkdirSync(path.join(root, ".ufa", "work", "task-1"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".ufa", "work", "task-1", "logs.db"), "x".repeat(4096));
+  fs.writeFileSync(path.join(root, ".DS_Store"), "x".repeat(4096));
+  const fsbox = createSandboxFs({ root, maxFileBytes: 1024, maxTotalBytes: 6, maxReadChars: 100 });
+  // 8KB 的框架文件躺在树里，普通写入仍按自己的账走
+  fsbox.write("a.txt", "11");
+  fsbox.write("b.txt", "22");
+  assert.equal(fsbox.read("b.txt"), "22");
+  // 4 字节已用 + 3 > 6 就该拦：拦不住才说明把 .ufa 的 8KB 也算进来了
+  assert.throws(() => fsbox.write("c.txt", "333"), SandboxPathError);
+});
+
 test("读超长文件会截断", () => {
   const { fsbox } = mk();
   fsbox.write("long.txt", "字".repeat(300));
