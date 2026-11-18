@@ -1,0 +1,203 @@
+{
+  "timezone": "Asia/Shanghai",
+  "runtimeDir": "~/.config/rabbit-bot/runtime",
+  "dataDir": "./data",
+  "logDir": "./logs",
+  "topics": {
+    "enabled": false
+  },
+  "paths": {
+    "desktopDir": "~/Desktop"
+  },
+  "scheduler": {
+    "tickMs": 180000,
+    "taskTickMs": 180000,
+    "privateWakeMs": 5000,
+    "activeTickMs": 60000,
+    "activeWindowMs": 600000,
+    "debounceMs": 5000,
+    "debounceMaxWaitMs": 20000,
+    "watchdogMs": 5000,
+    "overdueGraceMs": 2000,
+    "batchToTick": true,
+    "directPrivate": true,
+    "runnerWatchMs": 30000,
+    "scheduleTickMs": 30000,
+    "longTaskWarnMs": 600000
+  },
+  "send": {
+    "confirmWaitMs": 1000,
+    "confirmViaApi": false,
+    "pacing": {
+      "enabled": true
+    }
+  },
+  "context": {
+    "recentContextMessages": 8,
+    "maxUnreadPerPool": 50
+  },
+  "watchdog": {
+    "enabled": false,
+    "delayMs": 10000,
+    "cooldownMs": 600000
+  },
+  "handoff": {
+    "contextTokenLimit": 60000,
+    "sessionTokenLimit": 600000
+  },
+  "loopGuard": {
+    "impl": "pi-death-loop-guard",
+    "warnThreshold": 5,
+    "blockThreshold": 10,
+    "abortAfterBlocks": 1
+  },
+  "limits": {
+    "dailyLlmCalls": -1,
+    "dailyTokens": -1,
+    "turnTimeoutMs": 300000,
+    "capNotice": {
+      "enabled": true,
+      "text": "〔系统〕今天的额度用完了，我先歇一会儿——你说的话我记着，回头接着聊。",
+      "oncePerDay": true
+    },
+    "errorNotice": {
+      "enabled": true,
+      "text": "〔系统〕我这边出了点问题（{reason}）。这条不是她说的——你刚才那句话我记着，等恢复了我再回。",
+      "dedupeMinutes": 60
+    },
+    "cacheReadRate": 0.1,
+    "dailyCny": 10,
+    "usdCny": 7.1
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "thinkingLevel": "off",
+    "maxRetries": 2
+  },
+  "adapters": {
+    "feishu": {
+      "enabled": true,
+      "domain": "feishu",
+      "fetchSenderName": true,
+      "reactions": true,
+      "logRawEmoji": true
+    },
+    "matrix": {
+      "enabled": false,
+      "homeserver": "https://matrix.hollway.top",
+      "userId": "@xiaoyu:matrix.hollway.top"
+    }
+  },
+  "webChat": {
+    "enabled": true,
+    "username": "rabbit-bot",
+    "pool": "web-chat",
+    "title": "网页直聊",
+    "sessionDays": 30
+  },
+  "emoji": {
+    "table": "./config/emoji-feishu.json",
+    "map": {}
+  },
+  "media": {
+    "maxEdge": 1024,
+    "maxBytes": 512000,
+    "maxImagesInContext": 4
+  },
+  "inject": {
+    "port": 3737
+  },
+  "api": {
+    "enabled": true,
+    "port": 3738,
+    "host": "0.0.0.0"
+  },
+  "agent": {
+    "name": "小池",
+    "persona": "你是小池，一个直接、说人话的 UFA：先摆事实再下判断，短句可以，半句不行。"
+  },
+  "exec": {
+    "dir": "",
+    "maxFileBytes": 262144,
+    "maxTotalBytes": 2147483648,
+    "maxReadChars": 8000,
+    "shell": {
+      "enabled": true,
+      "mode": "docker",
+      "container": "rabbit-bot-sbx",
+      "image": "rabbit-bot-sandbox:latest",
+      "timeoutMs": 10000,
+      "ufaMaxTimeoutMs": 5000,
+      "maxOutputChars": 8000,
+      "safeProgs": [
+        "bucket",
+        "ark_image.py",
+        "form_ratio.py",
+        "form_ratio"
+      ],
+      "network": "bridge",
+      "volumes": [
+        {
+          "host": "",
+          "container": "/work",
+          "mode": "rw"
+        }
+      ]
+    },
+    "sharedSkillsDir": ""
+  },
+  "tide": {
+    "enabled": true,
+    "dailyCap": {
+      "L1": 2,
+      "L2": 1
+    }
+  },
+  "proactive": {
+    "enabled": true,
+    "reflectionDelayMs": 300000,
+    "urgencyThreshold": 0.35,
+    "minSilentMs": 300000,
+    "minIntervalMs": 600000,
+    "maxPerDay": 6,
+    "maxConsecutive": 3,
+    "quietStart": "23:30",
+    "quietEnd": "08:00",
+    "group": {
+      "urgencyThreshold": 0.6,
+      "minSilentMs": 900000,
+      "minIntervalMs": 1800000,
+      "maxPerDay": 2,
+      "maxConsecutive": 1
+    }
+  },
+  "approval": {
+    "enabled": false,
+    "platform": "matrix",
+    "roomId": "",
+    "ownerIds": [],
+    "timeoutMs": 600000,
+    "notify": true
+  },
+  "taskApproval": {
+    "enabled": false,
+    "target": "origin",
+    "platform": "feishu",
+    "roomId": "",
+    "ownerIds": [],
+    "timeoutMs": 86400000,
+    "notify": true
+  },
+  "sendReview": {
+    "enabled": false,
+    "defaultReview": false,
+    "primaryPoolId": null,
+    "overrides": {},
+    "platform": "",
+    "roomId": "",
+    "ownerIds": [],
+    "timeoutMs": 86400000,
+    "notify": true
+  }
+}
