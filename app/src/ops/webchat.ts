@@ -42,6 +42,7 @@ export function listWebMessages(
       from_self: !!m.from_self,
       sender: senderOf(store, m),
       text: m.text,
+      meta: m.meta ?? null,
     }));
   const span = store.poolSpan(pool.pool_id);
   return {

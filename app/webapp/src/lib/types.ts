@@ -14,6 +14,10 @@ export interface Pool {
   unread?: number | null;
   /** 调度器已读游标（最后处理到的 seq） */
   cursor?: number | null;
+  /** 任务池关联的任务 id / 标题 / 状态；非任务池为 null */
+  task_id?: number | null;
+  task_name?: string | null;
+  task_status?: TaskStatus | null;
 }
 
 export interface LimitSettings {
@@ -56,6 +60,8 @@ export interface PoolMessage {
   sender_id: string;
   user_id: string;
   text: string;
+  /** 结构化附加信息：任务审批提示带 kind=task_approval 与 task_id */
+  meta?: { kind?: string; task_id?: number } | null;
 }
 
 export interface PoolMessages {
@@ -95,6 +101,8 @@ export interface TaskView {
   acceptance: string;
   files: string;
   context: TaskContext;
+  /** 关联项目 slug（来自 context.objects 的 project:<slug>） */
+  projects: string[];
   result: string;
   artifact: string;
   work_dir: string;

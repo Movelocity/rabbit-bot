@@ -78,8 +78,31 @@ test("任务提示包含完整标题、目标和审批方法，不塞产出/约�
   assert.doesNotMatch(text, /可登录|不要改注册|能登进去/);
 });
 
-test("标题完整保留，name 里重复的任务号只显示一次", () => {
+test("审批提示按投放平台生成：飞书贴表情、Matrix 点赞点踩、网页只留超时口径", () => {
   const store = new Store(":memory:");
+  const task = createTask(store, {
+    userId: "u1", poolId: "p1", name: "#平台提示", goal: "验证各平台提示",
+    work_dir: "/tmp/project", status: "pending_approval",
+  });
+  const timeout = 24 * 3600_000;
+
+  const feishu = formatTaskApprovalText(task, timeout, "feishu");
+  assert.match(feishu, /贴 OK \/ 👍 表情/);
+  assert.match(feishu, /贴 No \/ 👎 表情/);
+  assert.match(feishu, /超时 1 天\s*不回＝拒绝/);
+
+  const matrix = formatTaskApprovalText(task, timeout, "matrix");
+  assert.match(matrix, /点 👍/);
+  assert.match(matrix, /点 👎/);
+  assert.match(matrix, /超时 1 天\s*不回＝拒绝/);
+  assert.doesNotMatch(matrix, /贴 OK|贴 No/);
+
+  const web = formatTaskApprovalText(task, timeout, "web");
+  assert.match(web, /超时 1 天\s*不回＝拒绝/);
+  assert.doesNotMatch(web, /贴 OK|贴 No|点 👍|点 👎|表情/);
+});
+
+test("标题完整保留，name 里重复的任务号只显示一次", () => {  const store = new Store(":memory:");
   const task = createTask(store, {
     userId: "u1", poolId: "p1", name: "#临时", goal: "查清楚",
     work_dir: "/tmp", status: "pending_approval",

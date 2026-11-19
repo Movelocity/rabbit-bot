@@ -48,7 +48,9 @@ export function effectiveSendReviewSettings(cfg: Config): SendReviewSettings {
 
 /** 主聊天（main chat）：任务汇报等主动消息的唯一落点；复用 sendReview.primaryPoolId。 */
 export function mainPoolId(cfg: Config): string | null {
-  return effectiveSendReviewSettings(cfg).primaryPoolId;
+  const id = effectiveSendReviewSettings(cfg).primaryPoolId;
+  // 任务池是内部执行池：不能当主聊天，否则任务汇报/审批会发进无人值守的任务会话
+  return id && !id.startsWith("task:") ? id : null;
 }
 
 /** 纯函数：这个池要不要审核。主对话永远免审；总开关关掉时一律直接发。 */
@@ -56,6 +58,8 @@ export function reviewRequiredFor(settings: SendReviewSettings, poolId: string):
   if (!settings.enabled) return false;
   // 网页直聊是浏览器里的双向对话，回复直接写回 web 池；再走 IM 审批反而卡住会话
   if (poolId.startsWith("web:")) return false;
+  // 任务池只承载执行过程，不是对外发消息的出口，永远不走发送审批
+  if (poolId.startsWith("task:")) return false;
   if (settings.primaryPoolId && settings.primaryPoolId === poolId) return false;
   return settings.overrides[poolId] ?? settings.defaultReview;
 }

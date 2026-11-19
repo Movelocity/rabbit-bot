@@ -1,26 +1,41 @@
 /** 池与消息的只读查询：宿主 API 和沙盒 rb 客户端共用。 */
 import type { Store } from "../core/db.ts";
+import { getTask, taskDisplayName } from "../core/tasks.ts";
 import { fmtLocal } from "../core/time.ts";
 import { clampInt, resolvePool } from "./common.ts";
+
+/** 任务池的 external_id 固定是 task:<id>；解析失败/null 表示不是任务池。 */
+function taskIdOf(platform: string, externalId: string): number | null {
+  if (platform !== "task") return null;
+  const m = /^task:(\d+)$/.exec(String(externalId ?? ""));
+  return m ? Number(m[1]) : null;
+}
 
 export function listPools(
   store: Store,
   opts: { includeArchived?: boolean; mainPoolId?: string | null } = {},
 ) {
-  return store.listPools({ includeArchived: opts.includeArchived }).map((p) => ({
-    alias: store.poolAlias(p.pool_id),
-    pool_id: p.pool_id,
-    platform: p.platform,
-    kind: p.kind,
-    title: store.poolDisplayTitle(p),
-    archived: p.archived,
-    is_main: !!opts.mainPoolId && p.pool_id === opts.mainPoolId,
-    last_msg_at: p.last_msg_at || null,
-    last_msg_local: p.last_msg_at ? fmtLocal(p.last_msg_at) : null,
-    total: store.poolSpan(p.pool_id).total,
-    unread: store.unreadCount(p.pool_id),
-    cursor: store.getCursor(p.pool_id),
-  }));
+  return store.listPools({ includeArchived: opts.includeArchived }).map((p) => {
+    const taskId = taskIdOf(p.platform, p.external_id);
+    const task = taskId ? getTask(store, taskId) : null;
+    return {
+      alias: store.poolAlias(p.pool_id),
+      pool_id: p.pool_id,
+      platform: p.platform,
+      kind: p.kind,
+      title: store.poolDisplayTitle(p),
+      archived: p.archived,
+      is_main: !!opts.mainPoolId && p.pool_id === opts.mainPoolId,
+      last_msg_at: p.last_msg_at || null,
+      last_msg_local: p.last_msg_at ? fmtLocal(p.last_msg_at) : null,
+      total: store.poolSpan(p.pool_id).total,
+      unread: store.unreadCount(p.pool_id),
+      cursor: store.getCursor(p.pool_id),
+      task_id: taskId,
+      task_name: task ? taskDisplayName(task) : null,
+      task_status: task ? task.status : null,
+    };
+  });
 }
 
 /** 归档/解档；池不存在抛错（API 和工具都用它，省得各自判空）。 */
@@ -61,6 +76,7 @@ export function readPool(store: Store, ref: string | undefined, opts: ReadPoolOp
       sender_id: m.sender_id,
       user_id: m.user_id,
       text: m.text,
+      meta: m.meta ?? null,
     })),
   };
 }

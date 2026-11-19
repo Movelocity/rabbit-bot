@@ -365,6 +365,11 @@ test("按池策略：总开关、默认值、pool_id 覆盖、主对话免审", 
     false,
     "网页直聊池永远免审，回复直接写回浏览器",
   );
+  assert.equal(
+    reviewRequiredFor({ ...base, primaryPoolId: "task:task:1", overrides: { "task:task:1": true } }, "task:task:1"),
+    false,
+    "任务池是内部执行池，永远不走发送审批",
+  );
 });
 
 test("Hub 接线：shouldReview=false 的池直接发，不弹审核", async () => {

@@ -46,6 +46,8 @@ export interface PoolMessage {
   reaction_to?: string | null;
   /** 表情原始 key（飞书 emoji_type / Matrix 的 key），审批只认 OK / No */
   reaction_key?: string | null;
+  /** 结构化附加信息（如任务审批提示的 task_id），前端据此渲染操作按钮 */
+  meta?: Record<string, unknown> | null;
 }
 
 export interface StoredMessage extends PoolMessage {

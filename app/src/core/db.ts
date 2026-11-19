@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS messages (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, pool_id TEXT NOT NULL, platform TEXT NOT NULL, msg_id TEXT NOT NULL,
   sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, user_id TEXT, ts INTEGER NOT NULL, text TEXT NOT NULL,
   reply_to TEXT, mentions TEXT NOT NULL DEFAULT '[]', is_mention_me INTEGER NOT NULL DEFAULT 0,
-  media_type TEXT NOT NULL DEFAULT 'text', from_self INTEGER NOT NULL DEFAULT 0, attachment TEXT,
+  media_type TEXT NOT NULL DEFAULT 'text', from_self INTEGER NOT NULL DEFAULT 0, attachment TEXT, meta TEXT,
   UNIQUE(platform, msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pool ON messages(pool_id, seq);
@@ -241,6 +241,7 @@ function rowToMsg(r: any): StoredMessage {
     sender_name: r.sender_name, user_id: r.user_id, ts: r.ts, text: r.text, reply_to: r.reply_to,
     mentions: JSON.parse(r.mentions), is_mention_me: !!r.is_mention_me, media_type: r.media_type, from_self: !!r.from_self,
     attachment: r.attachment ? JSON.parse(r.attachment) : null, internal: !!r.internal,
+    meta: r.meta ? JSON.parse(r.meta) : null,
   };
 }
 
@@ -269,6 +270,8 @@ export class Store {
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN wave_a REAL"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE tide_events ADD COLUMN stage INTEGER"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
+    // 消息附加信息（2026-11-18）：任务审批提示带 task_id，网页直聊据此渲染同意/拒绝按钮
+    try { this.db.exec("ALTER TABLE messages ADD COLUMN meta TEXT"); } catch { /* 已存在 */ }
     try { this.db.exec("ALTER TABLE handoffs ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
     // 额度计算（2026-11-07）：缓存命中/未命中/输出三段分开记，cost_usd 是官方单价算出来的。
     // 老库补列，新库已在 SCHEMA 里。
@@ -491,10 +494,11 @@ export class Store {
     if (this.hasMessage(m.platform, m.msg_id)) return null; // 重复投递：不产生任何副作用
     const pool = this.upsertPool(m.platform, m.external_chat_id, m.pool_kind, m.pool_title ?? "");
     const user_id = m.from_self ? null : this.resolveUser(m.platform, m.sender_id, m.sender_name);
-    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self,attachment,internal)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
+    const r = this.db.prepare(`INSERT OR IGNORE INTO messages(pool_id,platform,msg_id,sender_id,sender_name,user_id,ts,text,reply_to,mentions,is_mention_me,media_type,from_self,attachment,internal,meta)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(pool.pool_id, m.platform, m.msg_id, m.sender_id, m.sender_name, user_id, m.ts, m.text,
       m.reply_to, JSON.stringify(m.mentions), m.is_mention_me ? 1 : 0, m.media_type, m.from_self ? 1 : 0,
-      m.attachment ? JSON.stringify(m.attachment) : null, m.internal ? 1 : 0);
+      m.attachment ? JSON.stringify(m.attachment) : null, m.internal ? 1 : 0,
+      m.meta ? JSON.stringify(m.meta) : null);
     if (r.changes === 0) return null;
     // 归档池来新消息就自动解档：归档只是「暂时不看」，不能变成静音
     this.db.prepare("UPDATE pools SET last_msg_at=MAX(last_msg_at,?), archived=0 WHERE pool_id=?").run(m.ts, pool.pool_id);

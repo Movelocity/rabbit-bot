@@ -7,6 +7,7 @@ import { completeTask, failTask, progressTask } from "../src/core/workers.ts";
 import { createApproval, decideApproval } from "../src/core/approvals.ts";
 import { appendTaskEvent, listTaskEvents } from "../src/core/task-events.ts";
 import { formatTask } from "../src/ops/tasks.ts";
+import { listPools } from "../src/ops/pools.ts";
 
 test("createTask 自动建任务池：platform/external_id/kind/title 正确，重复 ensure 不新建", () => {
   const s = new Store(":memory:");
@@ -23,6 +24,26 @@ test("createTask 自动建任务池：platform/external_id/kind/title 正确，�
   const again = ensureTaskPool(s, t.id);
   assert.equal(again.task_pool_id, t.task_pool_id);
   assert.equal(s.listPools().length, count, "同一任务不重复建池");
+
+  s.close();
+});
+
+test("listPools 给任务池带上 task_id / task_name / task_status，非任务池为 null", () => {
+  const s = new Store(":memory:");
+  const t = createTask(s, { userId: "u1", poolId: "p1", name: "#日报", goal: "写日报" });
+  updateTask(s, t.id, { status: "running" });
+  s.upsertPool("feishu", "oc_group", "group", "项目群");
+
+  const pools = listPools(s);
+  const taskPool = pools.find((p) => p.task_id === t.id)!;
+  assert.equal(taskPool.task_name, "#日报");
+  assert.equal(taskPool.task_status, "running");
+  assert.equal(taskPool.kind, "task");
+
+  const groupPool = pools.find((p) => p.platform === "feishu")!;
+  assert.equal(groupPool.task_id, null);
+  assert.equal(groupPool.task_name, null);
+  assert.equal(groupPool.task_status, null);
 
   s.close();
 });

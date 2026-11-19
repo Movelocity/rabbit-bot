@@ -31,7 +31,7 @@ import { PiEngine, resolveModel, type AgentEngine, type RunResult } from "./agen
 import { effectiveModelSettings, saveModelSettings, type ModelSettings } from "./ops/model-settings.ts";
 import { createTools, type RbExec } from "./agent/tools.ts";
 import { ApprovalGate } from "./core/approval.ts";
-import { TaskApprovalGate, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
+import { TaskApprovalGate, formatTaskApprovalText, taskApprovalTimeoutMs, type TaskApprovalOutcome, type TaskApprovalTarget } from "./core/task-approval.ts";
 import { SendReviewGate, resolveSendReviewConfig } from "./core/send-review.ts";
 import { effectiveSendReviewSettings, mainPoolId, reviewRequiredFor } from "./ops/send-review-settings.ts";
 import { systemPrompt, wakePrompt } from "./agent/prompt.ts";
@@ -48,6 +48,7 @@ import {
   type MemoryReviewState,
 } from "./ops/memory-review.ts";
 import { effectiveWatchdogSettings } from "./ops/watchdog-settings.ts";
+import { effectiveWebChat } from "./core/web-auth.ts";
 
 export interface AppOptions {
   cfg: Config;
@@ -213,7 +214,7 @@ export class App {
       cfg.taskApproval,
       this.log,
       // 任务审批提示要让 agent 自己也看得到（Matrix 靠 sync 回灌天然可见，飞书不回收自己的消息）
-      (target, text) => this.hub.sendSystem(target.platform, target.chatId, text, { remember: true }),
+      (target, text, meta) => this.sendTaskNotice(target, text, meta),
       {
         onApprove: (task, by) => this.approveTaskFromChat(task, by),
         onReject: (task, by) => this.rejectTaskFromChat(task, by),
@@ -519,6 +520,41 @@ export class App {
    * 任务名可能很长，裁决回执只需要任务号和结果，避免挤占上下文；
    * 回执本身要入池留痕（她得知道自己批准/取消了什么），但不进未读、不触发唤醒。
    */
+  /**
+   * 任务通知（审批提示 / 裁决回执）的双通道发送。
+   *
+   * 主聊天在 IM 上时，同一条通知也往网页直聊池写一份：IM 渠道整体不可用时，
+   * 主人仍然能在网页里看到待审任务并点同意/拒绝，不用等飞书恢复。
+   * 主聊天本来就是网页直聊时不重复发。
+   */
+  private async sendTaskNotice(
+    target: TaskApprovalTarget,
+    text: string,
+    meta?: Record<string, unknown>,
+  ): Promise<{ ok: boolean; error?: string; msgId?: string }> {
+    const sent = await this.hub.sendSystem(target.platform, target.chatId, text, { remember: true, meta });
+    if (target.platform === "web") return sent;
+
+    let ws: ReturnType<typeof effectiveWebChat>;
+    try { ws = effectiveWebChat(this.o.cfg); } catch { return sent; }
+    if (!ws.enabled) return sent;
+
+    const pool = this.store.upsertPool("web", ws.pool, "private", ws.title);
+    // 网页里没有表情可贴，裁决提示只保留超时口径；按钮由前端渲染
+    let webText = text;
+    if (meta?.kind === "task_approval" && typeof meta.task_id === "number") {
+      const task = getTask(this.store, meta.task_id);
+      if (task) webText = formatTaskApprovalText(task, taskApprovalTimeoutMs(this.o.cfg.taskApproval), "web");
+    }
+    const copy = await this.hub.sendSystem("web", pool.external_id, webText, { remember: true, meta });
+    if (!copy.ok) {
+      this.log.warn(`任务通知同步到网页直聊失败：${copy.error ?? "未知原因"}`);
+    } else if (!sent.ok) {
+      this.log.warn(`主聊天发送失败（${sent.error ?? "未知原因"}），任务通知已改投网页直聊`);
+    }
+    return sent.ok ? sent : copy;
+  }
+
   private notifyTaskDecisionShort(taskId: number, decision: TaskDecision): void {
     const target = this.resolveTaskNoticeTarget();
     if (!target) return;
@@ -527,7 +563,7 @@ export class App {
       : decision === "timeout"
         ? `任务 #${taskId} 审批超时，已取消`
         : `任务 #${taskId} 已取消`;
-    void this.hub.sendSystem(target.platform, target.chatId, text, { remember: true })
+    void this.sendTaskNotice(target, text)
       .then((r) => { if (!r.ok) this.log.warn(`任务 #${taskId} 裁决回执发送失败：${r.error ?? "未知原因"}`); })
       .catch((e) => this.log.warn(`任务 #${taskId} 裁决回执发送失败：${(e as Error).message}`));
   }
@@ -568,7 +604,13 @@ export class App {
   private resolveTaskNoticeTarget(): TaskApprovalTarget | null {
     const mainId = mainPoolId(this.o.cfg);
     if (mainId) {
-      const pool = this.store.getPool(mainId);
+      let pool = this.store.getPool(mainId);
+      // 网页直聊池可能还没人说过话：主聊天指到它时按配置补建，否则通知会静默丢掉
+      if (!pool && mainId.startsWith("web:")) {
+        const ext = mainId.slice("web:".length);
+        const ws = effectiveWebChat(this.o.cfg);
+        if (ws.enabled) pool = this.store.upsertPool("web", ext, "private", ws.pool === ext ? ws.title : ext);
+      }
       if (pool?.external_id) return { platform: pool.platform, chatId: pool.external_id };
     }
     const ta = this.o.cfg.taskApproval;

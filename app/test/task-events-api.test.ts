@@ -8,7 +8,8 @@ import { APP_ROOT, loadConfig } from "../src/config.ts";
 import { Store } from "../src/core/db.ts";
 import { Logger } from "../src/core/logger.ts";
 import { startApiServer } from "../src/api.ts";
-import { updateTask } from "../src/core/tasks.ts";
+import { getTask, updateTask } from "../src/core/tasks.ts";
+import { taskDocPath } from "../src/core/dispatch.ts";
 
 const dir = path.join(APP_ROOT, ".scratch", "task-events-api");
 fs.mkdirSync(dir, { recursive: true });
@@ -87,4 +88,20 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   assert.equal(snap.status, 200);
   assert.equal(snap.body.data.task.task_pool_id, created.body.data.task_pool_id);
   assert.equal(snap.body.data.recent_events.length, 2);
+
+  // 任务指导文件：未生成时 exists=false，生成后返回正文
+  const docPath = taskDocPath(getTask(store, id)!, cfg.runtimeDir);
+  fs.rmSync(docPath, { force: true });
+  const missing = await call(`/v1/tasks/${id}/doc`);
+  assert.equal(missing.status, 200, JSON.stringify(missing.body));
+  assert.equal(missing.body.data.exists, false);
+  assert.equal((await call("/v1/tasks/999999/doc")).status, 404);
+
+  fs.mkdirSync(path.dirname(docPath), { recursive: true });
+  fs.writeFileSync(docPath, "# 指导\n\n只做这一步。\n", "utf8");
+  const doc = await call(`/v1/tasks/${id}/doc`);
+  assert.equal(doc.status, 200);
+  assert.equal(doc.body.data.exists, true);
+  assert.equal(doc.body.data.path, docPath);
+  assert.match(doc.body.data.content, /只做这一步/);
 });

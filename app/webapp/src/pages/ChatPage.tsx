@@ -3,15 +3,31 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
-import { formatTs, friendlyError, kindLabel, platformLabel } from "../lib/format.ts";
-import type { Pool, PoolMessage, PoolMessages, SendReviewSettingsResponse } from "../lib/types.ts";
-import { Button, Chip, Empty, Input, Notice, Segmented, Textarea } from "../components/ui.tsx";
+import { badgeVariant, duration, formatTs, friendlyError, kindLabel, platformLabel } from "../lib/format.ts";
+import type {
+  OutputEntry,
+  OutputFile,
+  Pool,
+  PoolMessage,
+  PoolMessages,
+  SendReviewSettingsResponse,
+  TaskSnapshot,
+  TaskStatus,
+  TaskView,
+} from "../lib/types.ts";
+import { Badge, Button, Chip, Empty, Input, Notice, Segmented, StatusText, Textarea } from "../components/ui.tsx";
+import { Drawer } from "../components/Drawer.tsx";
+import { DetailRows, type DetailRow } from "../components/DetailRows.tsx";
 
 type PoolReviewMode = "inherit" | "review" | "direct";
 
@@ -39,14 +55,517 @@ const BUCKET_LABEL: Record<string, string> = {
   task: "任务",
 };
 
+function taskIdOfPool(pool: Pool | undefined): number | null {
+  if (!pool) return null;
+  if (typeof pool.task_id === "number" && pool.task_id > 0) return pool.task_id;
+  const m = /^task:task:(\d+)$/.exec(pool.pool_id);
+  return m ? Number(m[1]) : null;
+}
+
+function poolDisplayName(p: Pool): string {
+  return (p.task_name || p.title || p.alias).trim();
+}
+
+function MarkdownBlock({ text }: { text: string }) {
+  const html = useMemo(() => {
+    const raw = marked.parse(text, { gfm: true, async: false }) as string;
+    return DOMPurify.sanitize(raw);
+  }, [text]);
+  return (
+    <div
+      className="rb-markdown rounded-[12px] border border-border bg-surface px-4 py-3.5 text-[13px]"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function TaskDetailPanel({ snap }: { snap: TaskSnapshot | null }) {
+  if (!snap) return <p className="text-[13px] text-muted">正在加载任务快照…</p>;
+  const t = snap.task;
+  const rows: DetailRow[] = [];
+  const add = (label: string, value: ReactNode, mono = false) => {
+    if (value === null || value === undefined || String(value).trim() === "") return;
+    rows.push({ label, value, mono });
+  };
+  add("status", t.status ? <Badge variant={badgeVariant(t.status)}>{t.status}</Badge> : "");
+  add("goal", t.goal);
+  add("deliverable", t.deliverable);
+  add("result", t.result);
+  add("artifact", t.artifact, true);
+  add("work_dir", t.work_dir, true);
+  add("executor", t.executor || "opencode");
+  add("model", t.model, true);
+  add("doc_path", t.doc_path, true);
+  add("updated", t.updated_at_local || formatTs(t.updated_at));
+  return (
+    <>
+      {rows.length ? (
+        <DetailRows rows={rows} className="mt-0 border-t-0 pt-0" />
+      ) : (
+        <p className="text-[13px] text-muted">任务没有更多详情。</p>
+      )}
+      <h3 className="mb-2 mt-5 text-[13px] font-semibold">最近事件</h3>
+      {snap.recent_events.length ? (
+        <ol className="m-0 grid list-none gap-2 p-0">
+          {snap.recent_events.map((ev) => (
+            <li key={ev.seq} className="rounded-[9px] border border-border bg-surface2 px-2.5 py-2 text-[11.5px] text-muted">
+              <b className="text-text">{ev.local || formatTs(ev.ts)} · {ev.sender || "task"}</b>
+              <div className="mt-0.5 whitespace-pre-wrap wrap-anywhere">{ev.text || ""}</div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="text-[13px] text-muted">还没有任务事件。</p>
+      )}
+    </>
+  );
+}
+
+function TaskDocPanel({ taskId }: { taskId: number }) {
+  const request = useApi();
+  const [doc, setDoc] = useState<{ path: string; exists: boolean; content: string } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setDoc(null);
+    setError("");
+    request<{ path: string; exists: boolean; content: string }>(`/v1/tasks/${taskId}/doc`)
+      .then((d) => { if (alive) setDoc(d); })
+      .catch((e) => { if (alive) setError(`读取任务指导文件失败：${friendlyError(e)}`); });
+    return () => { alive = false; };
+  }, [taskId, request]);
+
+  if (error) return <StatusText text={error} error />;
+  if (!doc) return <p className="text-[13px] text-muted">正在读取任务指导文件…</p>;
+  if (!doc.exists) {
+    return (
+      <p className="text-[13px] text-muted">
+        任务指导文件还没生成（审批通过后写入）。审批通过后可从任务页或这里查看。
+      </p>
+    );
+  }
+  return (
+    <>
+      <p className="m-0 mb-2.5 break-all font-mono text-[11px] text-faint">{doc.path}</p>
+      <MarkdownBlock text={doc.content} />
+    </>
+  );
+}
+
+function TaskOutputsPanel({ taskId }: { taskId: number }) {
+  const request = useApi();
+  const base = `task-${taskId}`;
+  const [dir, setDir] = useState(base);
+  const [entries, setEntries] = useState<OutputEntry[]>([]);
+  const [file, setFile] = useState<OutputFile | null>(null);
+  const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+
+  const loadDir = useCallback(
+    async (path: string) => {
+      setStatus({ text: "加载中…" });
+      try {
+        setEntries(await request<OutputEntry[]>(`/v1/outputs?path=${encodeURIComponent(path)}`));
+        setStatus({ text: "" });
+      } catch (e) {
+        setEntries([]);
+        // 任务还没有产出时目录不存在，按空列表处理；子目录读取失败才报错
+        setStatus(path === base ? { text: "" } : { text: `读取产出失败：${friendlyError(e)}`, error: true });
+      }
+    },
+    [request, base],
+  );
+
+  useEffect(() => {
+    setFile(null);
+    setDir(base);
+    void loadDir(base);
+  }, [base, loadDir]);
+
+  const openDir = (path: string) => {
+    setFile(null);
+    setDir(path);
+    void loadDir(path);
+  };
+
+  const openFile = async (path: string) => {
+    setStatus({ text: "加载中…" });
+    try {
+      setFile(await request<OutputFile>(`/v1/outputs/file?path=${encodeURIComponent(path)}`));
+      setStatus({ text: "" });
+    } catch (e) {
+      setStatus({ text: `读取文件失败：${friendlyError(e)}`, error: true });
+    }
+  };
+
+  const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+
+  if (file) {
+    return (
+      <>
+        <div className="mb-2.5 flex flex-wrap items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setFile(null)}>
+            返回列表
+          </Button>
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{file.path}</span>
+        </div>
+        {file.binary ? (
+          <p className="text-[13px] text-muted">二进制文件，暂不支持预览。</p>
+        ) : file.ext === "md" ? (
+          <MarkdownBlock text={file.content} />
+        ) : (
+          <pre className="rb-thin-scroll max-h-[calc(100dvh-220px)] overflow-auto rounded-[10px] border border-border bg-surface2 p-3 text-[12px] leading-relaxed">
+            {file.content}
+          </pre>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p className="m-0 mb-2.5 break-all font-mono text-[11px] text-faint">outputs/{dir}/</p>
+      <StatusText text={status.text} error={status.error} />
+      {dir !== base ? (
+        <Button variant="ghost" size="sm" className="mb-2" onClick={() => openDir(parent || base)}>
+          上一级
+        </Button>
+      ) : null}
+      {entries.length ? (
+        <div className="grid gap-1.5">
+          {entries.map((e) =>
+            e.kind === "dir" ? (
+              <button
+                key={e.path}
+                type="button"
+                className="flex items-center gap-2 rounded-[9px] border border-border bg-surface px-2.5 py-2 text-left text-[12.5px] transition hover:border-accent/45 hover:bg-accent-soft/30"
+                onClick={() => openDir(e.path)}
+              >
+                <span className="text-faint">▸</span>
+                <span className="min-w-0 flex-1 truncate">{e.name}/</span>
+              </button>
+            ) : (
+              <button
+                key={e.path}
+                type="button"
+                className="flex items-center gap-2 rounded-[9px] border border-border bg-surface px-2.5 py-2 text-left text-[12.5px] transition hover:border-accent/45 hover:bg-accent-soft/30"
+                onClick={() => void openFile(e.path)}
+              >
+                <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                <span className="flex-none text-[10.5px] text-faint">{e.bytes ?? 0} B</span>
+              </button>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="text-[13px] text-muted">
+          {dir === base ? "这个任务还没有产出。WA 完成后会把交付物写到 outputs/task-" + taskId + "/。" : "空目录。"}
+        </p>
+      )}
+    </>
+  );
+}
+
+
+const STATUS_LABEL: Record<string, string> = {
+  pending_approval: "待审批",
+  pending: "排队中",
+  running: "执行中",
+  blocked: "已阻塞",
+  done: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+type StageState = "done" | "now" | "todo" | "bad";
+
+function taskStages(
+  status: TaskStatus | undefined,
+  stage: string | undefined,
+): { label: string; hint: string; state: StageState }[] {
+  const queued = status === "pending";
+  const waiting = status === "pending_approval";
+  const active = status === "running" || status === "blocked";
+  const finished = status === "done";
+  const stopped = status === "failed" || status === "cancelled";
+  const known = Boolean(status);
+  return [
+    { label: "创建", hint: "任务已入池", state: "done" },
+    {
+      label: "审批",
+      hint: waiting ? "等待审批" : stopped ? "未启动" : known ? "已通过" : "—",
+      state: waiting ? "now" : stopped || !known ? "todo" : "done",
+    },
+    {
+      label: "执行",
+      hint: active
+        ? stage || STATUS_LABEL[status ?? ""] || "执行中"
+        : finished
+          ? "执行结束"
+          : queued
+            ? "排队中"
+            : waiting
+              ? "等待审批"
+              : "—",
+      state: active
+        ? status === "blocked"
+          ? "bad"
+          : "now"
+        : finished
+          ? "done"
+          : stopped
+            ? "bad"
+            : "todo",
+    },
+    {
+      label: "交付",
+      hint: finished ? "任务已结束" : stopped ? "已中止" : "等待产出",
+      state: finished ? "done" : "todo",
+    },
+  ];
+}
+
+function eventClock(event: { local?: string; ts: number }): string {
+  return (event.local || formatTs(event.ts)).match(/\d{2}:\d{2}/)?.[0] || "—";
+}
+
+function TaskExecBoard({
+  taskId,
+  pool,
+  snap,
+  total,
+  pending,
+  decidingId,
+  rejectingId,
+  rejectReason,
+  onRejectReasonChange,
+  onDecide,
+  onStartReject,
+  onCancelReject,
+  onOpenPanel,
+  onOpenTask,
+}: {
+  taskId: number;
+  pool: Pool | undefined;
+  snap: TaskSnapshot | null;
+  total: number;
+  pending: Set<number> | null;
+  decidingId: number | null;
+  rejectingId: number | null;
+  rejectReason: string;
+  onRejectReasonChange: (value: string) => void;
+  onDecide: (id: number, action: "approve" | "reject", reason?: string) => void;
+  onStartReject: (id: number) => void;
+  onCancelReject: () => void;
+  onOpenPanel: (panel: "detail" | "doc" | "outputs") => void;
+  onOpenTask?: (id: number) => void;
+}) {
+  const task = snap?.task;
+  const status = task?.status || pool?.task_status || undefined;
+  const stages = taskStages(status, task?.stage);
+  const isPending = pending?.has(taskId) ?? false;
+  const busy = decidingId === taskId;
+  const elapsed = task?.start_at
+    ? duration(Number(task.end_at ?? Date.now()) - Number(task.start_at))
+    : "—";
+  const events = snap?.recent_events ?? [];
+  const action = isPending
+    ? "等待审批后启动"
+    : (task?.note || "").trim() || (task?.stage || "").trim() || STATUS_LABEL[status ?? ""] || "—";
+  const active = status === "running" || status === "pending_approval" || status === "blocked" || status === "pending";
+
+  return (
+    <>
+      <section className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">执行台</div>
+          <span className="font-mono text-[10.5px] text-faint">#{taskId}</span>
+          {status ? <Badge variant={badgeVariant(status)}>{STATUS_LABEL[status] || status}</Badge> : null}
+        </div>
+        {task?.goal ? (
+          <p className="mb-2.5 line-clamp-3 text-[11.5px] leading-relaxed text-muted">{task.goal}</p>
+        ) : null}
+        <ol className="m-0 grid list-none gap-0 p-0">
+          {stages.map((step, index) => (
+            <li
+              key={step.label}
+              className={cx(
+                "relative grid grid-cols-[16px_minmax(0,1fr)] gap-2.5 pb-3 text-[11.5px] last:pb-0",
+                step.state === "done" && "text-muted",
+                step.state === "now" && "font-semibold text-accent-ink",
+                step.state === "todo" && "text-faint",
+                step.state === "bad" && "text-bad",
+              )}
+            >
+              {index < stages.length - 1 ? (
+                <span className="absolute bottom-0 left-[7px] top-[17px] w-px bg-border" aria-hidden="true" />
+              ) : null}
+              <span
+                className={cx(
+                  "relative z-[1] mt-0.5 size-[15px] rounded-full border",
+                  step.state === "done" && "border-accent bg-accent",
+                  step.state === "now" && "border-accent bg-accent ring-2 ring-accent-soft",
+                  step.state === "bad" && "border-bad bg-rose-soft",
+                  step.state === "todo" && "border-line-strong bg-surface",
+                )}
+              />
+              <span className="min-w-0">
+                {step.label}
+                <small className="mt-0.5 block text-[10px] font-normal text-faint">{step.hint}</small>
+              </span>
+            </li>
+          ))}
+        </ol>
+        <div className="mt-3 grid grid-cols-3 gap-1.5">
+          <div className="rounded-[9px] border border-border bg-surface2 px-2 py-1.5">
+            <b className="rb-display block text-[15px] leading-tight">{elapsed}</b>
+            <span className="text-[9.5px] text-faint">用时</span>
+          </div>
+          <div className="rounded-[9px] border border-border bg-surface2 px-2 py-1.5">
+            <b className="rb-display block text-[15px] leading-tight">{total || pool?.total || 0}</b>
+            <span className="text-[9.5px] text-faint">消息</span>
+          </div>
+          <div className="rounded-[9px] border border-border bg-surface2 px-2 py-1.5">
+            <b className="rb-display block text-[15px] leading-tight">{events.length}</b>
+            <span className="text-[9.5px] text-faint">近期事件</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">当前动作</div>
+        <div
+          className={cx(
+            "rounded-[9px] border px-2.5 py-2 text-[11.5px] leading-relaxed",
+            active
+              ? "border-amber/40 bg-amber-soft text-[color:var(--rb-amber)]"
+              : "border-border bg-surface2 text-muted",
+          )}
+        >
+          {action}
+        </div>
+      </section>
+
+      {isPending ? (
+        <section className="mb-2.5 rounded-[11px] border border-amber/40 bg-amber-soft p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-amber">待处理</span>
+            <span className="text-[11.5px] font-semibold">启动任务 #{taskId}</span>
+          </div>
+          {rejectingId === taskId ? (
+            <div className="grid gap-2">
+              <Input
+                value={rejectReason}
+                onChange={(e) => onRejectReasonChange(e.target.value)}
+                placeholder="驳回原因（必填）"
+                aria-label={`任务 #${taskId} 驳回原因`}
+                className="h-8 py-1 text-[12px]"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!rejectReason.trim() || busy}
+                  onClick={() => onDecide(taskId, "reject", rejectReason.trim())}
+                >
+                  {busy ? "驳回中…" : "确认驳回"}
+                </Button>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={onCancelReject}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              <Button variant="primary" size="sm" disabled={busy} onClick={() => onDecide(taskId, "approve")}>
+                {busy ? "处理中…" : "同意并启动"}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => onStartReject(taskId)}>
+                驳回
+              </Button>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <section className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">产出</div>
+          <span className="text-[10px] text-faint">outputs/task-{taskId}/</span>
+        </div>
+        <dl className="rb-kv">
+          <dt>artifact</dt>
+          <dd className="font-mono text-[10.5px]">{task?.artifact || "—"}</dd>
+          <dt>work_dir</dt>
+          <dd className="font-mono text-[10.5px]">{task?.work_dir || "—"}</dd>
+          <dt>executor</dt>
+          <dd>{task?.executor || "opencode"}</dd>
+        </dl>
+      </section>
+
+      <section className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">最近事件</div>
+          <span className="text-[10px] text-faint">{events.length ? `最近 ${events.length} 条` : ""}</span>
+        </div>
+        {events.length ? (
+          <ol className="m-0 grid list-none gap-2 p-0 text-[11px]">
+            {events.slice(0, 6).map((event) => (
+              <li key={event.seq} className="grid grid-cols-[38px_minmax(0,1fr)] gap-2 text-muted">
+                <time className="font-mono text-[10px] tabular-nums text-faint">{eventClock(event)}</time>
+                <span className="min-w-0">
+                  <b className="text-text">{event.sender || "task"}</b>
+                  <span className="mt-0.5 line-clamp-2 block text-[11px]">{event.text || ""}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="m-0 text-[11.5px] text-muted">还没有任务事件。</p>
+        )}
+      </section>
+
+      <section className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">会话信息</div>
+        <dl className="rb-kv">
+          <dt>pool_id</dt>
+          <dd>
+            <code className="font-mono text-[10.5px]">{pool?.pool_id || `task:task:${taskId}`}</code>
+          </dd>
+          <dt>消息</dt>
+          <dd>{total || pool?.total || 0} 条</dd>
+          <dt>更新</dt>
+          <dd>{task?.updated_at_local || (task?.updated_at ? formatTs(task.updated_at) : "—")}</dd>
+        </dl>
+      </section>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        <Button variant="ghost" size="sm" onClick={() => onOpenPanel("detail")}>
+          任务详情
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => onOpenPanel("doc")}>
+          指导文件
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => onOpenPanel("outputs")}>
+          任务产出
+        </Button>
+        <Button variant="ghost" size="sm" disabled={!onOpenTask} onClick={() => onOpenTask?.(taskId)}>
+          任务页
+        </Button>
+      </div>
+    </>
+  );
+}
+
 export function ChatPage({
   currentPool,
   onCurrentPoolChange,
   reloadSignal,
+  onOpenTask,
 }: {
   currentPool: string | null;
   onCurrentPoolChange: (alias: string | null) => void;
   reloadSignal: number;
+  onOpenTask?: (id: number) => void;
 }) {
   const request = useApi();
   const [pools, setPools] = useState<Pool[]>([]);
@@ -63,6 +582,14 @@ export function ChatPage({
   const [reviewSaving, setReviewSaving] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  /** 网页直聊里的待审任务 id；null = 还没读到，按钮先不显示，避免把待审当成已处理 */
+  const [pendingApprovals, setPendingApprovals] = useState<Set<number> | null>(null);
+  const [decidingId, setDecidingId] = useState<number | null>(null);
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  /** 任务池：当前选中任务的快照与侧边抽屉 */
+  const [taskSnap, setTaskSnap] = useState<TaskSnapshot | null>(null);
+  const [taskPanel, setTaskPanel] = useState<"detail" | "doc" | "outputs" | null>(null);
 
   const messagesBox = useRef<HTMLDivElement>(null);
   const messagesData = useRef<PoolMessage[]>([]);
@@ -133,6 +660,15 @@ export function ChatPage({
     },
     [request, applyMessages],
   );
+
+  const loadPendingApprovals = useCallback(async () => {
+    try {
+      const rows = await request<TaskView[]>("/v1/tasks?status=pending_approval&limit=200");
+      setPendingApprovals(new Set(rows.map((t) => t.id)));
+    } catch {
+      // 任务接口不可用时保持上一轮结果；没读到过就继续隐藏按钮
+    }
+  }, [request]);
 
   const loadOlder = useCallback(async () => {
     const alias = currentRef.current;
@@ -215,6 +751,28 @@ export function ChatPage({
 
   const pool = pools.find((p) => p.alias === currentPool);
   const isWebPool = pool?.platform === "web";
+  const taskId = taskIdOfPool(pool);
+
+  const loadTaskSnapshot = useCallback(async () => {
+    if (taskId === null) return;
+    try {
+      setTaskSnap(await request<TaskSnapshot>(`/v1/tasks/${taskId}/snapshot`));
+    } catch {
+      // 任务接口偶发失败时不打断聊天；保留上一份快照
+    }
+  }, [request, taskId]);
+
+  useEffect(() => {
+    setTaskSnap(null);
+    setTaskPanel(null);
+    if (taskId !== null) void loadTaskSnapshot();
+  }, [taskId, loadTaskSnapshot]);
+  usePolling(loadTaskSnapshot, 5000, taskId !== null);
+
+  useEffect(() => {
+    if (isWebPool || taskId !== null) void loadPendingApprovals();
+  }, [isWebPool, taskId, loadPendingApprovals]);
+  usePolling(loadPendingApprovals, 3000, isWebPool || taskId !== null);
 
   const sendDraft = useCallback(async () => {
     const text = draft.trim();
@@ -231,6 +789,34 @@ export function ChatPage({
       setSending(false);
     }
   }, [draft, isWebPool, sending, request, loadLatest]);
+
+  const decideTask = useCallback(
+    async (id: number, action: "approve" | "reject", reason = "") => {
+      if (decidingId !== null) return;
+      setDecidingId(id);
+      setStatus({
+        text: action === "approve" ? `任务 #${id} 审批通过，正在启动…` : `任务 #${id} 正在驳回…`,
+      });
+      try {
+        await request(`/v1/tasks/${id}/${action}`, {
+          method: "POST",
+          body: action === "reject" ? { reason, by: "web" } : { by: "web" },
+        });
+        setStatus({
+          text: action === "approve" ? `任务 #${id} 已通过并启动。` : `任务 #${id} 已驳回。`,
+        });
+        setRejectingId(null);
+        setRejectReason("");
+        await Promise.all([loadLatest(false), loadPendingApprovals(), loadTaskSnapshot()]);
+      } catch (e) {
+        setStatus({ text: `审批操作失败：${friendlyError(e)}`, error: true });
+        await loadPendingApprovals();
+      } finally {
+        setDecidingId(null);
+      }
+    },
+    [decidingId, request, loadLatest, loadPendingApprovals, loadTaskSnapshot],
+  );
 
   const toggleArchive = useCallback(async () => {
     if (!pool || archiving) return;
@@ -398,7 +984,7 @@ export function ChatPage({
                     <button
                       key={p.alias}
                       type="button"
-                      title={p.title || p.alias}
+                      title={poolDisplayName(p)}
                       aria-current={selected ? "true" : undefined}
                       className={cx(
                         "relative flex w-full items-start gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition hover:bg-surface2",
@@ -423,11 +1009,11 @@ export function ChatPage({
                             : "border-accent/25 bg-accent-soft text-accent-ink",
                         )}
                       >
-                        {initial(p.title || p.alias)}
+                        {initial(poolDisplayName(p))}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5 text-[12.5px] font-semibold leading-tight">
-                          <span className="truncate">{p.title || p.alias}</span>
+                          <span className="truncate">{poolDisplayName(p)}</span>
                           {p.is_main && (
                             <Chip tone="accent" className="px-1.5 py-0 text-[9px]">
                               主
@@ -450,13 +1036,13 @@ export function ChatPage({
                         </span>
                         <span className="mt-1 flex items-center gap-1.5 text-[10.5px] text-muted">
                           <code className="truncate font-mono text-[10px] text-faint">
-                            {p.alias}
+                            {p.task_id ? `#${p.task_id}` : p.alias}
                           </code>
                           <span className="truncate">{p.last_msg_local ? p.last_msg_local.slice(5, 16) : "暂无消息"}</span>
                         </span>
                       </span>
                       <span className="flex flex-none flex-col items-end gap-0.5 text-[10px] text-faint">
-                        <span>{kindLabel(p.kind)}</span>
+                        <span>{p.task_status ? <Badge variant={badgeVariant(p.task_status)}>{p.task_status}</Badge> : kindLabel(p.kind)}</span>
                         <span>{p.total || 0} 条</span>
                       </span>
                     </button>
@@ -488,16 +1074,45 @@ export function ChatPage({
               className="rb-display m-0 truncate text-[17px]"
               title={
                 pool
-                  ? `${pool.alias} · ${isWebPool ? "网页直聊" : `${platformLabel(pool.platform)} · ${kindLabel(pool.kind)}`} · ${total} 条消息 · 最后 ${pool.last_msg_local || "—"}`
+                  ? `${pool.alias} · ${taskId !== null ? `任务 #${taskId} · ${pool.task_status || "unknown"}` : isWebPool ? "网页直聊" : `${platformLabel(pool.platform)} · ${kindLabel(pool.kind)}`} · ${total} 条消息 · 最后 ${pool.last_msg_local || "—"}`
                   : undefined
               }
             >
-              {pool ? pool.title || pool.alias : "选择左侧会话"}
+              {pool ? poolDisplayName(pool) : "选择左侧会话"}
             </h2>
           </div>
-          {isWebPool ? (
+          {taskId !== null ? (
             <div className="flex flex-none flex-wrap items-center justify-end gap-2">
-              <Chip tone="accent">网页直聊 · 免审批</Chip>
+              <Chip tone="accent">任务 #{taskId}</Chip>
+              {(taskSnap?.task.status || pool?.task_status) ? (
+                <Badge variant={badgeVariant(taskSnap?.task.status || pool?.task_status)}>
+                  {taskSnap?.task.status || pool?.task_status}
+                </Badge>
+              ) : null}
+              {taskSnap?.task.stage ? <Chip>{taskSnap.task.stage}</Chip> : null}
+              <Button variant="ghost" size="sm" onClick={() => setTaskPanel("detail")}>
+                任务详情
+              </Button>
+            </div>
+          ) : isWebPool ? (
+            <div className="flex flex-none flex-wrap items-center justify-end gap-2">
+              <Chip tone="accent">{isPrimary ? "主聊天 · 免审批" : "网页直聊 · 免审批"}</Chip>
+              {sendReview && (
+                <Button
+                  variant={isPrimary ? "default" : "ghost"}
+                  size="sm"
+                  disabled={reviewSaving}
+                  aria-pressed={isPrimary}
+                  title={
+                    isPrimary
+                      ? "主聊天：任务汇报与审批消息都发这里，点此取消"
+                      : "设为主聊天：IM 失效时任务汇报和审批消息仍发到网页直聊"
+                  }
+                  onClick={() => void setPrimaryPool(!isPrimary)}
+                >
+                  {isPrimary ? "主聊天 ✓" : "设为主聊天"}
+                </Button>
+              )}
               <Button variant="ghost" size="sm" disabled={archiving} onClick={() => void toggleArchive()}>
                 {pool?.archived ? "取消归档" : "归档"}
               </Button>
@@ -576,6 +1191,10 @@ export function ChatPage({
               ) : (
                 messages.map((m) => {
                   const stamp = m.local || formatTs(m.ts);
+                  const taskId =
+                    m.meta?.kind === "task_approval" && typeof m.meta.task_id === "number"
+                      ? m.meta.task_id
+                      : null;
                   const day = stamp.split(/[ T]/)[0];
                   const showDay = !!day && day !== previousDay;
                   const grouped =
@@ -640,6 +1259,66 @@ export function ChatPage({
                           >
                             {m.text || ""}
                           </div>
+                          {isWebPool && taskId !== null && pendingApprovals && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px]">
+                              {pendingApprovals.has(taskId) ? (
+                                rejectingId === taskId ? (
+                                  <>
+                                    <Input
+                                      value={rejectReason}
+                                      onChange={(e) => setRejectReason(e.target.value)}
+                                      placeholder="驳回原因（必填）"
+                                      aria-label={`任务 #${taskId} 驳回原因`}
+                                      className="h-8 min-w-[180px] flex-1 text-[12px]"
+                                    />
+                                    <Button
+                                      variant="primary"
+                                      size="sm"
+                                      disabled={!rejectReason.trim() || decidingId === taskId}
+                                      onClick={() => void decideTask(taskId, "reject", rejectReason.trim())}
+                                    >
+                                      {decidingId === taskId ? "驳回中…" : "确认驳回"}
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={decidingId === taskId}
+                                      onClick={() => {
+                                        setRejectingId(null);
+                                        setRejectReason("");
+                                      }}
+                                    >
+                                      取消
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button
+                                      variant="primary"
+                                      size="sm"
+                                      disabled={decidingId === taskId}
+                                      onClick={() => void decideTask(taskId, "approve")}
+                                    >
+                                      {decidingId === taskId ? "处理中…" : "同意并启动"}
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={decidingId === taskId}
+                                      onClick={() => {
+                                        setRejectingId(taskId);
+                                        setRejectReason("");
+                                      }}
+                                    >
+                                      驳回
+                                    </Button>
+                                  </>
+                                )
+                              ) : (
+                                <span className="text-faint">已处理</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </article>
                     </Fragment>
@@ -705,113 +1384,169 @@ export function ChatPage({
       </section>
 
       <aside className="rb-thin-scroll min-h-0 overflow-y-auto border-l border-border bg-surface p-3.5 max-[1200px]:hidden">
-        <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
-            会话信息
-          </div>
-          {pool ? (
-            <>
-              <dl className="rb-kv">
-                <dt>pool_id</dt>
-                <dd>
-                  <code className="font-mono text-[10.5px]">{pool.pool_id}</code>
-                </dd>
-                <dt>类型</dt>
-                <dd>{isWebPool ? "网页直聊" : kindLabel(pool.kind)}</dd>
-                <dt>渠道</dt>
-                <dd>{platformLabel(pool.platform)}</dd>
-                <dt>消息</dt>
-                <dd>{pool.total || 0} 条</dd>
-                <dt>最后</dt>
-                <dd>{pool.last_msg_local || "—"}</dd>
-              </dl>
-              <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted">
-                {isWebPool
-                  ? "网页直聊：在浏览器或这个页面发消息都会进同一个池，机器人回复免审批直接写回。"
-                  : pool.is_main
-                    ? "主聊天：任务汇报与审批消息都发这里，发送永不审批。"
-                    : "只读值班台：修改发送策略只影响机器人后续发送。"}
-              </p>
-            </>
-          ) : (
-            <p className="m-0 text-[12px] text-muted">选择左侧会话查看信息。</p>
-          )}
-        </div>
+        {taskId !== null ? (
+          <TaskExecBoard
+            taskId={taskId}
+            pool={pool}
+            snap={taskSnap}
+            total={total}
+            pending={pendingApprovals}
+            decidingId={decidingId}
+            rejectingId={rejectingId}
+            rejectReason={rejectReason}
+            onRejectReasonChange={setRejectReason}
+            onDecide={(id, action, reason) => void decideTask(id, action, reason)}
+            onStartReject={(id) => {
+              setRejectingId(id);
+              setRejectReason("");
+            }}
+            onCancelReject={() => {
+              setRejectingId(null);
+              setRejectReason("");
+            }}
+            onOpenPanel={(panel) => setTaskPanel(panel)}
+            onOpenTask={onOpenTask}
+          />
+        ) : (
+          <>
+            <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+                会话信息
+              </div>
+              {pool ? (
+                <>
+                  <dl className="rb-kv">
+                    <dt>pool_id</dt>
+                    <dd>
+                      <code className="font-mono text-[10.5px]">{pool.pool_id}</code>
+                    </dd>
+                    <dt>类型</dt>
+                    <dd>{isWebPool ? "网页直聊" : kindLabel(pool.kind)}</dd>
+                    <dt>渠道</dt>
+                    <dd>{platformLabel(pool.platform)}</dd>
+                    <dt>消息</dt>
+                    <dd>{pool.total || 0} 条</dd>
+                    <dt>最后</dt>
+                    <dd>{pool.last_msg_local || "—"}</dd>
+                  </dl>
+                  <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted">
+                    {isWebPool
+                      ? "网页直聊：在浏览器或这个页面发消息都会进同一个池，机器人回复免审批直接写回。"
+                      : pool.is_main
+                        ? "主聊天：任务汇报与审批消息都发这里，发送永不审批。"
+                        : "只读值班台：修改发送策略只影响机器人后续发送。"}
+                  </p>
+                </>
+              ) : (
+                <p className="m-0 text-[12px] text-muted">选择左侧会话查看信息。</p>
+              )}
+            </div>
 
-        <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
-            发送策略
-          </div>
-          {pool && sendReview ? (
-            isWebPool ? (
-              <Notice tone="accent">
-                网页直聊固定直接发：消息在浏览器里往返，不进入审批流程。
-              </Notice>
-            ) : isPrimary ? (
-              <Notice tone="accent">
-                主聊天永远免审批；任务汇报只发这里，审批消息也发这里。
-              </Notice>
-            ) : (
-              <>
-                <p className="m-0 mb-2 text-[11.5px] leading-relaxed text-muted">
-                  这个会话当前：
-                  <b className="text-text">{effectiveReview ? "需审批" : "直接发"}</b>
-                  。改策略只影响后续机器人发送。
-                </p>
-                <Segmented
-                  value={effectiveReview ? "review" : "direct"}
-                  options={[
-                    { value: "direct", label: "直接发" },
-                    { value: "review", label: "需审批" },
-                  ]}
-                  onChange={(value) => void changePoolReview(value)}
-                  label="发送审批"
-                />
-              </>
-            )
-          ) : (
-            <p className="m-0 text-[11.5px] text-muted">发送审核接口不可用。</p>
-          )}
-          {pool && sendReview && !isWebPool ? (
-            <>
-              <div className="my-3 h-px bg-border" />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                disabled={reviewSaving}
-                onClick={() => void setPrimaryPool(!isPrimary)}
-              >
-                {isPrimary ? "取消主聊天" : "设为主聊天"}
-              </Button>
-            </>
-          ) : null}
-        </div>
+            <div className="mb-2.5 rounded-[11px] border border-border bg-surface p-3">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+                发送策略
+              </div>
+              {pool && sendReview ? (
+                isWebPool ? (
+                  <Notice tone="accent">
+                    网页直聊固定直接发：消息在浏览器里往返，不进入审批流程。
+                    {isPrimary ? "当前是主聊天，任务汇报和审批消息也发这里。" : ""}
+                  </Notice>
+                ) : isPrimary ? (
+                  <Notice tone="accent">
+                    主聊天永远免审批；任务汇报只发这里，审批消息也发这里。
+                  </Notice>
+                ) : (
+                  <>
+                    <p className="m-0 mb-2 text-[11.5px] leading-relaxed text-muted">
+                      这个会话当前：
+                      <b className="text-text">{effectiveReview ? "需审批" : "直接发"}</b>
+                      。改策略只影响后续机器人发送。
+                    </p>
+                    <Segmented
+                      value={effectiveReview ? "review" : "direct"}
+                      options={[
+                        { value: "direct", label: "直接发" },
+                        { value: "review", label: "需审批" },
+                      ]}
+                      onChange={(value) => void changePoolReview(value)}
+                      label="发送审批"
+                    />
+                  </>
+                )
+              ) : (
+                <p className="m-0 text-[11.5px] text-muted">发送审核接口不可用。</p>
+              )}
+              {pool && sendReview ? (
+                <>
+                  <div className="my-3 h-px bg-border" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    disabled={reviewSaving}
+                    onClick={() => void setPrimaryPool(!isPrimary)}
+                  >
+                    {isPrimary ? "取消主聊天" : "设为主聊天"}
+                  </Button>
+                </>
+              ) : null}
+            </div>
 
-        <div className="rounded-[11px] border border-border bg-surface p-3">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
-            最近消息
-          </div>
-          {recentMessages.length ? (
-            <ol className="m-0 grid list-none gap-2 p-0 text-[11px]">
-              {recentMessages.map((m) => (
-                <li key={m.seq} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2 text-muted">
-                  <time className="font-mono text-[10px] text-faint tabular-nums">
-                    {(m.local || formatTs(m.ts)).match(/\d{2}:\d{2}/)?.[0] || "—"}
-                  </time>
-                  <span className="min-w-0">
-                    <b className="text-text">{m.sender || "未知"}</b>
-                    <span className="mt-0.5 block truncate">{m.text || ""}</span>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="m-0 text-[11.5px] text-muted">还没有消息。</p>
-          )}
-        </div>
+            <div className="rounded-[11px] border border-border bg-surface p-3">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+                最近消息
+              </div>
+              {recentMessages.length ? (
+                <ol className="m-0 grid list-none gap-2 p-0 text-[11px]">
+                  {recentMessages.map((m) => (
+                    <li key={m.seq} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2 text-muted">
+                      <time className="font-mono text-[10px] text-faint tabular-nums">
+                        {(m.local || formatTs(m.ts)).match(/\d{2}:\d{2}/)?.[0] || "—"}
+                      </time>
+                      <span className="min-w-0">
+                        <b className="text-text">{m.sender || "未知"}</b>
+                        <span className="mt-0.5 block truncate">{m.text || ""}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="m-0 text-[11.5px] text-muted">还没有消息。</p>
+              )}
+            </div>
+          </>
+        )}
       </aside>
       </div>
+
+      {taskId !== null && taskPanel !== null ? (
+        <Drawer
+          title={
+            <span className="inline-flex items-center gap-2">
+              <span className="font-mono text-[13px] font-normal text-muted">#{taskId}</span>
+              {taskSnap?.task.name || pool?.task_name || "任务"}
+            </span>
+          }
+          onClose={() => setTaskPanel(null)}
+        >
+          <Segmented
+            value={taskPanel}
+            options={[
+              { value: "detail", label: "任务详情" },
+              { value: "doc", label: "指导文件" },
+              { value: "outputs", label: "任务产出" },
+            ]}
+            onChange={setTaskPanel}
+            label="任务面板"
+          />
+          <div className="mt-3">
+            {taskPanel === "detail" ? <TaskDetailPanel snap={taskSnap} /> : null}
+            {taskPanel === "doc" ? <TaskDocPanel taskId={taskId} /> : null}
+            {taskPanel === "outputs" ? <TaskOutputsPanel taskId={taskId} /> : null}
+          </div>
+        </Drawer>
+      ) : null}
     </div>
   );
 }

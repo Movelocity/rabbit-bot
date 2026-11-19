@@ -88,6 +88,16 @@ test("PUT /v1/send-review：保存并立即改 cfg，按池覆盖 / 主对话可
   assert.deepEqual(saved.overrides, { "feishu:g1": true, "feishu:g2": false });
 });
 
+test("PUT /v1/send-review：任务池不能设为主聊天", async () => {
+  store.upsertPool("task", "task:1", "task", "#任务");
+  const r = await call("/v1/send-review", {
+    method: "PUT",
+    body: JSON.stringify({ enabled: false, defaultReview: false, primaryPoolId: "task:task:1", overrides: {} }),
+  });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.match(String(r.body.error), /内部池/);
+});
+
 test("GET /v1/pools：主聊天带 is_main，其他池不带", async () => {
   store.upsertPool("feishu", "g2", "private", "另一个会话");
   const r = await call("/v1/pools");

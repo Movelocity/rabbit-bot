@@ -121,14 +121,14 @@ export class Hub {
     platform: string,
     chatId: string,
     text: string,
-    opts: { remember?: boolean } = {},
+    opts: { remember?: boolean; meta?: Record<string, unknown> } = {},
   ): Promise<{ ok: boolean; error?: string; msgId?: string }> {
     const adapter = this.adapters.get(platform);
     if (!adapter) return { ok: false, error: `平台 ${platform} 没有可用的适配器` };
     try {
       // msgId 要往上带：审批闸门靠它认「表情贴在哪一条上」
       const r = await adapter.sendText(chatId, text);
-      if (opts.remember) this.rememberSystem(adapter.platform, chatId, text, r?.msgId);
+      if (opts.remember) this.rememberSystem(adapter.platform, chatId, text, r?.msgId, opts.meta);
       return { ok: true, msgId: r?.msgId };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -142,14 +142,14 @@ export class Hub {
    * 同一个通知在飞书里等于被隐藏——她看不到审批提示和裁决回执，接不上后面的对话。
    * 这里显式补一条 from_self（不是未读、不触发唤醒），把两边行为对齐。
    */
-  private rememberSystem(platform: Platform, chatId: string, text: string, msgId?: string) {
+  private rememberSystem(platform: Platform, chatId: string, text: string, msgId?: string, meta?: Record<string, unknown>) {
     const pool = this.store.getPool(Store.poolIdFor(platform, chatId));
     if (!pool) return; // 没聊过的聊天不凭空建池
     this.store.insertMessage({
       platform, external_chat_id: chatId, pool_kind: pool.kind, pool_title: pool.title,
       msg_id: msgId || `system:${platform}:${chatId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
       sender_id: "self", sender_name: this.cfg.agent.name, ts: Date.now(), text, reply_to: null,
-      mentions: [], is_mention_me: false, media_type: "text", from_self: true,
+      mentions: [], is_mention_me: false, media_type: "text", from_self: true, meta: meta ?? null,
     });
   }
 

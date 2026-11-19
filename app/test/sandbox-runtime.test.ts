@@ -92,3 +92,33 @@ test("任务文档带最佳实践和交接文档落点", () => {
   assert.match(doc, /RB_SHARED_DIR/);
   assert.match(doc, /未指定：按仓库约定和 WA 最佳实践处理/);
 });
+
+test("任务关联项目时，文档带 shared/projects/<slug>/ 的绝对路径", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-rt-proj-"));
+  const shared = path.join(dir, "shared");
+  fs.mkdirSync(path.join(shared, "projects", "demo"), { recursive: true });
+  fs.writeFileSync(path.join(shared, "projects", "demo", "context.md"), "# demo\n", "utf8");
+  const task = {
+    id: 8, name: "#demo", goal: "做点事", deliverable: "", constraints: "", acceptance: "",
+    files: "[]", work_dir: "/tmp/work", executor: "opencode", session_id: "",
+    context: JSON.stringify({ objects: ["project:demo"], relations: [], forbidden: [] }),
+  } as any;
+  const doc = renderTaskDoc(task, { sharedDir: shared });
+  assert.match(doc, /## 项目文档/);
+  assert.match(doc, /projects\/demo\/context\.md/);
+  assert.match(doc, /projects\/demo\/plan\.md`（未找到，按约定创建）/);
+  assert.match(doc, /\$RB_SHARED_DIR\/projects\/demo\/context\.md/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("关联项目 slug 非法时不拼出越界路径", () => {
+  const shared = "/tmp/rb-runtime/shared";
+  const task = {
+    id: 9, name: "#bad", goal: "x", deliverable: "", constraints: "", acceptance: "",
+    files: "[]", work_dir: "/tmp/work", executor: "opencode", session_id: "",
+    context: JSON.stringify({ objects: ["project:../etc", "project:ok"], relations: [], forbidden: [] }),
+  } as any;
+  const doc = renderTaskDoc(task, { sharedDir: shared });
+  assert.match(doc, /projects\/ok\//);
+  assert.doesNotMatch(doc, /etc/);
+});

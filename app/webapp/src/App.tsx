@@ -228,6 +228,10 @@ export default function App() {
               currentPool={currentPool}
               onCurrentPoolChange={setCurrentPool}
               reloadSignal={reloadSignal}
+              onOpenTask={(id) => {
+                setTaskFocus(id);
+                setTab("tasks");
+              }}
             />
           )}
           {tab === "tasks" && (
@@ -247,7 +251,15 @@ export default function App() {
               }}
             />
           )}
-          {tab === "projects" && <ProjectsPage reloadSignal={reloadSignal} />}
+          {tab === "projects" && (
+            <ProjectsPage
+              reloadSignal={reloadSignal}
+              onOpenTask={(id) => {
+                setTaskFocus(id);
+                setTab("tasks");
+              }}
+            />
+          )}
           {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
           {tab === "business" && <BusinessPage reloadSignal={reloadSignal} />}
           {tab === "manage" && (

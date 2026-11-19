@@ -29,7 +29,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
-import { getTask, updateTask, type Task } from "./tasks.ts";
+import { getTask, taskProjectSlugs, updateTask, type Task } from "./tasks.ts";
 import { appendTaskEvent } from "./task-events.ts";
 import { parseRunnerUsage, runnerLogPath, taskUsagePatch } from "./task-usage.ts";
 import { procStartTime } from "./lockfile.ts";
@@ -250,6 +250,26 @@ function cleanupLegacyTaskDoc(task: Pick<Task, "id" | "work_dir">, docPath: stri
   }
 }
 
+/** 任务关联项目时，把 shared/projects/<slug>/ 的文档路径写进任务文档，WA 开工前直接读。 */
+function renderProjectDocs(task: Task, shared: string): string[] {
+  const projects = taskProjectSlugs(task);
+  if (!projects.length || !shared) return [];
+  const exists = (file: string) => { try { return fs.existsSync(file); } catch { return false; } };
+  const mark = (file: string) => exists(file) ? "" : "（未找到，按约定创建）";
+  const lines = ["## 项目文档", ""];
+  for (const slug of projects) {
+    const dir = path.join(shared, "projects", slug);
+    const contextFile = path.join(dir, "context.md");
+    const planFile = path.join(dir, "plan.md");
+    lines.push(`- 项目 \`${slug}\``);
+    lines.push(`  - 上下文（宿主）：\`${contextFile}\`${mark(contextFile)}`);
+    lines.push(`  - 计划（宿主）：\`${planFile}\`${mark(planFile)}`);
+    lines.push(`  - 沙盒：\`$RB_SHARED_DIR/projects/${slug}/context.md\`、\`$RB_SHARED_DIR/projects/${slug}/plan.md\``);
+  }
+  lines.push("", "开工前先读项目上下文和计划；任务文档只引用路径，不要把文档整段复制进交接。", "");
+  return lines;
+}
+
 /** 任务文档：人/执行器都能直接照着做，更新方式用 curl 写死，token 只引用环境变量。 */
 export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?: string; sharedDir?: string; businessDir?: string; map?: BusinessMap | null } = {}): string {
   const id = task.id;
@@ -291,6 +311,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     `\`${task.work_dir}\``,
     "",
     ...(business ? [business, ""] : []),
+    ...(shared ? renderProjectDocs(task, shared) : []),
     ...(shared ? [
       "## 开工前",
       "",

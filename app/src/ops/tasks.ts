@@ -1,7 +1,7 @@
 /** 任务面板只读格式化：API / Web 共用，不写库。 */
 import type { Store } from "../core/db.ts";
 import type { Task, TaskFilter } from "../core/tasks.ts";
-import { getTask, listTasks, parseTaskContext, taskDisplayName } from "../core/tasks.ts";
+import { getTask, listTasks, parseTaskContext, taskDisplayName, taskProjectSlugs } from "../core/tasks.ts";
 import { listTaskEvents } from "../core/task-events.ts";
 import { fmtLocal } from "../core/time.ts";
 
@@ -21,6 +21,7 @@ export function formatTask(t: Task) {
     acceptance: t.acceptance,
     files: t.files,
     context: parseTaskContext(t.context),
+    projects: taskProjectSlugs(t),
     result: t.result,
     artifact: t.artifact,
     work_dir: t.work_dir,

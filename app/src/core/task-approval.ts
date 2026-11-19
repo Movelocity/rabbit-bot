@@ -56,6 +56,30 @@ interface Pending {
 
 const DEFAULT_TIMEOUT_MS = 24 * 3600_000;
 
+/** 审批超时取配置值；各处格式化与计时用同一个口径。 */
+export function taskApprovalTimeoutMs(cfg: TaskApprovalConfig): number {
+  return Math.max(1000, cfg.timeoutMs || DEFAULT_TIMEOUT_MS);
+}
+
+/** 按投递平台生成裁决提示：飞书贴表情、Matrix 点赞点踩、网页只需知道超时口径。 */
+export function approvalHints(platform: string, timeoutMs: number): string[] {
+  if (platform === "web") {
+    return [`（超时 ${humanTimeout(timeoutMs)} 不回＝拒绝）`];
+  }
+  if (platform === "matrix") {
+    return [
+      "同意：给这条消息点 👍",
+      "拒绝：点 👎",
+      `（超时 ${humanTimeout(timeoutMs)} 不回＝拒绝；这是系统审批消息，点表情即可，不用在这里回复）`,
+    ];
+  }
+  return [
+    "同意：给这条消息贴 OK / 👍 表情",
+    "拒绝：贴 No / 👎 表情",
+    `（超时 ${humanTimeout(timeoutMs)} 不回＝拒绝；这是系统审批消息，贴表情即可，不用在这里回复）`,
+  ];
+}
+
 function clip(s: string, n: number): string {
   const t = String(s ?? "").trim().replace(/\s+/g, " ");
   return t.length > n ? `${t.slice(0, n)}…` : t;
@@ -69,7 +93,7 @@ function approvalTitle(task: Task): string {
 }
 
 /** 任务审批提示：只放主人做决定需要看的信息，太长就截。 */
-export function formatTaskApprovalText(task: Task, timeoutMs: number): string {
+export function formatTaskApprovalText(task: Task, timeoutMs: number, platform = "feishu"): string {
   const line = (label: string, value: string, max = 300) => {
     const t = clip(value, max);
     return t ? `${label}：${t}` : "";
@@ -80,9 +104,7 @@ export function formatTaskApprovalText(task: Task, timeoutMs: number): string {
     `目录：${clip(task.work_dir, 300)}`,
     `执行器：${task.executor || "opencode"}${task.model ? ` · 模型 ${clip(task.model, 80)}` : ""}`,
     "",
-    "同意：给这条消息贴 OK / 👍 表情",
-    "拒绝：贴 No / 👎 表情",
-    `（超时 ${humanTimeout(timeoutMs)} 不回＝拒绝；这是系统审批消息，贴表情即可，不用在这里回复）`,
+    ...approvalHints(platform, timeoutMs),
   ].filter((x) => x !== "").join("\n");
 }
 
@@ -96,6 +118,7 @@ export class TaskApprovalGate {
     private send: (
       target: TaskApprovalTarget,
       text: string,
+      meta?: Record<string, unknown>,
     ) => Promise<{ ok: boolean; error?: string; msgId?: string }>,
     private hooks: TaskApprovalHooks,
   ) {}
@@ -126,13 +149,16 @@ export class TaskApprovalGate {
       return false;
     }
 
-    const timeoutMs = Math.max(1000, this.cfg.timeoutMs || DEFAULT_TIMEOUT_MS);
+    const timeoutMs = taskApprovalTimeoutMs(this.cfg);
     const timer = setTimeout(() => this.onTimeout(task.id), timeoutMs);
     (timer as any).unref?.();
     const p: Pending = { task, target: to, createdAt: Date.now(), timer, promptEventId: null };
     this.pending.set(task.id, p);
 
-    const r = await this.send(to, formatTaskApprovalText(task, timeoutMs));
+    const r = await this.send(to, formatTaskApprovalText(task, timeoutMs, to.platform), {
+      kind: "task_approval",
+      task_id: task.id,
+    });
     if (!r.ok) {
       clearTimeout(timer);
       this.pending.delete(task.id);

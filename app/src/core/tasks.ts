@@ -125,6 +125,21 @@ export function parseTaskContext(raw: string | null | undefined): Required<TaskC
   };
 }
 
+/** 业务地图里项目对象的 id 前缀：project:<slug> 同时指向 shared/projects/<slug>/。 */
+export const PROJECT_OBJECT_PREFIX = "project:";
+
+/** 任务关联的项目 slug；非法 slug（带路径分隔符/空）直接丢掉，避免拼出越界路径。 */
+export function taskProjectSlugs(task: Pick<Task, "context">): string[] {
+  const out: string[] = [];
+  for (const id of parseTaskContext(task.context).objects) {
+    if (!id.startsWith(PROJECT_OBJECT_PREFIX)) continue;
+    const slug = id.slice(PROJECT_OBJECT_PREFIX.length).trim();
+    if (!slug || slug === "." || slug === ".." || /[\\/]/.test(slug)) continue;
+    out.push(slug);
+  }
+  return [...new Set(out)];
+}
+
 function normalizeFiles(files: CreateTaskInput["files"]): string {
   if (Array.isArray(files)) return JSON.stringify(files);
   if (typeof files === "string") return files;

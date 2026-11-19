@@ -25,12 +25,12 @@ import {
   BOARD_STATUSES, type BoardStatus,
 } from "./core/board.ts";
 import { formatBoard } from "./ops/board.ts";
-import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, updateTask, type Task } from "./core/tasks.ts";
+import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, taskProjectSlugs, updateTask, type Task } from "./core/tasks.ts";
 import {
   WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
 } from "./core/workers.ts";
 import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
-import { resumeTask, runnerAlive, startTask, stopTask, writeTaskDoc } from "./core/dispatch.ts";
+import { resumeTask, runnerAlive, startTask, stopTask, taskDocPath, writeTaskDoc } from "./core/dispatch.ts";
 import {
   APPROVAL_STATUSES, ApprovalConflictError, createApproval, decideApproval, getApproval,
   isApprovalStatus,
@@ -591,6 +591,20 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (!view) throw new HttpError(404, `没有任务 #${id}`);
             return reply(200, view);
           }
+          if (parts.length === 4 && parts[3] === "doc" && method === "GET") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            const docPath = taskDocPath(task, d.cfg.runtimeDir);
+            let content = "";
+            let exists = false;
+            try {
+              content = fs.readFileSync(docPath, "utf8");
+              exists = true;
+            } catch {
+              exists = false;
+            }
+            return reply(200, { path: docPath, exists, content });
+          }
           if (parts.length === 4 && parts[3] === "events" && method === "GET") {
             if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
             const messages = listTaskEvents(d.store, id, { limit: qInt(url.searchParams.get("limit")) });
@@ -789,6 +803,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 status: task.status,
                 stage: task.stage,
                 note: task.note,
+                projects: taskProjectSlugs(task),
                 result: task.result,
                 artifact: task.artifact,
                 work_dir: task.work_dir,
@@ -1035,6 +1050,11 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             // 主对话必须真实存在，避免写进一个永远收不到审批的池
             if (settings.primaryPoolId && !d.store.getPool(settings.primaryPoolId)) {
               throw new HttpError(400, `没有这个会话池：${settings.primaryPoolId}`);
+            }
+            // 任务池是内部执行池，不能当主聊天（任务汇报/审批不该发进任务会话）
+            const primaryPool = settings.primaryPoolId ? d.store.getPool(settings.primaryPoolId) : null;
+            if (primaryPool?.kind === "task") {
+              throw new HttpError(400, "任务会话是内部池，不能设为主聊天");
             }
             // 没配审批去处时不允许打开：否则所有出站消息都会 fail-closed 被拦下。
             // 用这次要保存的设置算，而不是还没应用的旧 cfg，否则「刚指定主对话就打开」会被误拒。
