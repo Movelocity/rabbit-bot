@@ -10,7 +10,7 @@ import { createTask, getTask, updateTask } from "../src/core/tasks.ts";
 import { completeTask } from "../src/core/workers.ts";
 import { listTaskEvents } from "../src/core/task-events.ts";
 import {
-  isRunnerAlive, resumeTask, startTask, stopTask, sweepDeadRunners, writeTaskDoc,
+  buildOpencodeArgs, isRunnerAlive, resumeTask, startTask, stopTask, sweepDeadRunners, writeTaskDoc,
 } from "../src/core/dispatch.ts";
 
 const root = path.join(APP_ROOT, ".scratch", "dispatch-test");
@@ -108,6 +108,10 @@ test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变�
   assert.match(text, /notes\.md 有结论/);
   assert.match(text, /a\.txt/);
   assert.match(text, new RegExp(workDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // 文档自带目录核对规则：当前目录不是 work_dir 就直接结束任务
+  assert.match(text, /pwd -P/);
+  assert.match(text, /realpath/);
+  assert.match(text, /结束任务/);
   assert.match(text, new RegExp(`# 任务 #${task.id}`));
   assert.match(text, new RegExp(`/v1/tasks/${task.id}/progress`));
   assert.match(text, new RegExp(`/v1/tasks/${task.id}/complete`));
@@ -148,8 +152,8 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   const argv: string[] = record.argv;
   assert.equal(argv[0], "run");
   assert.equal(argv[1], `读 ${docPath} 并执行`);
-  // opencode v2 的 run 不认 --dir / --directory（后者只在子命令前有效），
-  // 工作目录由 spawn 的 cwd 决定：带 --dir 会让进程 81ms 就退出（任务 #1，2026-11-15）。
+  // 显式 executorBin（测试假执行器）不做版本探测，走旧的兜底参数：
+  // 工作目录由 spawn 的 cwd 决定，不带 --dir / --directory。
   assert.equal(argv.includes("--dir"), false, `argv 不该带 --dir：${argv.join(" ")}`);
   assert.equal(argv.includes("--directory"), false, `argv 不该带 --directory：${argv.join(" ")}`);
   assert.ok(argv.includes("--title"));
@@ -236,6 +240,56 @@ test("startTask：model 分别走 -m / --model", async () => {
   assert.ok(argv2.includes("--dangerously-skip-permissions"), `mimo 启动参数缺无审批 flag：${argv2.join(" ")}`);
   store.close();
   store2.close();
+});
+
+test("opencode 参数按版本能力拼：老版本认 --dir/--auto，新版本不认 --dir 时退回全局 --directory", () => {
+  const task = {
+    id: 7, name: "#纪要", goal: "整理会议纪要", executor: "opencode",
+    model: "provider/model-a", work_dir: workDir, session_id: "ses_old",
+  } as any;
+
+  // 旧版：run 认 --dir，无审批 --auto。
+  const oldArgs = buildOpencodeArgs(task, "读 doc 并执行", false, {
+    dir: true, directory: false, session: "long", model: "long",
+    title: true, formatJson: true, permission: "--auto",
+  });
+  assert.deepEqual(oldArgs, [
+    "run", "--dir", workDir, "读 doc 并执行",
+    "--title", "#7 纪要", "--format", "json", "--model", "provider/model-a", "--auto",
+  ]);
+
+  // 新版：run 不认 --dir，目录走全局 --directory；无审批换回旧 flag。
+  const newArgs = buildOpencodeArgs(task, "继续任务，先读 doc", true, {
+    dir: false, directory: true, session: "short", model: "short",
+    title: true, formatJson: true, permission: "--dangerously-skip-permissions",
+  });
+  assert.deepEqual(newArgs, [
+    "--directory", workDir, "run", "继续任务，先读 doc", "-s", "ses_old",
+    "--title", "#7 纪要", "--format", "json", "-m", "provider/model-a",
+    "--dangerously-skip-permissions",
+  ]);
+  assert.equal(newArgs.includes("--dir"), false, "不认 --dir 的版本不能带，否则会秒退");
+});
+
+test("opencode 参数探测失败时保持旧行为；版本不支持恢复会话时明确报错", () => {
+  const task = {
+    id: 8, name: "#长任务", goal: "跑很久", executor: "opencode",
+    model: "", work_dir: workDir, session_id: "ses_old",
+  } as any;
+
+  const legacy = buildOpencodeArgs(task, "读 doc 并执行", true, null);
+  assert.deepEqual(legacy, [
+    "run", "读 doc 并执行", "-s", "ses_old", "--title", "#8 长任务",
+    "--format", "json", "--dangerously-skip-permissions",
+  ]);
+
+  assert.throws(
+    () => buildOpencodeArgs(task, "继续", true, {
+      dir: false, directory: false, session: null, model: null,
+      title: true, formatJson: true, permission: null,
+    }),
+    /不支持恢复会话/,
+  );
 });
 
 test("startTask / resumeTask：codex 用 exec --json、-C 工作目录，并从 thread_id 抓 session", async () => {

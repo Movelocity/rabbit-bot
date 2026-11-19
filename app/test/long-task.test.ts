@@ -1,9 +1,9 @@
-/** 长任务提醒：running 超过 10 分钟在任务池写一次 internal 提醒，不唤醒、不重复。 */
+/** 长任务提醒：running 超过 10 分钟在任务池写一次普通事件，算未读、会唤醒、不重复。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/core/db.ts";
 import { createTask, updateTask } from "../src/core/tasks.ts";
-import { listTaskEvents } from "../src/core/task-events.ts";
+import { listTaskEvents, setTaskEventNotifier } from "../src/core/task-events.ts";
 import { sweepLongRunningTasks } from "../src/core/dispatch.ts";
 
 const NOW = Date.parse("2026-11-11T03:00:00Z");
@@ -36,17 +36,25 @@ test("到 10 分钟提醒一次，再扫不重复", () => {
   assert.equal(events.length, 1);
   assert.match(events[0].text, /已持续 10 分钟，可能有异常/);
   assert.match(events[0].text, /勿回复此消息/);
+  assert.ok(
+    store.recentMessages(task.task_pool_id, 10).some((m) => /已持续 10 分钟/.test(m.text ?? "")),
+    "提醒要进 UFA 的上下文（recentMessages 不能把它排掉）",
+  );
 
   const again = sweepLongRunningTasks(store, { now: NOW + 60_000, thresholdMs: 10 * 60_000 });
   assert.deepEqual(again.warned, []);
   assert.equal(listTaskEvents(store, task.id).length, 1);
 });
 
-test("提醒是 internal：不算未读，不会唤醒任务 tick", () => {
+test("提醒是普通事件：算未读，能唤醒任务 tick", () => {
   const { store, task } = setup(NOW - 10 * 60_000);
+  let notified = 0;
+  setTaskEventNotifier(store, () => { notified += 1; });
   sweepLongRunningTasks(store, { now: NOW, thresholdMs: 10 * 60_000 });
-  assert.equal(store.unread(task.task_pool_id).length, 0);
-  assert.deepEqual(store.poolsWithUnread(), []);
+  assert.equal(store.unread(task.task_pool_id).length, 1);
+  assert.deepEqual(store.poolsWithUnread(), [task.task_pool_id]);
+  assert.equal(notified, 1, "写事件后要通知调度器，让任务 tick 尽快跑");
+  setTaskEventNotifier(store, null);
 });
 
 test("新一轮执行重置后可以再提醒一次", () => {

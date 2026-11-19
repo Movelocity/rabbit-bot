@@ -597,7 +597,7 @@ export class Store {
   }
   /** 未读：游标之后、非自己发的消息 */
   unread(poolId: string, limit = 200): StoredMessage[] {
-    // internal 是系统留痕（额度提示、长任务提醒等），不该被当成未读交给模型
+    // internal 是系统留痕（额度提示、故障提示等），不该被当成未读交给模型
     return this.messagesAfter(poolId, this.getCursor(poolId), limit).filter((m) => !m.from_self && !m.internal);
   }
   /** 未读条数：口径和 unread() 一致，只计数不搬正文，供池列表角标用。 */

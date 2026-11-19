@@ -10,7 +10,7 @@
  *      launcher 一退出，reaper 就被 launchd 收养，不再是 rabbit-bot 的后代；
  *      pm2 restart 的 treekill 按 ppid 找子孙，找不到它，所以执行器能活过重启。
  *      reaper 只干三件事：spawn、把 pid/命令行写进 runner.state.json、wait 退出码写回同一文件。
- *   3. resumeTask 用同一个 session id（-s <id>）再启动；
+ *   3. resumeTask 用同一个 session id（-s/--session <id>）再启动；
  *   4. stopTask 杀执行器进程组（执行器自己是组长），cancel 时用；
  *   5. sweepDeadRunners 负责「重启后接管」：pid 还活着就重新挂上 1s 探活 watcher，
  *      死了就用状态文件里的退出码补事件和用量，进程没了但没留下退出信息就记「巡检发现进程不存在」。
@@ -25,7 +25,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { APP_ROOT } from "../config.ts";
 import type { Store } from "./db.ts";
@@ -310,6 +310,8 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "## 工作目录",
     `\`${task.work_dir}\``,
     "",
+    `开工前先核对：\`pwd -P\` 必须等于 \`realpath '${task.work_dir}'\`。当前目录不是这个路径时，直接调用 fail 结束任务（error 写实际目录），不要换目录继续；工作目录下的子目录仍算在工作目录内。`,
+    "",
     ...(business ? [business, ""] : []),
     ...(shared ? renderProjectDocs(task, shared) : []),
     ...(shared ? [
@@ -397,6 +399,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "",
     "## 执行要求",
     "",
+    `- 开工先核对当前目录：\`pwd -P\` 要与 \`realpath '${task.work_dir}'\` 一致；不一致立即 \`fail\` 结束任务并写实际目录，不要自行切换目录继续。`,
     "- 开始执行时先读 WA 最佳实践和 `handoffs/` 里的同主题旧交接，再调用一次 progress（`stage=working`）。",
     "- 每次被启动或恢复执行都重新 progress 一次；结束时重新回传本次结果（即使上一轮已经完成过）。",
     "- 完成或失败必须回传：调用 complete 或 fail，不要只写文件就结束。",
@@ -769,11 +772,11 @@ export interface LongRunningSweepResult {
 }
 
 /**
- * 长任务提醒：running 且超过阈值（默认 10 分钟）的任务，在任务池写一条 internal 提醒。
+ * 长任务提醒：running 且超过阈值（默认 10 分钟）的任务，在任务池写一条普通事件。
  *
  * 只提醒一次：用 `UPDATE ... WHERE long_run_notified_at IS NULL` 原子认领；
  * 每次启动/恢复任务时把这个字段清空，所以「同一轮执行」只提醒一次。
- * 消息标 internal 且不通知调度器：只留痕给任务面板/事件接口，不唤醒 UFA，也不进上下文。
+ * 不标 internal、不关 notify：事件算任务池未读，会触发任务 tick 并让 UFA 在上下文里看到。
  */
 export function sweepLongRunningTasks(
   store: Store,
@@ -799,8 +802,6 @@ export function sweepLongRunningTasks(
       text: `任务 #${task.id} 已持续 ${mins} 分钟，可能有异常。勿回复此消息。`,
       sender: "dispatcher",
       senderName: "调度器",
-      internal: true,
-      notify: false,
     });
   }
   return { checked: running.length, warned };
@@ -816,7 +817,129 @@ export function sessionTitle(task: Task): string {
   return `#${task.id} ${label.length > 48 ? label.slice(0, 47) + "…" : label || "任务"}`;
 }
 
-function executorArgs(task: Task, prompt: string, resume: boolean): { bin: string; args: string[] } {
+/**
+ * opencode / mimo 的 argv 能力，按安装版本探测。
+ *
+ * 不同版本的 run 子命令参数并不一致：例如某个 v2 版本不认 `--dir`，带上就 81ms
+ * 退出 code=1；又比如无审批开关从 `--dangerously-skip-permissions` 改成了 `--auto`。
+ * 所以不写死整套参数：先读一次 `run --help` / `--help`，只带当前版本认识的 flag。
+ * 探测失败（自定义包装器、测试假执行器）就退回旧参数，保证行为不变。
+ */
+export interface OpencodeCaps {
+  /** `run --help` 里能看到 `--dir` */
+  dir: boolean;
+  /** 全局 help 里能看到 `--directory`（旧版在子命令前传） */
+  directory: boolean;
+  session: "long" | "short" | null;
+  model: "long" | "short" | null;
+  title: boolean;
+  formatJson: boolean;
+  permission: "--auto" | "--dangerously-skip-permissions" | "--yolo" | null;
+}
+
+const opencodeCapsCache = new Map<string, OpencodeCaps | null>();
+
+function helpText(bin: string, args: string[]): string {
+  const plan = spawnPlan(bin, args);
+  try {
+    const r = spawnSync(plan.file, plan.args, {
+      encoding: "utf8", timeout: 2000, shell: plan.shell, windowsHide: true,
+    });
+    if (r.status !== 0) return "";
+    return `${r.stdout ?? ""}\n${r.stderr ?? ""}`;
+  } catch {
+    return "";
+  }
+}
+
+/** 精确匹配 `--flag` / `-f`，避免 `--dir` 命中 `--directory` 之类的子串。 */
+function listsFlag(help: string, long: string, short?: string): boolean {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const longRe = new RegExp(`(^|[\\s,])${esc(long)}(?=[\\s,=]|$)`, "m");
+  if (longRe.test(help)) return true;
+  if (!short) return false;
+  return new RegExp(`(^|[\\s,])${esc(short)}(?=[\\s,]|$)`, "m").test(help);
+}
+
+function probeOpencodeCaps(bin: string): OpencodeCaps | null {
+  let key = bin;
+  try {
+    const st = fs.statSync(bin);
+    key = `${bin}|${st.mtimeMs}|${st.size}`;
+  } catch { /* 拿不到 stat 就按路径缓存 */ }
+  if (opencodeCapsCache.has(key)) return opencodeCapsCache.get(key)!;
+
+  const runHelp = helpText(bin, ["run", "--help"]);
+  const globalHelp = helpText(bin, ["--help"]);
+  let caps: OpencodeCaps | null = null;
+  if (runHelp || globalHelp) {
+    const all = `${globalHelp}\n${runHelp}`;
+    caps = {
+      dir: listsFlag(runHelp, "--dir"),
+      directory: listsFlag(globalHelp, "--directory") || listsFlag(runHelp, "--directory"),
+      session: listsFlag(runHelp, "--session") ? "long"
+        : listsFlag(runHelp, "-s") ? "short"
+          : listsFlag(globalHelp, "--session") ? "long"
+            : listsFlag(globalHelp, "-s") ? "short" : null,
+      model: listsFlag(runHelp, "--model") ? "long"
+        : listsFlag(runHelp, "-m") ? "short"
+          : listsFlag(globalHelp, "--model") ? "long"
+            : listsFlag(globalHelp, "-m") ? "short" : null,
+      title: listsFlag(runHelp, "--title") || listsFlag(globalHelp, "--title"),
+      formatJson: listsFlag(runHelp, "--format") || listsFlag(globalHelp, "--format"),
+      permission: listsFlag(all, "--auto") ? "--auto"
+        : listsFlag(all, "--dangerously-skip-permissions") ? "--dangerously-skip-permissions"
+          : listsFlag(all, "--yolo") ? "--yolo" : null,
+    };
+  }
+  opencodeCapsCache.set(key, caps);
+  return caps;
+}
+
+/** 按探测结果拼 opencode/mimo 参数；caps=null 表示没探测到，按旧版参数兜底。 */
+export function buildOpencodeArgs(
+  task: Task,
+  prompt: string,
+  resume: boolean,
+  caps: OpencodeCaps | null,
+): string[] {
+  const executor = normalizeExecutor(task.executor);
+  const args: string[] = [];
+  // `--directory` 要放在子命令前；`--dir` 放在 run 后面。cwd 始终是最低保障。
+  if (caps?.directory) args.push("--directory", String(task.work_dir ?? ""));
+  args.push("run");
+  if (caps?.dir) args.push("--dir", String(task.work_dir ?? ""));
+  args.push(prompt);
+
+  if (resume) {
+    if (!caps) args.push("-s", task.session_id);
+    else if (caps.session === "long") args.push("--session", task.session_id);
+    else if (caps.session === "short") args.push("-s", task.session_id);
+    else throw new Error("当前执行器不支持恢复会话（help 里没有 --session / -s），请升级或换执行器");
+  }
+
+  if (!caps || caps.title) args.push("--title", sessionTitle(task));
+  if (!caps || caps.formatJson) args.push("--format", "json");
+
+  const model = String(task.model ?? "").trim();
+  if (model) {
+    if (!caps) args.push(executor === "mimo" ? "--model" : "-m", model);
+    else if (caps.model === "long") args.push("--model", model);
+    else if (caps.model === "short") args.push("-m", model);
+    // 探测到该版本没有 model 参数：宁可不传，也别因为未知 flag 起不来
+  }
+
+  if (!caps) args.push("--dangerously-skip-permissions");
+  else if (caps.permission) args.push(caps.permission);
+  return args;
+}
+
+function executorArgs(
+  task: Task,
+  prompt: string,
+  resume: boolean,
+  opts: { binPath?: string; probe?: boolean } = {},
+): string[] {
   const executor = normalizeExecutor(task.executor);
   const model = String(task.model ?? "").trim();
   if (executor === "codex") {
@@ -829,7 +952,7 @@ function executorArgs(task: Task, prompt: string, resume: boolean): { bin: strin
     if (model) args.push("-m", model);
     if (resume) args.push("resume", task.session_id, prompt);
     else args.push(prompt);
-    return { bin: CODEX_BIN, args };
+    return args;
   }
   if (executor === "claude") {
     // claude -p 是打印模式；stream-json 逐行输出，system init 带 session_id，
@@ -845,16 +968,11 @@ function executorArgs(task: Task, prompt: string, resume: boolean): { bin: strin
     if (model) args.push("--model", model);
     if (resume) args.push("--resume", task.session_id);
     args.push(prompt);
-    return { bin: CLAUDE_BIN, args };
+    return args;
   }
-  // opencode v2 的 `run` 不认 --dir（全局只有 `opencode --directory X run`），
-  // 而 launch() 已经用 spawn({cwd: workDir}) 把工作目录定死了，所以这里不再传目录参数。
-  // 带 --dir 的后果是 81ms 退出、code=1、抓不到 session_id（任务 #1，2026-11-15）。
-  const args = ["run", prompt, ...(resume ? ["-s", task.session_id] : []),
-    "--title", sessionTitle(task), "--format", "json"];
-  args.push("--dangerously-skip-permissions");
-  if (model) args.push(executor === "mimo" ? "--model" : "-m", model);
-  return { bin: executor === "mimo" ? MIMO_BIN : "opencode", args };
+
+  const caps = opts.probe && opts.binPath ? probeOpencodeCaps(opts.binPath) : null;
+  return buildOpencodeArgs(task, prompt, resume, caps);
 }
 
 interface LaunchOptions extends DispatchDeps {
@@ -886,9 +1004,16 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
   if (scratchDir) fs.mkdirSync(scratchDir, { recursive: true });
 
   const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
-  const { bin, args } = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume);
-  const plan = spawnPlan(resolveExecutable(opts.executorBin ?? bin), args);
   const executor: Executor = normalizeExecutor(fresh.executor);
+  const baseBin = executor === "codex" ? CODEX_BIN
+    : executor === "claude" ? CLAUDE_BIN
+      : executor === "mimo" ? MIMO_BIN : "opencode";
+  const binPath = resolveExecutable(opts.executorBin ?? baseBin);
+  // 测试/显式指定可执行文件时不探测：那可能是任意包装器，跑 --help 会有副作用。
+  const args = executorArgs({ ...fresh, doc_path: docPath }, prompt, opts.resume, {
+    binPath, probe: opts.executorBin === undefined,
+  });
+  const plan = spawnPlan(binPath, args);
   const workerId = `${executor}-${fresh.id}`;
   const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
   const logDir = path.join(dataDir, "tasks", String(fresh.id));

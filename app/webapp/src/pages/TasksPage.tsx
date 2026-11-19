@@ -411,13 +411,6 @@ export function TasksPage({
         actions={<Chip>{filtered.length} 条结果</Chip>}
       />
 
-      <KpiGrid>
-        <Kpi label="待审批" value={counts.pending} note="飞书审批为主" tone="amber" />
-        <Kpi label="进行中" value={counts.running} note="含 running / working" tone="accent" />
-        <Kpi label="阻塞" value={counts.blocked} note="需要人介入" tone="rose" />
-        <Kpi label="已结束" value={counts.done} note="含 cancelled" />
-      </KpiGrid>
-
       <FilterBar>
         <Field label="视图">
           <div className="inline-flex rounded-[8px] border border-border bg-surface2 p-0.5">
