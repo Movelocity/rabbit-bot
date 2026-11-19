@@ -12,9 +12,9 @@ import path from "node:path";
 import { saveImage, toImageContent } from "../core/media.ts";
 import { expandHome, isInside } from "../core/platform.ts";
 import { imageRoots, resolveImagePath } from "../ops/images.ts";
-import { shellRunnerOptions, readSandboxFile, writeSandboxFile, resolveSandboxPath, execShell, shellTimeoutSec } from "../ops/exec.ts";
+import { shellRunnerOptions, readSandboxFile, writeSandboxFile, resolveSandboxPath, listSandboxFiles, execShell, shellTimeoutSec } from "../ops/exec.ts";
 import { runSandboxArgv } from "../core/shell-runner.ts";
-import { businessDir, filesDir, sharedDir } from "../core/runtime.ts";
+import { businessDir, filesDir, sharedDir, runtimeOverlays } from "../core/runtime.ts";
 import {
   addWorkingMemory, assertWorkingMemoryText, readWorkingMemory, removeWorkingMemory, replaceWorkingMemory,
   WORKING_MEMORY_FILE, WORKING_MEMORY_MAX_CHARS,
@@ -509,6 +509,7 @@ export function createTools(d: ToolDeps) {
     parameters: Type.Object({
       action: Type.String({ description: "read / add / replace / remove / help" }),
       content: Type.Optional(Type.String({ description: "add、replace 用：新内容" })),
+      new: Type.Optional(Type.String({ description: "replace 用：新内容（content 的别名，二选一）" })),
       old: Type.Optional(Type.String({ description: "replace、remove 用：定位旧内容的一小段文字" })),
     }),
     async execute(_id, p) {
@@ -524,12 +525,12 @@ export function createTools(d: ToolDeps) {
             });
           }
           case "add": {
-            const wm = addWorkingMemory(d.cfg, p.content ?? "");
+            const wm = addWorkingMemory(d.cfg, p.content ?? p.new ?? "");
             return txt(`已写入工作记忆（${wm.chars}/${wm.limit} 字）。`, { ok: true, chars: wm.chars });
           }
           case "replace": {
             if (!p.old) return txt("replace 要 old（定位旧内容的一小段文字）。", { ok: false });
-            const wm = replaceWorkingMemory(d.cfg, p.old, p.content ?? "");
+            const wm = replaceWorkingMemory(d.cfg, p.old, p.content ?? p.new ?? "");
             return txt(`已替换（${wm.chars}/${wm.limit} 字）。`, { ok: true, chars: wm.chars });
           }
           case "remove": {
@@ -552,7 +553,7 @@ export function createTools(d: ToolDeps) {
    */
   const KNOWLEDGE_HELP = [
     "knowledge 的用法（action 必填）：",
-    "  add     title body tags? object_id?        记一篇可复用的业务知识",
+    "  add     title body tags? object_id?        记一篇可复用的业务知识（title、body 必填）",
     "  get     id                                 看全文",
     "  search  q? tag? limit? all?                按关键词/标签查，all=1 连归档的也查",
     "  list    limit?                             最近的知识",
@@ -579,15 +580,18 @@ export function createTools(d: ToolDeps) {
     executionMode: "sequential",
     description:
       "知识库：跨会话可复用的业务知识，一篇一条。action 决定做什么："
-      + "add（title + body，一次记一篇）/ get（看全文）/ search（按 q 或 tag 查）/ "
+      + "add（必填 title + body，一次记一篇）/ get（看全文）/ search（按 q 或 tag 查）/ "
       + "list（最近的知识）/ update（就地改）/ archive（归档）/ help。"
       + "它比写文件快：不用建任务、不用选目录，记完能直接查回来。"
       + "可复用的流程、口径、排障、设计判断放这里；具体事实放 memory；对象/关系用 map。",
     parameters: Type.Object({
-      action: Type.String({ description: "add / get / search / list / update / archive / help" }),
+      action: Type.String({
+        enum: ["add", "get", "search", "list", "update", "archive", "help"],
+        description: "add / get / search / list / update / archive / help",
+      }),
       id: Type.Optional(Type.Number({ description: "get、update、archive 用：知识编号" })),
-      title: Type.Optional(Type.String({ description: "add、update 用：这篇知识叫什么" })),
-      body: Type.Optional(Type.String({ description: "add、update 用：正文" })),
+      title: Type.Optional(Type.String({ description: "add 必填、update 可选：这篇知识叫什么（一句话标题）" })),
+      body: Type.Optional(Type.String({ description: "add 必填、update 可选：正文" })),
       tags: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "add、update 用：标签，逗号分隔或数组" })),
       object_id: Type.Optional(Type.String({ description: "add、update 用：关联的业务对象 id（可选）" })),
       q: Type.Optional(Type.String({ description: "search 用：关键词" })),
@@ -602,6 +606,17 @@ export function createTools(d: ToolDeps) {
           case "help":
             return txt(KNOWLEDGE_HELP, { ok: true });
           case "add": {
+            const title = String(p.title ?? "").trim();
+            const body = String(p.body ?? "").trim();
+            if (!title || !body) {
+              const missing = !title && !body ? "title 和 body" : !title ? "title（这篇知识叫什么）" : "body（正文）";
+              return txt(
+                `没成：add 缺 ${missing}。补上后重发，格式：\n`
+                + `{"action":"add","title":"一句话标题","body":"正文","tags":["标签"]}\n`
+                + `title 和 body 都是必填；不确定就先 knowledge action=help。`,
+                { ok: false },
+              );
+            }
             let pool = "";
             let range: { from?: number; to?: number } = {};
             try {
@@ -1064,8 +1079,29 @@ export function createTools(d: ToolDeps) {
       scope: Type.Optional(Type.String({ description: "sandbox（默认）/ host" })),
     }),
     async execute(_id, p) {
-      const raw = String(p.path ?? "").trim();
-      const scope = String(p.scope ?? "sandbox").trim().toLowerCase();
+      let raw = String(p.path ?? "").trim();
+      let scope = String(p.scope ?? "sandbox").trim().toLowerCase();
+
+      // 模型常直接给宿主机绝对路径 / ~/...：先尝试映射回沙盒相对路径（运行时根、
+      // overlay 子目录）；确实在沙盒外的，就按 host 读，走白名单/审批，而不是一句
+      // 「只收相对路径」把它挡回去。
+      if (scope === "sandbox" && (/^~/.test(raw) || path.isAbsolute(raw))) {
+        const abs = path.resolve(expandHome(raw));
+        const sandboxRoot = path.resolve(d.readRoot ?? d.cfg.exec.dir);
+        const rel = path.relative(sandboxRoot, abs);
+        if (rel === "") {
+          raw = ".";
+        } else if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+          raw = rel.replace(/\\/g, "/");
+        } else {
+          const overlay = Object.entries(runtimeOverlays(d.cfg))
+            .map(([name, root]) => ({ name, root: path.resolve(root) }))
+            .find((o) => isInside(o.root, abs));
+          if (overlay) raw = `${overlay.name}/${path.relative(overlay.root, abs).replace(/\\/g, "/")}`;
+          else { scope = "host"; raw = abs; }
+        }
+      }
+
       if (scope === "host") {
         if (!raw || (!raw.startsWith("~") && !path.isAbsolute(raw))) {
           return txt("scope=host 要绝对路径或 ~/...", { ok: false });
@@ -1100,6 +1136,24 @@ export function createTools(d: ToolDeps) {
         return txt("话题库扩展没启用；业务知识按 system 里的「知识落点」处理。", { ok: false, topics: false });
       }
       try {
+        const abs = resolveSandboxPath(d.cfg, raw, d.readRoot);
+        let st: fs.Stats;
+        try {
+          st = fs.statSync(abs);
+        } catch {
+          return txt(
+            `读不了：没有这个文件：${raw}。sandbox 用根目录下的相对路径（例如 prompt/system.md）；`
+            + `列目录用 terminal ls；读宿主机文件用 scope="host" + 绝对路径。`,
+            { ok: false },
+          );
+        }
+        if (st.isDirectory()) {
+          const entries = listSandboxFiles(d.cfg, raw, d.readRoot);
+          const lines = entries.map((e) => (e.kind === "dir" ? `${e.path}/` : e.path));
+          return txt(`这是目录：${raw}\n${lines.join("\n") || "（空目录）"}`, {
+            ok: true, path: raw, scope: "sandbox", dir: true, count: entries.length,
+          });
+        }
         const r = readSandboxFile(d.cfg, raw, d.readRoot);
         return txt(String(r.content ?? "").trim() || "（文件是空的）", { ok: true, path: r.path, scope: "sandbox" });
       } catch (e) {

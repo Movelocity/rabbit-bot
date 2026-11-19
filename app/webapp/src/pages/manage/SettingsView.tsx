@@ -379,7 +379,7 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
         </CardHead>
         <CardBody>
           <p className="mb-3 text-sm text-muted">
-            上下文涨到这一档就写交接文档、换一个新会话，避免越聊越贵。默认 100k。
+            上下文涨到这一档就写交接文档、换一个新会话，避免越聊越贵。避免长上下文降智。
           </p>
           {contextLimit ? (
             <>

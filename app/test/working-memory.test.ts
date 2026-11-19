@@ -106,3 +106,25 @@ test("working_memory 工具可以读写", async () => {
     x.cleanup();
   }
 });
+
+test("working_memory replace 接受 new 作为 content 的别名", async () => {
+  const x = fixture();
+  const store = new Store(":memory:");
+  try {
+    const tools = createTools({
+      store, hub: {} as any, cfg: x.cfg, now: () => Date.parse("2026-11-12T10:00:00+08:00"), profile: "ufa",
+    }) as any[];
+    const tool = tools.find((t) => t.name === "working_memory")!;
+
+    const added = await tool.execute("t1", { action: "add", content: "旧内容" });
+    assert.equal(added.details.ok, true);
+
+    const replaced = await tool.execute("t2", { action: "replace", old: "旧内容", new: "新内容" });
+    assert.equal(replaced.details.ok, true);
+    assert.match(readWorkingMemory(x.cfg).content, /新内容/);
+    assert.doesNotMatch(readWorkingMemory(x.cfg).content, /旧内容/);
+  } finally {
+    store.close();
+    x.cleanup();
+  }
+});

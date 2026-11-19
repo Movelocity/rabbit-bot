@@ -82,6 +82,43 @@ test("knowledge 工具：一次 add，不建任务也能查回来", async () => 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("knowledge 工具：缺 title/body 时给可照做的提示，action 是枚举", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-knowledge-hint-"));
+  const cfg = loadConfig({
+    dataDir: dir,
+    logDir: path.join(dir, "logs"),
+    runtimeDir: path.join(dir, "runtime"),
+    exec: { dir: path.join(dir, "sandbox") },
+  });
+  const store = new Store(":memory:");
+  const tools = createTools({
+    store, hub: {} as any, cfg, now: () => Date.now(), profile: "ufa",
+  }) as any[];
+  const knowledge = tools.find((t) => t.name === "knowledge")!;
+  assert.deepEqual(knowledge.parameters.properties.action.enum, ["add", "get", "search", "list", "update", "archive", "help"]);
+
+  const run = async (args: Record<string, unknown>) => {
+    const r: any = await knowledge.execute("id", args);
+    return { ok: r.details?.ok, text: r.content.map((c: any) => c.text ?? "").join("") };
+  };
+
+  const noTitle = await run({ action: "add", body: "正文" });
+  assert.equal(noTitle.ok, false);
+  assert.match(noTitle.text, /缺 title/);
+  assert.match(noTitle.text, /"action":"add"/, "提示里带可直接照抄的调用格式");
+
+  const noBody = await run({ action: "add", title: "标题", body: "   " });
+  assert.equal(noBody.ok, false);
+  assert.match(noBody.text, /缺 body/);
+
+  const none = await run({ action: "add" });
+  assert.equal(none.ok, false);
+  assert.match(none.text, /缺 title 和 body/);
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("知识索引：只列标题和标签，归档的不出现", () => {
   const store = new Store(":memory:");
   addKnowledge(store, { title: "erp-gva 发版", body: "正文不该进索引", tags: "erp-gva,发版" }, 1);

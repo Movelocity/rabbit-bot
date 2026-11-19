@@ -86,3 +86,42 @@ test("host 白名单外：被拒就不读", async () => {
     assert.match(text(r), /没批/);
   } finally { cleanup(s); }
 });
+
+test("sandbox 下给绝对路径：沙盒内自动转相对，沙盒外自动按 host 走审批", async () => {
+  const s = setup({ decision: "approved" });
+  try {
+    const inSandbox: any = await s.read.execute("id", { path: path.join(s.runtime, "sandbox.txt") });
+    assert.equal(inSandbox.details.ok, true);
+    assert.equal(text(inSandbox), "sandbox ok");
+    assert.equal(s.asked.length, 0, "沙盒内绝对路径不该申请");
+
+    const onHost: any = await s.read.execute("id", { path: path.join(s.hostDir, "host.txt") });
+    assert.equal(onHost.details.ok, true);
+    assert.equal(text(onHost), "host ok");
+    assert.equal(s.asked.length, 1, "沙盒外绝对路径应自动走 host 审批");
+  } finally { cleanup(s); }
+});
+
+test("读目录时直接返回列表，而不是报「不是文件」", async () => {
+  const s = setup();
+  try {
+    fs.mkdirSync(path.join(s.runtime, "shared/projects"), { recursive: true });
+    fs.writeFileSync(path.join(s.runtime, "shared/projects/a.md"), "x");
+    const r: any = await s.read.execute("id", { path: "shared/projects" });
+    assert.equal(r.details.ok, true);
+    assert.equal(r.details.dir, true);
+    assert.match(text(r), /这是目录/);
+    assert.match(text(r), /shared\/projects\/a\.md/);
+  } finally { cleanup(s); }
+});
+
+test("文件不存在时提示相对路径 / terminal ls / scope=host", async () => {
+  const s = setup();
+  try {
+    const r: any = await s.read.execute("id", { path: "prompt/nope.md" });
+    assert.equal(r.details.ok, false);
+    assert.match(text(r), /没有这个文件/);
+    assert.match(text(r), /terminal ls/);
+    assert.match(text(r), /scope="host"/);
+  } finally { cleanup(s); }
+});

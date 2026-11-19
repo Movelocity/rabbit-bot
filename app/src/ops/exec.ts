@@ -52,8 +52,8 @@ export function shellRunnerOptions(cfg: Config, timeoutMs?: number): SandboxArgv
   };
 }
 
-export function listSandboxFiles(cfg: Config, subdir = "") {
-  return sbox(cfg).list(subdir);
+export function listSandboxFiles(cfg: Config, subdir = "", root?: string) {
+  return sbox(cfg, root).list(subdir);
 }
 
 export function resolveSandboxPath(cfg: Config, p: string, root?: string): string {
