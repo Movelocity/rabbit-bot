@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目 · 方案 B · 分组卡片墙</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <a class="brand" href="index.html"><span class="brand-mark">兔</span><span class="brand-name">rabbit</span></a>
+    <nav class="main-tabs">
+      <a class="tab" href="chat-task-v1.html">会话</a>
+      <a class="tab" href="#">任务</a>
+      <a class="tab on" href="projects-v1.html">项目</a>
+      <a class="tab" href="#">业务</a>
+      <a class="tab" href="#">记忆</a>
+      <a class="tab" href="#">产出</a>
+    </nav>
+    <div class="header-tools">
+      <span class="variant">项目 · 方案 B</span>
+      <span class="health"><i class="dot"></i>在线</span>
+      <span class="sep">·</span>
+      <span class="mono tick">tick 2.4s</span>
+      <span class="avatar">值</span>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <div class="page rb-scroll">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">Projects</div>
+          <h1>项目</h1>
+          <p class="sub">按推进状态分组，卡片直接给「下一步」与任务分布；点卡片进项目文档。</p>
+        </div>
+        <div class="head-actions">
+          <label class="input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input placeholder="搜项目 / 计划 / 上下文">
+          </label>
+          <button class="btn sm ghost">刷新</button>
+        </div>
+      </div>
+
+      <div class="stat-strip">
+        <span class="chip">项目 6</span>
+        <span class="chip jade">推进中 3</span>
+        <span class="chip">计划中 2</span>
+        <span class="chip ok">已完成 1</span>
+        <span class="chip amber">缺文档 1</span>
+        <span class="chip rose">阻塞任务 1</span>
+      </div>
+
+      <div class="toolbar">
+        <div class="seg plain">
+          <button class="on">全部</button>
+          <button>进行中</button>
+          <button>有任务</button>
+          <button>缺文档</button>
+        </div>
+        <span class="tiny faint">6 个项目 · 20 个关联任务</span>
+        <span class="right chip">活跃优先</span>
+      </div>
+
+      <section class="pgroup">
+        <div class="pgroup-head"><h2>推进中</h2><span class="chip jade">3</span><span class="line"></span></div>
+        <div class="pgrid">
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>商品资料同步</h3>
+                <div class="slug">product-sync</div>
+              </div>
+              <div class="ring" style="--p:64"><span>64%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip jade">进行中 2</span>
+              <span class="chip amber">待办 1</span>
+              <span class="chip ok">结束 2</span>
+            </div>
+            <div class="next"><b>下一步</b>先拿 #148 的 draft.xlsx 跑一次导入演练，确认字段映射。</div>
+            <div class="pcard-foot">
+              <span>5 个任务</span><span>·</span><span>今天 09:38</span>
+              <span class="right"><button class="btn sm ghost">查看</button></span>
+            </div>
+          </article>
+
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>周报自动化</h3>
+                <div class="slug">weekly-report</div>
+              </div>
+              <div class="ring" style="--p:78"><span>78%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip jade">进行中 1</span>
+              <span class="chip ok">结束 2</span>
+            </div>
+            <div class="next"><b>下一步</b>把群消息汇总接进周一 08:00 的定时任务，先跑一周观察。</div>
+            <div class="pcard-foot">
+              <span>3 个任务</span><span>·</span><span>今天 08:05</span>
+              <span class="right"><button class="btn sm ghost">查看</button></span>
+            </div>
+          </article>
+
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>物流对账</h3>
+                <div class="slug">reconciliation</div>
+              </div>
+              <div class="ring warn" style="--p:45"><span>45%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip rose">阻塞 1</span>
+              <span class="chip amber">待办 2</span>
+              <span class="chip ok">结束 1</span>
+            </div>
+            <div class="next"><b>下一步</b>承运商账单缺 11-10 至 11-12，先让对接群补发再继续比对。</div>
+            <div class="pcard-foot">
+              <span>4 个任务</span><span>·</span><span>11-18 16:42</span>
+              <span class="right"><button class="btn sm ghost">查看</button></span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pgroup">
+        <div class="pgroup-head"><h2>计划中</h2><span class="chip">2</span><span class="line"></span></div>
+        <div class="pgrid">
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>客服知识库重构</h3>
+                <div class="slug">kb-revamp</div>
+              </div>
+              <div class="ring" style="--p:12"><span>12%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip amber">待办 2</span>
+            </div>
+            <div class="next"><b>下一步</b>把近三个月的高频问答先拉一份清单，确认要保留的条目。</div>
+            <div class="pcard-foot">
+              <span>2 个任务</span><span>·</span><span>昨天 18:20</span>
+              <span class="right"><button class="btn sm ghost">查看</button></span>
+            </div>
+          </article>
+
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>官网改版</h3>
+                <div class="slug">website-v2</div>
+              </div>
+              <div class="ring bad" style="--p:0"><span>0%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip amber">缺文档</span>
+              <span class="chip">暂无任务</span>
+            </div>
+            <div class="next"><b>下一步</b>补 plan.md：谁负责、什么时候上线、验收看什么。</div>
+            <div class="pcard-foot">
+              <span>0 个任务</span><span>·</span><span>11-15 11:03</span>
+              <span class="right"><button class="btn sm">补文档</button></span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pgroup">
+        <div class="pgroup-head"><h2>已完成</h2><span class="chip ok">1</span><span class="line"></span></div>
+        <div class="pgrid">
+          <article class="pcard">
+            <div class="pcard-top">
+              <div class="grow">
+                <h3>供应商评估</h3>
+                <div class="slug">supplier-eval</div>
+              </div>
+              <div class="ring" style="--p:100"><span>100%</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip ok">结束 6</span>
+            </div>
+            <div class="next"><b>结论</b>本季度 6 家供应商完成评估，2 家进入观察名单。</div>
+            <div class="pcard-foot">
+              <span>6 个任务</span><span>·</span><span>11-12 14:30</span>
+              <span class="right"><button class="btn sm ghost">查看</button></span>
+            </div>
+          </article>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</body>
+</html>

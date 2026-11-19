@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话 · 任务对话 · 方案 A · 对话优先</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <a class="brand" href="index.html"><span class="brand-mark">兔</span><span class="brand-name">rabbit</span></a>
+    <nav class="main-tabs">
+      <a class="tab on" href="chat-task-v1.html">会话</a>
+      <a class="tab" href="#">任务</a>
+      <a class="tab" href="projects-v1.html">项目</a>
+      <a class="tab" href="#">业务</a>
+      <a class="tab" href="#">记忆</a>
+      <a class="tab" href="#">产出</a>
+    </nav>
+    <div class="header-tools">
+      <span class="variant">会话 · 方案 A</span>
+      <span class="health"><i class="dot"></i>在线</span>
+      <span class="sep">·</span>
+      <span class="mono tick">tick 2.4s</span>
+      <span class="avatar">值</span>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <div class="chat-layout">
+      <aside class="pool-rail">
+        <div class="rail-head">
+          <span class="label">会话池</span>
+          <span class="count">7 个</span>
+          <button class="icon-btn" title="收起">«</button>
+        </div>
+        <div class="rail-search">
+          <label class="input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input placeholder="搜索会话或别名…">
+          </label>
+        </div>
+        <div class="rail-scroll rb-scroll">
+          <div class="pool-group">网页直聊 · 1</div>
+          <a class="pool-item" href="#">
+            <span class="pool-ava">直</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">机器人直聊</span><span class="chip jade">主</span></span>
+              <span class="pool-sub"><span class="mono">web</span><span>11-19 09:40</span></span>
+            </span>
+            <span class="pool-side"><span class="unread">2</span><span>128 条</span></span>
+          </a>
+
+          <div class="pool-group">任务 · 2</div>
+          <a class="pool-item task on" href="#">
+            <span class="pool-ava">#</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">整理 1688 商品表为 SKU 清单</span></span>
+              <span class="pool-sub"><span class="mono">#148</span><span>09:31</span></span>
+            </span>
+            <span class="pool-side"><span class="badge info">running</span><span>35 条</span></span>
+          </a>
+          <a class="pool-item task" href="#">
+            <span class="pool-ava">#</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">生成周报草稿</span></span>
+              <span class="pool-sub"><span class="mono">#147</span><span>昨天</span></span>
+            </span>
+            <span class="pool-side"><span class="badge ok">done</span><span>62 条</span></span>
+          </a>
+
+          <div class="pool-group">群聊 · 2</div>
+          <a class="pool-item" href="#">
+            <span class="pool-ava">群</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">物流对接群</span></span>
+              <span class="pool-sub"><span class="mono">feishu</span><span>11-18 17:22</span></span>
+            </span>
+            <span class="pool-side"><span>412 条</span></span>
+          </a>
+          <a class="pool-item" href="#">
+            <span class="pool-ava">群</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">商品资料讨论群</span></span>
+              <span class="pool-sub"><span class="mono">feishu</span><span>11-18 15:06</span></span>
+            </span>
+            <span class="pool-side"><span>96 条</span></span>
+          </a>
+
+          <div class="pool-group">私聊 · 1</div>
+          <a class="pool-item" href="#">
+            <span class="pool-ava">值</span>
+            <span class="pool-main">
+              <span class="pool-name"><span class="t">值班人</span></span>
+              <span class="pool-sub"><span class="mono">feishu</span><span>11-17 20:11</span></span>
+            </span>
+            <span class="pool-side"><span>34 条</span></span>
+          </a>
+        </div>
+      </aside>
+
+      <main class="chat">
+        <header class="chat-head">
+          <div class="chat-title grow">
+            <h1>整理 1688 商品表为 SKU 清单</h1>
+            <div class="chat-meta">
+              <span class="tag">任务 #148</span>
+              <span>任务池</span>
+              <span>·</span>
+              <span>35 条消息</span>
+              <span>·</span>
+              <span>最后 09:31</span>
+            </div>
+          </div>
+          <div class="chat-actions">
+            <span class="badge info">running</span>
+            <button class="btn sm ghost">任务页</button>
+            <button class="btn sm">任务上下文</button>
+          </div>
+        </header>
+
+        <div class="task-strip">
+          <ol class="steps">
+            <li class="done"><i></i>创建</li>
+            <li class="done"><i></i>审批</li>
+            <li class="now"><i></i>执行</li>
+            <li><i></i>校验</li>
+            <li><i></i>交付</li>
+          </ol>
+          <div class="strip-meta">
+            <span>用时 42 分钟</span>
+            <span>·</span>
+            <span>12 SKU</span>
+            <span>·</span>
+            <span>3 次工具调用</span>
+          </div>
+        </div>
+
+        <div class="msg-scroll rb-scroll">
+          <div class="msg-wrap">
+            <div class="day">11 月 19 日</div>
+
+            <div class="msg">
+              <span class="msg-ava">调</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>调度器</b><time>09:12</time></div>
+                <div class="bubble">任务 #148 已创建，目标「把 1688 商品详情整理成可导入的 SKU 清单」，等待审批后启动。</div>
+              </div>
+            </div>
+
+            <div class="msg self">
+              <span class="msg-ava">值</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>值班人</b><span>你</span><time>09:13</time></div>
+                <div class="bubble">通过。按 12 个 SKU 出，主图也一起带上，图片列放第一张。</div>
+              </div>
+            </div>
+
+            <div class="approval done">
+              <div class="ap-head"><span class="badge ok">已通过</span><b>启动任务 #148</b><span class="right">09:13 · 值班人</span></div>
+              <p>执行器已接单，工作目录 shared/outputs/task-148/。</p>
+            </div>
+
+            <div class="msg">
+              <span class="msg-ava">机</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>机器人</b><time>09:14</time></div>
+                <div class="bubble">已解析商品页，正在抓取 12 个 SKU 的价格与库存。</div>
+              </div>
+            </div>
+
+            <div class="tool-event">
+              <span class="te-icon">&gt;_</span>
+              <b>browser.scrape</b>
+              <span class="mono">detail.1688.com/offer/…</span>
+              <span class="te-meta">200 · 12 SKU · 3.2s</span>
+            </div>
+
+            <div class="msg">
+              <span class="msg-ava">机</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>机器人</b><time>09:17</time></div>
+                <div class="bubble">有 3 个 SKU 缺库存字段，已回退到规格表接口补齐。目前 12/12 完整。</div>
+              </div>
+            </div>
+
+            <div class="msg self">
+              <span class="msg-ava">值</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>值班人</b><span>你</span><time>09:20</time></div>
+                <div class="bubble">价格保留两位小数，库存空的写 0。</div>
+              </div>
+            </div>
+
+            <div class="msg">
+              <span class="msg-ava">机</span>
+              <div class="msg-body">
+                <div class="msg-meta"><b>机器人</b><time>09:21</time></div>
+                <div class="bubble">收到。生成 draft.xlsx，列为 SKU / 规格 / 价格 / 库存 / 主图，共 12 行。</div>
+              </div>
+            </div>
+
+            <div class="tool-event">
+              <span class="te-icon">&gt;_</span>
+              <b>file.write</b>
+              <span class="mono">shared/outputs/task-148/draft.xlsx</span>
+              <span class="te-meta">12 行 · 18 KB</span>
+            </div>
+
+            <div class="approval">
+              <div class="ap-head"><span class="badge warn">待确认</span><b>覆盖已有的 draft.xlsx？</b><span class="right">09:31</span></div>
+              <p>上一次生成的文件还在工作目录里。继续会覆盖它，旧内容不可恢复。</p>
+              <div class="ap-actions">
+                <button class="btn sm primary">允许覆盖</button>
+                <button class="btn sm ghost">换个文件名</button>
+                <button class="btn sm ghost">先看草稿</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="composer">
+          <span>只读 · 收发走已启用的 IM</span>
+          <span class="right">
+            <button class="btn sm ghost">加载更早</button>
+            <button class="btn sm ghost">回到最新</button>
+          </span>
+        </footer>
+      </main>
+
+      <aside class="ctx-rail">
+        <div class="rail-head">
+          <span class="label">任务上下文</span>
+          <span class="count">#148</span>
+          <button class="icon-btn" title="关闭">×</button>
+        </div>
+        <div class="ctx-scroll rb-scroll">
+          <section class="panel">
+            <h2>目标</h2>
+            <p>把 1688 商品详情页整理成可直接导入系统的 SKU 清单，包含价格、库存与主图链接。</p>
+          </section>
+
+          <section class="panel">
+            <h2>交付物</h2>
+            <div class="file-row">
+              <span class="file-ico">XLS</span>
+              <span class="grow"><b>draft.xlsx</b><span class="block faint">12 行 · 18 KB</span></span>
+              <button class="icon-btn" title="下载">↓</button>
+            </div>
+            <div class="file-row">
+              <span class="file-ico">JSON</span>
+              <span class="grow"><b>skus.json</b><span class="block faint">结构化中间结果</span></span>
+              <button class="icon-btn" title="下载">↓</button>
+            </div>
+            <p class="hint">位于 shared/outputs/task-148/</p>
+          </section>
+
+          <section class="panel">
+            <h2>验收标准</h2>
+            <ul class="checklist">
+              <li class="done">12 个 SKU 全部有价格与库存</li>
+              <li class="done">主图链接可直接访问</li>
+              <li>覆盖确认后生成终稿</li>
+            </ul>
+          </section>
+
+          <section class="panel">
+            <h2>最近事件</h2>
+            <ol class="event-list">
+              <li><time>09:31</time><span><b>等待确认</b> · 覆盖 draft.xlsx</span></li>
+              <li><time>09:21</time><span><b>产出</b> · draft.xlsx 12 行</span></li>
+              <li><time>09:17</time><span><b>补齐</b> · 3 个 SKU 库存</span></li>
+              <li><time>09:13</time><span><b>审批通过</b> · 值班人</span></li>
+            </ol>
+          </section>
+        </div>
+        <div class="rail-foot">
+          <button class="btn sm ghost">任务页</button>
+          <button class="btn sm ghost">指导文件</button>
+          <button class="btn sm ghost">全部产出</button>
+          <button class="btn sm ghost">复制 #148</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+</body>
+</html>

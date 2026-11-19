@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话 · 任务对话 · 方案 C · 时间线叙事</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <a class="brand" href="index.html"><span class="brand-mark">兔</span><span class="brand-name">rabbit</span></a>
+    <nav class="main-tabs">
+      <a class="tab on" href="chat-task-v1.html">会话</a>
+      <a class="tab" href="#">任务</a>
+      <a class="tab" href="projects-v1.html">项目</a>
+      <a class="tab" href="#">业务</a>
+      <a class="tab" href="#">记忆</a>
+      <a class="tab" href="#">产出</a>
+    </nav>
+    <div class="header-tools">
+      <span class="variant">会话 · 方案 C</span>
+      <span class="health"><i class="dot"></i>在线</span>
+      <span class="sep">·</span>
+      <span class="mono tick">tick 2.4s</span>
+      <span class="avatar">值</span>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <div class="tl-page rb-scroll">
+      <div class="tl-inner">
+        <div class="tl-bar">
+          <a href="chat-task-v1.html">← 会话列表</a>
+          <span class="sep">/</span>
+          <span class="tag">任务 #148</span>
+          <span class="right faint">任务池 · 只读</span>
+        </div>
+
+        <header class="tl-head">
+          <h1>整理 1688 商品表为 SKU 清单</h1>
+          <div class="tl-meta">
+            <span class="badge info">running</span>
+            <span class="chip jade">执行 3/5</span>
+            <span>已运行 42 分钟</span>
+            <span>·</span>
+            <span>35 条消息</span>
+            <span>·</span>
+            <span>12 个 SKU</span>
+            <span>·</span>
+            <span>1 个待确认</span>
+          </div>
+          <ol class="steps">
+            <li class="done"><i></i>创建</li>
+            <li class="done"><i></i>审批</li>
+            <li class="now"><i></i>执行</li>
+            <li><i></i>校验</li>
+            <li><i></i>交付</li>
+          </ol>
+        </header>
+
+        <details class="brief" open>
+          <summary>任务简报</summary>
+          <div class="brief-grid">
+            <div>
+              <h3>目标</h3>
+              <p>把 1688 商品详情整理成可直接导入系统的 SKU 清单。</p>
+            </div>
+            <div>
+              <h3>交付物</h3>
+              <p>draft.xlsx（12 行）、skus.json；列含价格、库存、主图。</p>
+            </div>
+            <div>
+              <h3>验收</h3>
+              <p>12 个 SKU 字段完整，主图链接可访问，覆盖确认后出终稿。</p>
+            </div>
+          </div>
+        </details>
+
+        <ol class="timeline">
+          <li class="tl-item jade">
+            <span class="tl-dot">✓</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>任务创建</b><time>09:12</time><span>调度器</span></div>
+              <div class="ev-text">目标「把 1688 商品详情整理成可导入的 SKU 清单」，等待审批。</div>
+            </div>
+          </li>
+
+          <li class="tl-item">
+            <span class="tl-dot">调</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>调度器</b><time>09:12</time></div>
+              <div class="bubble">任务 #148 已创建，等待审批后启动。</div>
+            </div>
+          </li>
+
+          <li class="tl-item self">
+            <span class="tl-dot"></span>
+            <div class="tl-body">
+              <div class="tl-label"><b>值班人</b><span>你</span><time>09:13</time></div>
+              <div class="bubble">通过。按 12 个 SKU 出，主图也一起带上，图片列放第一张。</div>
+            </div>
+          </li>
+
+          <li class="tl-item jade">
+            <span class="tl-dot">✓</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>审批通过</b><time>09:13</time><span>值班人</span></div>
+              <div class="ev-text">执行器已接单，工作目录 shared/outputs/task-148/。</div>
+            </div>
+          </li>
+
+          <li class="tl-item">
+            <span class="tl-dot">机</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>机器人</b><time>09:14</time></div>
+              <div class="bubble">已解析商品页，正在抓取 12 个 SKU 的价格与库存。</div>
+            </div>
+          </li>
+
+          <li class="tl-item">
+            <span class="tl-dot">&gt;_</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>工具调用</b><time>09:14</time></div>
+              <div class="tool-event" style="margin:0;max-width:none">
+                <span class="te-icon">&gt;_</span>
+                <b>browser.scrape</b>
+                <span class="mono">detail.1688.com/offer/…</span>
+                <span class="te-meta">200 · 12 SKU · 3.2s</span>
+              </div>
+            </div>
+          </li>
+
+          <li class="tl-item">
+            <span class="tl-dot">机</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>机器人</b><time>09:17</time></div>
+              <div class="bubble">有 3 个 SKU 缺库存字段，已回退到规格表接口补齐。目前 12/12 完整。</div>
+            </div>
+          </li>
+
+          <li class="tl-item self">
+            <span class="tl-dot"></span>
+            <div class="tl-body">
+              <div class="tl-label"><b>值班人</b><span>你</span><time>09:20</time></div>
+              <div class="bubble">价格保留两位小数，库存空的写 0。</div>
+            </div>
+          </li>
+
+          <li class="tl-item">
+            <span class="tl-dot">机</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>机器人</b><time>09:21</time></div>
+              <div class="bubble">收到。生成 draft.xlsx，列为 SKU / 规格 / 价格 / 库存 / 主图，共 12 行。</div>
+            </div>
+          </li>
+
+          <li class="tl-item jade">
+            <span class="tl-dot">✓</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>产出</b><time>09:21</time><span>file.write</span></div>
+              <div class="ev-text"><b>draft.xlsx</b> 已写入 shared/outputs/task-148/ · 12 行 · 18 KB</div>
+            </div>
+          </li>
+
+          <li class="tl-item amber">
+            <span class="tl-dot">!</span>
+            <div class="tl-body">
+              <div class="tl-label"><b>等待确认</b><time>09:31</time><span>覆盖已有文件</span></div>
+              <div class="approval">
+                <div class="ap-head"><b>覆盖已有的 draft.xlsx？</b><span class="right">已等待 4 分钟</span></div>
+                <p>上一次生成的文件还在工作目录里。继续会覆盖它，旧内容不可恢复。</p>
+                <div class="ap-actions">
+                  <button class="btn sm primary">允许覆盖</button>
+                  <button class="btn sm ghost">换个文件名</button>
+                  <button class="btn sm ghost">先看草稿</button>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ol>
+
+        <div class="sticky-composer">
+          <span>只读 · 收发走已启用的 IM</span>
+          <span class="right">
+            <button class="btn sm ghost">加载更早</button>
+            <button class="btn sm ghost">返回最新</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

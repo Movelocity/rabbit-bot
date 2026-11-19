@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目 · 方案 A · 索引表 + 详情抽屉</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <a class="brand" href="index.html"><span class="brand-mark">兔</span><span class="brand-name">rabbit</span></a>
+    <nav class="main-tabs">
+      <a class="tab" href="chat-task-v1.html">会话</a>
+      <a class="tab" href="#">任务</a>
+      <a class="tab on" href="projects-v1.html">项目</a>
+      <a class="tab" href="#">业务</a>
+      <a class="tab" href="#">记忆</a>
+      <a class="tab" href="#">产出</a>
+    </nav>
+    <div class="header-tools">
+      <span class="variant">项目 · 方案 A</span>
+      <span class="health"><i class="dot"></i>在线</span>
+      <span class="sep">·</span>
+      <span class="mono tick">tick 2.4s</span>
+      <span class="avatar">值</span>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <div class="page rb-scroll">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">Projects</div>
+          <h1>项目</h1>
+          <p class="sub">context.md 是上下文，plan.md 是当前目标与下一步；带 project 标记的任务自动聚合到这里。</p>
+        </div>
+        <div class="head-actions">
+          <label class="input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input placeholder="搜项目 / 计划 / 上下文">
+          </label>
+          <button class="btn sm ghost">刷新</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="k-label">项目</div><div class="k-value">6</div><div class="k-note">shared/projects 下</div></div>
+        <div class="kpi accent"><div class="k-label">关联任务</div><div class="k-value">20</div><div class="k-note">至少一个任务</div></div>
+        <div class="kpi amber"><div class="k-label">进行中</div><div class="k-value">9</div><div class="k-note">含待审批 / 阻塞</div></div>
+        <div class="kpi rose"><div class="k-label">缺文档</div><div class="k-value">1</div><div class="k-note">缺 context 或 plan</div></div>
+      </div>
+
+      <div class="index-layout">
+        <div class="index-main">
+      <div class="toolbar">
+        <div class="seg">
+          <button class="on">全部</button>
+          <button>进行中</button>
+          <button>有任务</button>
+          <button>缺文档</button>
+        </div>
+        <span class="tiny faint">6 / 6</span>
+        <div class="right" style="display:flex;gap:8px;align-items:center">
+          <span class="chip">活跃优先</span>
+          <div class="seg">
+            <button class="on">列表</button>
+            <button>卡片</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="ptable-head">
+          <span>项目</span>
+          <span>状态</span>
+          <span>关联任务</span>
+          <span class="col-progress">进度</span>
+          <span class="col-updated">更新时间</span>
+          <span></span>
+        </div>
+
+        <div class="prow on">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">product-sync</span><span class="t">商品资料同步</span></div>
+            <div class="prow-sub">11 月底前完成 1688 商品资料到内部系统的同步</div>
+          </div>
+          <span class="badge info">推进中</span>
+          <div class="task-inline">
+            <span class="chip jade">进行中 2</span>
+            <span class="chip amber">待办 1</span>
+            <span class="chip ok">结束 2</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:64%"></i></span><b>64%</b></div>
+          <span class="updated col-updated">今天 09:38</span>
+          <span class="go">›</span>
+        </div>
+
+        <div class="prow">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">kb-revamp</span><span class="t">客服知识库重构</span></div>
+            <div class="prow-sub">把常见问答收敛成可检索的条目</div>
+          </div>
+          <span class="badge muted">计划中</span>
+          <div class="task-inline">
+            <span class="chip amber">待办 2</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:12%"></i></span><b>12%</b></div>
+          <span class="updated col-updated">昨天 18:20</span>
+          <span class="go">›</span>
+        </div>
+
+        <div class="prow">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">weekly-report</span><span class="t">周报自动化</span></div>
+            <div class="prow-sub">每周一自动汇总群消息与任务产出</div>
+          </div>
+          <span class="badge info">推进中</span>
+          <div class="task-inline">
+            <span class="chip jade">进行中 1</span>
+            <span class="chip ok">结束 2</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:78%"></i></span><b>78%</b></div>
+          <span class="updated col-updated">今天 08:05</span>
+          <span class="go">›</span>
+        </div>
+
+        <div class="prow">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">reconciliation</span><span class="t">物流对账</span></div>
+            <div class="prow-sub">对照承运商账单与内部发货记录</div>
+          </div>
+          <span class="badge bad">阻塞</span>
+          <div class="task-inline">
+            <span class="chip rose">阻塞 1</span>
+            <span class="chip amber">待办 2</span>
+            <span class="chip ok">结束 1</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:45%"></i></span><b>45%</b></div>
+          <span class="updated col-updated">11-18 16:42</span>
+          <span class="go">›</span>
+        </div>
+
+        <div class="prow">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">website-v2</span><span class="t">官网改版</span><span class="chip amber">缺文档</span></div>
+            <div class="prow-sub">plan.md 还没有内容</div>
+          </div>
+          <span class="badge muted">计划中</span>
+          <div class="task-inline">
+            <span class="faint tiny">暂无关联任务</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:0%"></i></span><b>0%</b></div>
+          <span class="updated col-updated">11-15 11:03</span>
+          <span class="go">›</span>
+        </div>
+
+        <div class="prow">
+          <div class="prow-main">
+            <div class="prow-name"><span class="slug">supplier-eval</span><span class="t">供应商评估</span></div>
+            <div class="prow-sub">季度评估表与结论归档</div>
+          </div>
+          <span class="badge ok">已完成</span>
+          <div class="task-inline">
+            <span class="chip ok">结束 6</span>
+          </div>
+          <div class="progress-line col-progress"><span class="progress"><i style="width:100%"></i></span><b>100%</b></div>
+          <span class="updated col-updated">11-12 14:30</span>
+          <span class="go">›</span>
+        </div>
+      </div>
+        </div>
+
+        <aside class="sheet inline">
+  <div class="sheet-head">
+    <div class="grow">
+      <h2>商品资料同步</h2>
+      <div class="slug">product-sync · shared/projects/product-sync/</div>
+    </div>
+    <span class="badge info">推进中</span>
+    <button class="icon-btn" title="关闭">×</button>
+  </div>
+  <div class="sheet-tabs">
+    <a class="on" href="#">计划</a>
+    <a href="#">上下文</a>
+    <a href="#">关联任务</a>
+  </div>
+  <div class="sheet-body rb-scroll">
+    <div class="doc-meta">
+      <div class="box"><span>关联任务</span><b>5 个 · 2 进行中</b></div>
+      <div class="box"><span>最近更新</span><b>今天 09:38</b></div>
+    </div>
+    <div class="prose">
+      <h2>当前目标</h2>
+      <p>11 月底前完成 1688 商品资料到内部系统的同步，覆盖主推的 12 个 SKU。</p>
+      <div class="hl">下一步：先拿 #148 的 draft.xlsx 跑一次导入演练，确认字段映射没有遗漏。</div>
+      <h2>本周重点</h2>
+      <ul>
+        <li>整理 SKU 清单与主图链接（#148 执行中）</li>
+        <li>确认价格与库存字段的格式</li>
+        <li>小批量导入 12 个 SKU，观察报错</li>
+      </ul>
+      <h2>风险</h2>
+      <p>部分 SKU 的库存字段需要回退到规格表接口补齐，接口偶发超时。</p>
+    </div>
+  </div>
+  <div class="sheet-foot">
+    <span class="grow mono">plan.md · context.md</span>
+    <button class="btn sm ghost">复制路径</button>
+    <button class="btn sm">编辑</button>
+  </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

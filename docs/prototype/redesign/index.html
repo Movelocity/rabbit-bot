@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rabbit Bot 重设计原型 · 会话任务对话 / 项目</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <a class="brand" href="index.html"><span class="brand-mark">兔</span><span class="brand-name">rabbit</span></a>
+    <nav class="main-tabs">
+      <a class="tab" href="chat-task-v1.html">会话</a>
+      <a class="tab" href="#">任务</a>
+      <a class="tab" href="projects-v1.html">项目</a>
+      <a class="tab" href="#">业务</a>
+      <a class="tab" href="#">记忆</a>
+      <a class="tab" href="#">产出</a>
+    </nav>
+    <div class="header-tools">
+      <span class="variant">重设计原型 · 6 版</span>
+      <span class="health"><i class="dot"></i>静态稿</span>
+      <span class="avatar">值</span>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <div class="gallery rb-scroll">
+      <div class="gallery-head">
+        <div class="eyebrow">Redesign</div>
+        <h1>会话 · 任务对话，与项目页面</h1>
+        <p>两块内容各三版，方向不同而不是换皮。所有页面用同一套颜色与字号，数据是假数据。点开任意版本独立看效果，再回这里排序。</p>
+      </div>
+
+      <section class="gsec">
+        <div class="gsec-head"><h2>会话 · 任务对话</h2><span>任务池里的对话、执行过程与审批</span><span class="line"></span></div>
+        <div class="ggrid">
+          <article class="gcard">
+            <div class="mini three">
+              <div class="col"><span class="bar j"></span><span class="bar"></span><span class="bar short"></span></div>
+              <div class="col"><span class="bub"></span><span class="bub j"></span><span class="bub"></span><span class="bub j"></span></div>
+              <div class="col"><span class="bar j"></span><span class="bar"></span><span class="bar"></span></div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">A</span><h3>对话优先</h3></div>
+              <p>消息仍是主角，任务信息收进右侧可收起的上下文栏。顶部一条阶段进度带，审批直接出现在对话里。</p>
+              <div class="tags"><span class="chip jade">阅读顺畅</span><span class="chip">上下文需展开</span><span class="chip">改动最小</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="chat-task-v1.html">打开方案 A</a></div>
+            </div>
+          </article>
+
+          <article class="gcard">
+            <div class="mini three">
+              <div class="col"><span class="bar j"></span><span class="bar"></span></div>
+              <div class="col"><span class="bub"></span><span class="bub j"></span><span class="bub"></span><span class="bub"></span></div>
+              <div class="col"><span class="bar j"></span><span class="bar"></span><span class="bar"></span><span class="bar short"></span><span class="bar"></span></div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">B</span><h3>执行台</h3></div>
+              <p>右侧常驻执行台：阶段、用时、工具调用、当前动作、待处理审批、产出事件一屏看全。适合盯执行。</p>
+              <div class="tags"><span class="chip jade">监控强</span><span class="chip">右栏常驻</span><span class="chip">横向占用大</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="chat-task-v2.html">打开方案 B</a></div>
+            </div>
+          </article>
+
+          <article class="gcard">
+            <div class="mini">
+              <div class="pagebody">
+                <span class="bar j" style="width:42%"></span>
+                <span class="bar"></span>
+                <span class="bar short"></span>
+                <span class="bar"></span>
+                <span class="bar j" style="width:68%"></span>
+                <span class="bar short"></span>
+              </div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">C</span><h3>时间线叙事</h3></div>
+              <p>任务事件和对话合成一条竖轴，按时间读「这件事怎么发生」。顶部任务简报可折叠，底部固定只读提示。</p>
+              <div class="tags"><span class="chip jade">复盘好用</span><span class="chip">叙事连贯</span><span class="chip">找单条消息慢</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="chat-task-v3.html">打开方案 C</a></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="gsec">
+        <div class="gsec-head"><h2>项目页面</h2><span>项目文档、关联任务与推进状态</span><span class="line"></span></div>
+        <div class="ggrid">
+          <article class="gcard">
+            <div class="mini">
+              <div class="rows">
+                <span class="rowline"></span>
+                <span class="rowline"></span>
+                <span class="rowline"></span>
+                <span class="rowline"></span>
+                <span class="rowline"></span>
+              </div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">A</span><h3>索引表 + 抽屉</h3></div>
+              <p>一行一个项目，带状态、任务分布、进度与更新时间；点行从右侧滑出文档。密度高，适合项目多的时候扫。</p>
+              <div class="tags"><span class="chip jade">扫描快</span><span class="chip">信息密度高</span><span class="chip">需二次点击</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="projects-v1.html">打开方案 A</a></div>
+            </div>
+          </article>
+
+          <article class="gcard">
+            <div class="mini">
+              <div class="cardgrid">
+                <span class="cc"></span><span class="cc"></span><span class="cc"></span><span class="cc"></span>
+              </div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">B</span><h3>分组卡片墙</h3></div>
+              <p>按「推进中 / 计划中 / 已完成」分组，卡片给进度环、任务 chip 和一句下一步。更像看板，弱化文档编辑。</p>
+              <div class="tags"><span class="chip jade">状态直观</span><span class="chip">下一步醒目</span><span class="chip">长列表会滚</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="projects-v2.html">打开方案 B</a></div>
+            </div>
+          </article>
+
+          <article class="gcard">
+            <div class="mini three">
+              <div class="col"><span class="bar"></span><span class="bar short"></span><span class="bar"></span></div>
+              <div class="col"><span class="bar j"></span><span class="bar"></span><span class="bar"></span><span class="bar short"></span></div>
+              <div class="col"><span class="bar"></span><span class="bar"></span><span class="bar short"></span></div>
+            </div>
+            <div class="gcard-body">
+              <div class="gcard-head"><span class="k">C</span><h3>工作台三栏</h3></div>
+              <p>左选项目、中间直接读和改 plan/context、右侧看关联任务和最近活动。文档是主体，适合常驻使用。</p>
+              <div class="tags"><span class="chip jade">文档主导</span><span class="chip">随时编辑</span><span class="chip">横向三栏</span></div>
+              <div class="gcard-foot"><a class="btn sm primary" href="projects-v3.html">打开方案 C</a></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="rank-card">
+        <div class="rank-head">
+          <h2>适用度排序</h2>
+          <span class="hint">1 = 最适用；备注写原因或约束，自动存在本机浏览器</span>
+        </div>
+        <div class="rank-row" data-id="chat-a">
+          <span class="idx">01</span>
+          <span><b>会话 A · 对话优先</b><span class="sub block">三栏，右侧上下文可收起</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注：比如「最像现在，改动最小」">
+        </div>
+        <div class="rank-row" data-id="chat-b">
+          <span class="idx">02</span>
+          <span><b>会话 B · 执行台</b><span class="sub block">右栏常驻执行指标</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注">
+        </div>
+        <div class="rank-row" data-id="chat-c">
+          <span class="idx">03</span>
+          <span><b>会话 C · 时间线叙事</b><span class="sub block">单栏竖轴，事件与对话合流</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注">
+        </div>
+        <div class="rank-row" data-id="proj-a">
+          <span class="idx">04</span>
+          <span><b>项目 A · 索引表 + 抽屉</b><span class="sub block">高密度表格，抽屉看文档</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注">
+        </div>
+        <div class="rank-row" data-id="proj-b">
+          <span class="idx">05</span>
+          <span><b>项目 B · 分组卡片墙</b><span class="sub block">按状态分组，突出下一步</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注">
+        </div>
+        <div class="rank-row" data-id="proj-c">
+          <span class="idx">06</span>
+          <span><b>项目 C · 工作台三栏</b><span class="sub block">文档为主，旁边任务与活动</span></span>
+          <input type="number" min="1" max="6" placeholder="#">
+          <input type="text" class="note" placeholder="备注">
+        </div>
+        <div class="rank-actions">
+          <button class="btn sm primary" id="rank-save">保存排序</button>
+          <button class="btn sm ghost" id="rank-clear">清空</button>
+          <span class="status" id="rank-status">还没保存</span>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = "rabbit-redesign-ranking-v1";
+  var rows = Array.prototype.slice.call(document.querySelectorAll(".rank-row"));
+  var status = document.getElementById("rank-status");
+
+  function read() {
+    try { return JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+
+  function restore() {
+    var data = read();
+    rows.forEach(function (row) {
+      var saved = data[row.dataset.id];
+      if (!saved) return;
+      row.querySelector('input[type="number"]').value = saved.rank || "";
+      row.querySelector('input[type="text"]').value = saved.note || "";
+    });
+    if (Object.keys(data).length) status.textContent = "已恢复上次排序";
+  }
+
+  document.getElementById("rank-save").addEventListener("click", function () {
+    var data = {};
+    rows.forEach(function (row) {
+      data[row.dataset.id] = {
+        rank: row.querySelector('input[type="number"]').value,
+        note: row.querySelector('input[type="text"]').value
+      };
+    });
+    localStorage.setItem(KEY, JSON.stringify(data));
+    status.textContent = "已保存到本机浏览器";
+  });
+
+  document.getElementById("rank-clear").addEventListener("click", function () {
+    localStorage.removeItem(KEY);
+    rows.forEach(function (row) {
+      row.querySelector('input[type="number"]').value = "";
+      row.querySelector('input[type="text"]').value = "";
+    });
+    status.textContent = "已清空";
+  });
+
+  restore();
+})();
+</script>
+</body>
+</html>
