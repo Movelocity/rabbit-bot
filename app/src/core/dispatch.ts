@@ -835,6 +835,10 @@ export interface OpencodeCaps {
   title: boolean;
   formatJson: boolean;
   permission: "--auto" | "--dangerously-skip-permissions" | "--yolo" | null;
+  /** 2.0.32 起目录改成 run 子命令的位置参数 `<opencode> <subcommand> [flags] [<directory>]`，两个 flag 都不存在 */
+  positionalDir?: boolean;
+  /** run --help 里有 --standalone：起私有 server，会话目录跟随进程 cwd，且不受共享 serve 的 provider 热更新波及 */
+  standalone?: boolean;
 }
 
 const opencodeCapsCache = new Map<string, OpencodeCaps | null>();
@@ -877,6 +881,8 @@ function probeOpencodeCaps(bin: string): OpencodeCaps | null {
     caps = {
       dir: listsFlag(runHelp, "--dir"),
       directory: listsFlag(globalHelp, "--directory") || listsFlag(runHelp, "--directory"),
+      positionalDir: /\[<directory>\]/.test(globalHelp) || /\[<directory>\]/.test(runHelp),
+      standalone: listsFlag(runHelp, "--standalone"),
       session: listsFlag(runHelp, "--session") ? "long"
         : listsFlag(runHelp, "-s") ? "short"
           : listsFlag(globalHelp, "--session") ? "long"
@@ -904,11 +910,15 @@ export function buildOpencodeArgs(
   caps: OpencodeCaps | null,
 ): string[] {
   const executor = normalizeExecutor(task.executor);
+  const wd = String(task.work_dir ?? "").trim();
   const args: string[] = [];
   // `--directory` 要放在子命令前；`--dir` 放在 run 后面。cwd 始终是最低保障。
-  if (caps?.directory) args.push("--directory", String(task.work_dir ?? ""));
+  // 目录为空的 task 不传目录参数（位置参数传空串会把 prompt 吞掉）。
+  if (caps?.directory && wd) args.push("--directory", wd);
   args.push("run");
-  if (caps?.dir) args.push("--dir", String(task.work_dir ?? ""));
+  if (caps?.dir && wd) args.push("--dir", wd);
+  else if (caps?.positionalDir && wd) args.push(wd); // 2.0.32：目录是 run 的位置参数
+  if (caps?.standalone) args.push("--standalone");   // 私有 server：目录与热更新双隔离
   args.push(prompt);
 
   if (resume) {

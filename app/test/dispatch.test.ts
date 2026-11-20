@@ -271,6 +271,30 @@ test("opencode 参数按版本能力拼：老版本认 --dir/--auto，新版本�
   assert.equal(newArgs.includes("--dir"), false, "不认 --dir 的版本不能带，否则会秒退");
 });
 
+test("opencode 2.0.32：目录走 run 位置参数 + --standalone 私有 server（#70 工具蒸发/#71-72 目录钉死的根治）", () => {
+  const task = {
+    id: 9, name: "#切模型", goal: "切 hermes 模型", executor: "opencode",
+    model: "", work_dir: workDir, session_id: "ses_32",
+  } as any;
+  const caps32 = {
+    dir: false, directory: false, positionalDir: true, standalone: true,
+    session: "long" as const, model: null, title: true, formatJson: true,
+    permission: "--dangerously-skip-permissions" as const,
+  };
+  const a = buildOpencodeArgs(task, "读 doc 并执行", false, caps32);
+  assert.deepEqual(a, [
+    "run", workDir, "--standalone", "读 doc 并执行",
+    "--title", "#9 切模型", "--format", "json", "--dangerously-skip-permissions",
+  ]);
+  // 恢复执行同样带目录与 standalone，session 存在共享库里恢复得动
+  const r = buildOpencodeArgs(task, "继续", true, caps32);
+  assert.ok(r.includes("--standalone") && r.includes(workDir));
+  assert.ok(r.indexOf(workDir) < r.indexOf("--standalone"), "位置参数必须紧跟 run");
+  // work_dir 为空时不得把空串当位置参数吞 prompt
+  const noWd = buildOpencodeArgs({ ...task, work_dir: "" }, "读 doc", false, caps32);
+  assert.equal(noWd[1], "--standalone", "空目录不应出现在 run 之后");
+});
+
 test("opencode 参数探测失败时保持旧行为；版本不支持恢复会话时明确报错", () => {
   const task = {
     id: 8, name: "#长任务", goal: "跑很久", executor: "opencode",
