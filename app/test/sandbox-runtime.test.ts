@@ -89,7 +89,8 @@ test("任务文档带最佳实践和交接文档落点", () => {
   assert.match(doc, /handoffs/);
   assert.match(doc, /shared\/handoffs\/task-7\.md/);
   assert.match(doc, /shared\/outputs\/task-7/);
-  assert.match(doc, /RB_SHARED_DIR/);
+  assert.equal(doc.includes("$RB_SHARED_DIR"), false);
+  assert.ok(doc.includes(path.join(shared, "WA-BEST-PRACTICES.md")));
   assert.match(doc, /未指定：按仓库约定和 WA 最佳实践处理/);
 });
 
@@ -107,7 +108,9 @@ test("任务关联项目时，文档带 shared/projects/<slug>/ 的绝对路径"
   assert.match(doc, /## 项目文档/);
   assert.match(doc, /projects\/demo\/context\.md/);
   assert.match(doc, /projects\/demo\/plan\.md`（未找到，按约定创建）/);
-  assert.match(doc, /\$RB_SHARED_DIR\/projects\/demo\/context\.md/);
+  assert.ok(doc.includes(path.join(shared, "projects", "demo", "context.md")));
+  assert.ok(doc.includes("/work/shared/projects/demo/context.md"));
+  assert.equal(doc.includes("$RB_SHARED_DIR"), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

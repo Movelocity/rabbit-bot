@@ -91,7 +91,7 @@ function setup() {
   return { store, task };
 }
 
-test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变量不落明文 token", () => {
+test("writeTaskDoc：生成任务文档、回填 doc_path、接口地址写实际值且不落明文 token", () => {
   const { store, task } = setup();
   const legacyDoc = path.join(workDir, ".ufa", "tasks", `task-${task.id}.md`);
   fs.mkdirSync(path.dirname(legacyDoc), { recursive: true });
@@ -121,7 +121,8 @@ test("writeTaskDoc：生成任务文档、回填 doc_path、只引用环境变�
   assert.match(text, /执行阶段没有运行时审批/);
   assert.match(text, /不得越出工作目录/);
   assert.match(text, /\$RB_API_TOKEN/);
-  assert.match(text, /\$RB_API_BASE/);
+  assert.match(text, /http:\/\/127\.0\.0\.1:9999\/v1\/tasks/);
+  assert.equal(text.includes("$RB_API_BASE"), false);
   assert.match(text, new RegExp(`"worker_id":"opencode-${task.id}"`));
   assert.match(text, /调用一次 progress/);
   assert.match(text, /不要改工作目录之外的文件/);

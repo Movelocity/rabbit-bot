@@ -266,7 +266,7 @@ function renderProjectDocs(task: Task, shared: string): string[] {
     lines.push(`- 项目 \`${slug}\``);
     lines.push(`  - 上下文（宿主）：\`${contextFile}\`${mark(contextFile)}`);
     lines.push(`  - 计划（宿主）：\`${planFile}\`${mark(planFile)}`);
-    lines.push(`  - 沙盒：\`$RB_SHARED_DIR/projects/${slug}/context.md\`、\`$RB_SHARED_DIR/projects/${slug}/plan.md\``);
+    lines.push(`  - 容器内路径（UFA 沙盒）：\`/work/shared/projects/${slug}/context.md\`、\`/work/shared/projects/${slug}/plan.md\``);
   }
   lines.push("", "开工前先读项目上下文和计划；任务文档只引用路径，不要把文档整段复制进交接。", "");
   return lines;
@@ -281,6 +281,8 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
   const shared = String(opts.sharedDir ?? "").trim();
   const runtime = resolveRuntimeDir(opts);
   const scratch = runtime ? path.join(runtime, ".ufa", "work", `task-${id}`) : "";
+  const docFile = runtime ? taskDocPath(task, runtime) : "";
+  const memoryFile = shared ? path.join(path.dirname(shared), "memory.md") : "";
   // 正式路径用 SQLite 里的地图；显式传 map=null 表示「确认没有地图」，
   // 不传才回退到按目录读文件（测试/旧调用）。
   const business = opts.map !== undefined
@@ -319,29 +321,29 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     ...(shared ? [
       "## 开工前",
       "",
-      `先读 WA 通用最佳实践：\`$RB_SHARED_DIR/WA-BEST-PRACTICES.md\`（宿主路径 \`${shared}/WA-BEST-PRACTICES.md\`）。`,
-      `跨任务工作记忆：\`$RB_MEMORY_FILE\`（宿主路径 \`${path.join(path.dirname(shared), "memory.md")}\`）。开工前读一遍；有会跨任务复用的约定、坑、决策就追加一条。不要写密钥和隐私，不要重写别人的条目。`,
-      `再到 shared 里搜同主题旧交接：\`rg -l "关键词" "$RB_SHARED_DIR" -g 'task-*.md'\`（同时覆盖 handoffs/ 和老位置）。`,
+      `先读 WA 通用最佳实践：\`${path.join(shared, "WA-BEST-PRACTICES.md")}\`。`,
+      `跨任务工作记忆：\`${memoryFile}\`。开工前读一遍；有会跨任务复用的约定、坑、决策就追加一条。不要写密钥和隐私，不要重写别人的条目。`,
+      `再到 shared 里搜同主题旧交接：\`rg -l "关键词" "${shared}" -g 'task-*.md'\`（同时覆盖 handoffs/ 和老位置）。`,
       "旧交接只当线索，先核实再复用；没有相关上下文就直接按任务做。",
       "",
       "## 交接文档",
       "",
-      `本次任务的关键上下文写到 \`$RB_SHARED_DIR/handoffs/task-${id}.md\`（宿主路径 \`${shared}/handoffs/task-${id}.md\`，覆盖写）。`,
+      `本次任务的关键上下文写到 \`${path.join(shared, "handoffs", `task-${id}.md`)}\`（覆盖写）。`,
       "写清楚：做了什么、关键决定与原因、验证过什么、产出路径、遗留/风险、给下一个任务的线索；不要把 token 写进去。",
       "交接文件不是完成信号，完成/失败仍要调 complete / fail。",
       "",
       "## 产出落点",
       "",
-      `最终交付物复制或导出到 \`$RB_SHARED_DIR/outputs/task-${id}/\`（宿主路径 \`${shared}/outputs/task-${id}/\`）。不要只留在工作目录里。`,
-      "UFA 在沙盒里通过 `/work/shared/outputs/` 验收；`complete` 的 artifact 填这个 shared 路径，工作目录里的原始路径可以另外写在交接文档里。",
+      `最终交付物复制或导出到 \`${path.join(shared, "outputs", `task-${id}`)}/\`。不要只留在工作目录里。`,
+      "UFA 在沙盒里通过 `/work/shared/outputs/` 验收；`complete` 的 artifact 填上面这个 shared 绝对路径，工作目录里的原始路径可以另外写在交接文档里。",
       "如果执行器被限制只能写工作目录，就先在工作目录生成，再复制到上面的 shared 产出目录。",
       "",
     ] : []),
     ...(scratch ? [
       "## 临时文件",
       "",
-      `临时脚本、中间产物、截图放 \`$RB_TASK_DIR\`（宿主路径 \`${scratch}\`），不要在工作目录里建 \`.ufa\`。`,
-      "任务文档用 `$RB_TASK_DOC` 指路，避免把仓库根目录当草稿纸。",
+      `临时脚本、中间产物、截图放 \`${scratch}\`，不要在工作目录里建 \`.ufa\`。`,
+      `任务文档是 \`${docFile}\`，改任务只改这一份，避免把仓库根目录当草稿纸。`,
       "",
     ] : []),
     "## 任务 id",
@@ -352,13 +354,13 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "",
     "## 如何更新任务",
     "",
-    `所有请求都带 \`Authorization: Bearer $RB_API_TOKEN\`，接口根地址用 \`$RB_API_BASE\`（例如 ${apiBase}）。`,
+    `所有请求都带 \`Authorization: Bearer $RB_API_TOKEN\`，接口根地址用 \`${apiBase}\`。`,
     "不要把 token 明文写进任务文档、日志或任何工作文件。",
     "",
     "### 1. 先报一次进度（开始执行时）",
     "",
     "```bash",
-    `curl -s -X POST "$RB_API_BASE/v1/tasks/${id}/progress" \\`,
+    `curl -s -X POST "${apiBase}/v1/tasks/${id}/progress" \\`,
     '  -H "Authorization: Bearer $RB_API_TOKEN" \\',
     '  -H "Content-Type: application/json" \\',
     `  -d '{"worker_id":"${workerId}","stage":"working","note":"开始执行"}'`,
@@ -367,7 +369,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "### 2. 完成",
     "",
     "```bash",
-    `curl -s -X POST "$RB_API_BASE/v1/tasks/${id}/complete" \\`,
+    `curl -s -X POST "${apiBase}/v1/tasks/${id}/complete" \\`,
     '  -H "Authorization: Bearer $RB_API_TOKEN" \\',
     '  -H "Content-Type: application/json" \\',
     `  -d '{"worker_id":"${workerId}","result":"写清楚做了什么、结果如何","artifact":"产出物路径或链接"}'`,
@@ -376,7 +378,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "### 3. 失败",
     "",
     "```bash",
-    `curl -s -X POST "$RB_API_BASE/v1/tasks/${id}/fail" \\`,
+    `curl -s -X POST "${apiBase}/v1/tasks/${id}/fail" \\`,
     '  -H "Authorization: Bearer $RB_API_TOKEN" \\',
     '  -H "Content-Type: application/json" \\',
     `  -d '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
@@ -387,9 +389,9 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
       "",
       "```powershell",
       '$headers = @{ Authorization = "Bearer $env:RB_API_TOKEN" }',
-      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/progress" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","stage":"working","note":"开始执行"}'`,
-      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/complete" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","result":"写清楚做了什么、结果如何","artifact":"产出物路径或链接"}'`,
-      `Invoke-RestMethod -Method Post -Uri "$env:RB_API_BASE/v1/tasks/${id}/fail" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
+      `Invoke-RestMethod -Method Post -Uri "${apiBase}/v1/tasks/${id}/progress" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","stage":"working","note":"开始执行"}'`,
+      `Invoke-RestMethod -Method Post -Uri "${apiBase}/v1/tasks/${id}/complete" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","result":"写清楚做了什么、结果如何","artifact":"产出物路径或链接"}'`,
+      `Invoke-RestMethod -Method Post -Uri "${apiBase}/v1/tasks/${id}/fail" -Headers $headers -ContentType "application/json" -Body '{"worker_id":"${workerId}","error":"失败原因","retryable":false}'`,
       "```",
       "",
     ] : []),
@@ -397,7 +399,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "",
     "本任务审批通过后以无审批模式执行，执行阶段没有运行时审批，不要调用 approvals 接口等待批准。",
     "",
-    "只能在上面「工作目录」指定的目录内读写和运行命令，不得越出工作目录；任务文档、`$RB_TASK_DIR`、`$RB_SHARED_DIR` 是明确的例外。越界视为违规，任务会按失败处理。",
+    `只能在上面「工作目录」指定的目录内读写和运行命令，不得越出工作目录；任务文档、\`${scratch}\`、\`${shared}\` 是明确的例外。越界视为违规，任务会按失败处理。`,
     "",
     "## 执行要求",
     "",
@@ -412,7 +414,7 @@ export function renderTaskDoc(task: Task, opts: { apiBase?: string; runtimeDir?:
     "- 报 blocked / fail 要带证据、已尝试过的方案、还缺什么；只说「做不了」不算。",
     "- 人给的后续线索、修正能解决阻塞时，直接继续，不用等人再说「继续」。",
     "- 不要改工作目录之外的文件。",
-    "- 进度以任务池为准（`GET $RB_API_BASE/v1/tasks/<id>/events`），不要另外造一套进度。",
+    `- 进度以任务池为准（\`GET ${apiBase}/v1/tasks/<id>/events\`），不要另外造一套进度。`,
     "",
   ].join("\n");
 }
