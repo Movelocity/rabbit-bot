@@ -1071,34 +1071,50 @@ export function createTools(d: ToolDeps) {
     label: "read_file",
     executionMode: "sequential",
     description:
-      `读文件。默认 scope=sandbox，读 /work（runtime）里的 prompt/、skills/、shared/；`
-      + "scope=host 读宿主机，只有白名单根目录直接可读，白名单外会发审批申请，批准后自动加入白名单。"
+      `读文件。scope=sandbox（默认）只读沙盒：相对路径或 /work/...；`
+      + "scope=host 读宿主机：已配置的 volume / readRoots 直接可读，其他路径会发审批申请，批准后加入白名单。"
+      + "两种 scope 不互相猜：绝对宿主路径必须显式 scope=host。"
       + "文件太长会被截断，截断时会告诉你。提示词在沙盒里的 prompt/*.md，直接改。",
     parameters: Type.Object({
-      path: Type.String({ description: `路径；sandbox 用相对路径，例如 ${examples.readPath}；host 用绝对路径或 ~/...` }),
+      path: Type.String({ description: `路径；sandbox 用相对路径或 /work/...，例如 ${examples.readPath}；host 用绝对路径或 ~/...` }),
       scope: Type.Optional(Type.String({ description: "sandbox（默认）/ host" })),
     }),
     async execute(_id, p) {
       let raw = String(p.path ?? "").trim();
-      let scope = String(p.scope ?? "sandbox").trim().toLowerCase();
+      const scope = String(p.scope ?? "sandbox").trim().toLowerCase();
+      if (scope !== "sandbox" && scope !== "host") return txt("scope 只能是 sandbox / host", { ok: false });
 
-      // 模型常直接给宿主机绝对路径 / ~/...：先尝试映射回沙盒相对路径（运行时根、
-      // overlay 子目录）；确实在沙盒外的，就按 host 读，走白名单/审批，而不是一句
-      // 「只收相对路径」把它挡回去。
-      if (scope === "sandbox" && (/^~/.test(raw) || path.isAbsolute(raw))) {
-        const abs = path.resolve(expandHome(raw));
-        const sandboxRoot = path.resolve(d.readRoot ?? d.cfg.exec.dir);
-        const rel = path.relative(sandboxRoot, abs);
-        if (rel === "") {
-          raw = ".";
-        } else if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
-          raw = rel.replace(/\\/g, "/");
-        } else {
+      if (scope === "sandbox") {
+        // 只做容器内路径归一化，不做「绝对路径猜成 host」：猜错会触发宿主机审批。
+        const norm = raw.replace(/\\/g, "/");
+        if (norm === "/work") raw = ".";
+        else if (norm.startsWith("/work/")) raw = norm.slice("/work/".length);
+        // 兼容外部文档常写的 /shared/...；容器里真实位置是 /work/shared/...
+        else if (norm === "/shared") raw = "shared";
+        else if (norm.startsWith("/shared/")) raw = `shared/${norm.slice("/shared/".length)}`;
+        else if (path.isAbsolute(norm)) {
+          // 沙盒根的绝对路径仍接受，但只做「根内换算」，绝不因为它在根外就切到 host。
+          const abs = path.resolve(expandHome(norm));
+          const sandboxRoot = path.resolve(d.readRoot ?? d.cfg.exec.dir);
+          const rel = path.relative(sandboxRoot, abs);
           const overlay = Object.entries(runtimeOverlays(d.cfg))
             .map(([name, root]) => ({ name, root: path.resolve(root) }))
             .find((o) => isInside(o.root, abs));
-          if (overlay) raw = `${overlay.name}/${path.relative(overlay.root, abs).replace(/\\/g, "/")}`;
-          else { scope = "host"; raw = abs; }
+          if (rel === "") raw = ".";
+          else if (!rel.startsWith("..") && !path.isAbsolute(rel)) raw = rel.replace(/\\/g, "/");
+          else if (overlay) raw = `${overlay.name}/${path.relative(overlay.root, abs).replace(/\\/g, "/")}`;
+          else {
+            return txt(
+              `scope=sandbox 只读沙盒内路径：相对路径、/work/... 或沙盒根下的绝对路径；`
+              + `宿主机绝对路径要显式 scope="host"：${raw}`,
+              { ok: false },
+            );
+          }
+        } else if (/^[a-zA-Z]:/.test(norm) || /^~/.test(norm)) {
+          return txt(
+            `scope=sandbox 只读沙盒内路径：相对路径或 /work/...（宿主机路径要显式 scope="host"）：${raw}`,
+            { ok: false },
+          );
         }
       }
 

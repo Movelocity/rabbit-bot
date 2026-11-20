@@ -29,6 +29,7 @@ if (out) {
     env: {
       RB_API_BASE: process.env.RB_API_BASE, RB_API_TOKEN: process.env.RB_API_TOKEN,
       RB_TASK_DIR: process.env.RB_TASK_DIR, RB_TASK_DOC: process.env.RB_TASK_DOC,
+      PWD: process.env.PWD,
     },
   }));
   fs.renameSync(tmp, out);
@@ -163,6 +164,7 @@ test("startTask：命令参数、env、cwd、session_id、pid 落库、首条任
   assert.ok(argv.includes("--dangerously-skip-permissions"), `opencode 启动参数缺无审批 flag：${argv.join(" ")}`);
   assert.equal(argv.includes("-s"), false, "新任务不该带 -s");
   assert.equal(record.cwd, workDir);
+  assert.equal(record.env.PWD, workDir, "PWD 必须跟着 work_dir，opencode 用它认项目目录");
   assert.equal(record.env.RB_API_BASE, "http://127.0.0.1:9999");
   assert.equal(record.env.RB_API_TOKEN, "secret-token-value");
   assert.equal(record.env.RB_TASK_DOC, docPath);
@@ -283,13 +285,13 @@ test("opencode 2.0.32：目录走 run 位置参数 + --standalone 私有 server�
   };
   const a = buildOpencodeArgs(task, "读 doc 并执行", false, caps32);
   assert.deepEqual(a, [
-    "run", workDir, "--standalone", "读 doc 并执行",
-    "--title", "#9 切模型", "--format", "json", "--dangerously-skip-permissions",
+    "run", "--standalone", "读 doc 并执行",
+    "--title", "#9 切模型", "--format", "json", "--dangerously-skip-permissions", workDir,
   ]);
   // 恢复执行同样带目录与 standalone，session 存在共享库里恢复得动
   const r = buildOpencodeArgs(task, "继续", true, caps32);
   assert.ok(r.includes("--standalone") && r.includes(workDir));
-  assert.ok(r.indexOf(workDir) < r.indexOf("--standalone"), "位置参数必须紧跟 run");
+  assert.equal(r[r.length - 1], workDir, "位置参数必须放最后，放 run 后面会被当成 message 吞掉");
   // work_dir 为空时不得把空串当位置参数吞 prompt
   const noWd = buildOpencodeArgs({ ...task, work_dir: "" }, "读 doc", false, caps32);
   assert.equal(noWd[1], "--standalone", "空目录不应出现在 run 之后");

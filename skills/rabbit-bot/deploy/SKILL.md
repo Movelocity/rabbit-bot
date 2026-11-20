@@ -77,6 +77,27 @@ bash <技能目录>/scripts/deploy-check.sh --layer auto
 
 失败：直接跳到 `references/troubleshooting.md` 的 `D0`。
 
+### 1.1 检查本地编码 CLI 的默认模型
+
+rabbit-bot 派发任务时，`task.model` 为空就不传 `-m`，由本地编码 CLI 自己选。OpenCode 没配全局
+`model` 会回退到「当前 catalog 最新可用模型」，本机实测会落到免费模型
+`opencode/tidepool-alpha-free`，工具调用容易跑飞（见任务 #76）。
+
+```bash
+(cd ~ && opencode debug config 2>/dev/null) | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);const m=a.map(x=>x.info?.model).filter(Boolean)[0];console.log(m?m.providerID+"/"+m.model:"NONE")})'
+```
+
+期望：输出正式模型（推荐 `deepseek/deepseek-flash`），不是 `NONE`、也不是带 `free` 的模型。
+
+失败处理：
+
+- `NONE`：在 `~/.config/opencode/opencode.json` 加 `"model": "deepseek/deepseek-flash"`。
+- 免费模型：同上，换成正式模型；也可给 server 设 `OPENCODE_DISABLE_FREE_MODELS=1`。
+- 也可以不改全局，只在该任务显式指定 `model`。
+- 已有 session 会沿用创建时的模型；恢复旧任务不会自动换模型。
+
+`deploy-check.sh` 的 `coding_cli_model` 一项会给出 `WARN`，不阻塞部署，但交付时要解释。
+
 ## 2. L0：演示（不接 IM、不配 Key、不装 Docker）
 
 ```bash
@@ -263,6 +284,7 @@ bash <技能目录>/scripts/deploy-check.sh --layer production
 - [ ] `/health` 返回 `status: ok`
 - [ ] `npm run doctor` 无 `mode: 读取失败`，进程数为 1
 - [ ] `deploy-check.sh` 对应层无 `FAIL`
+- [ ] 本地编码 CLI 配了正式默认模型（`coding_cli_model` 不是 `NONE` / `free`）
 - [ ] 网页直聊 `--roundtrip` 收到自回复（L1-Web 必做）
 - [ ] 飞书私聊收到回复（L1-Feishu 必做）
 - [ ] `env` 权限 600；仓库里没有密钥

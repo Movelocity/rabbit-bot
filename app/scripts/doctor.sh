@@ -42,6 +42,29 @@ if [ "$SHELL_MODE" = "host" ]; then
   printf '  \033[33m⚠ host 模式：命令直接跑在宿主机上，没有隔离，仅本地开发用\033[0m\n'
 fi
 
+say "任务执行器默认模型"
+EXECUTOR="opencode"
+if [ -f data/run/executor.json ]; then
+  EXECUTOR=$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).executor||"opencode")}catch{console.log("opencode")}' data/run/executor.json 2>/dev/null || echo opencode)
+fi
+printf '  默认 worker：%s\n' "$EXECUTOR"
+if [ "$EXECUTOR" = "opencode" ]; then
+  if command -v opencode >/dev/null 2>&1; then
+    MODEL=$( (cd "$HOME" && opencode debug config 2>/dev/null) | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const m=a.map(x=>x&&x.info&&x.info.model).filter(Boolean)[0];console.log(m?m.providerID+"/"+m.model:"")}catch{console.log("")}})' 2>/dev/null)
+    if [ -z "$MODEL" ]; then
+      printf '  \033[33m⚠ 没有配置默认模型：OpenCode 会回退到最新可用模型（可能是免费模型）\033[0m\n'
+      printf '    在 ~/.config/opencode/opencode.json 设 "model": "deepseek/deepseek-flash"，或建任务时显式指定 model\n'
+    else
+      case "$MODEL" in
+        *free*) printf '  \033[33m⚠ 默认模型是免费模型：%s，任务可能跑飞；建议换 deepseek/deepseek-flash\033[0m\n' "$MODEL" ;;
+        *) printf '  默认模型：%s ✓\n' "$MODEL" ;;
+      esac
+    fi
+  else
+    printf '  \033[33m⚠ 找不到 opencode，任务无法执行\033[0m\n'
+  fi
+fi
+
 say "沙盒容器"
 if [ "$SHELL_MODE" = "host" ]; then
   echo "  host 模式，不建容器"

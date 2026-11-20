@@ -37,15 +37,34 @@ EOF
 chmod 600 ~/.config/rabbit-bot/env
 ```
 
-### 3. 启动并体检
+### 3. 确认执行器的默认模型
+
+rabbit-bot 派发任务时，只有 `task.model` 非空才给本地编码 CLI 传 `-m`；为空就完全交给 CLI 自己选。
+OpenCode 没配全局 `model` 时会回退到「当前 catalog 最新可用模型」，本机实测落到免费模型
+`opencode/tidepool-alpha-free`，工具调用容易跑飞（任务 #76 就是）。**上线前先确认这里不是空的。**
+
+```bash
+(cd ~ && opencode debug config 2>/dev/null) | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);const m=a.map(x=>x.info?.model).filter(Boolean)[0];console.log(m?m.providerID+"/"+m.model:"NONE")})'
+```
+
+- 输出 `deepseek/deepseek-flash` 这类正式模型 → 通过。
+- 输出 `NONE` 或带 `free` 的模型 → 在 `~/.config/opencode/opencode.json` 加一行：
+  ```json
+  "model": "deepseek/deepseek-flash"
+  ```
+  也可以在建任务时显式填 `model`。改全局配置不用重启 rabbit-bot，新开的执行器会话会读到。
+
+> 已有 session 会沿用创建时的模型；恢复旧任务不会自动换模型，需要新开会话或显式传 `--model`。
+
+### 4. 启动并体检
 
 ```bash
 pm2 start ecosystem.config.cjs   # 唯一入口；别同时手工 run.sh，会抢消息
 pm2 save                         # 记录进程列表，开机自启靠它
-npm run doctor                   # 进程 / 锁 / 注入口 / 沙盒 / 唤醒分布
+npm run doctor                   # 进程 / 锁 / 注入口 / 沙盒 / 执行器模型 / 唤醒分布
 ```
 
-### 4. 升级或改完代码
+### 5. 升级或改完代码
 
 ```bash
 npm install --no-audit --no-fund   # 依赖有变时

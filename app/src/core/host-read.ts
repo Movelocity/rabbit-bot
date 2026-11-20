@@ -1,8 +1,9 @@
-/** 宿主读取白名单：配置里的根目录 + 主人审批过的路径。 */
+/** 宿主读取白名单：配置挂进沙盒的 volume + readRoots + 主人审批过的路径。 */
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.ts";
 import { expandHome, isInside } from "./platform.ts";
+import { runtimeOverlays } from "./runtime.ts";
 
 const ALLOW_FILE = "host-read-allow.json";
 
@@ -16,8 +17,21 @@ function allowFile(cfg: Config): string {
   return path.join(cfg.dataDir, "run", ALLOW_FILE);
 }
 
+/**
+ * 已经挂进沙盒的宿主目录同样算白名单：模型在沙盒里能读，回到 host scope 读同一份
+ * 内容不该再弹一次审批。runtime overlays 是 shellRunner 运行时追加的 volume，也要算。
+ */
+function configuredVolumeRoots(cfg: Config): string[] {
+  const roots = (cfg.exec.shell.volumes ?? []).map((v) => expand(v.host));
+  roots.push(...Object.values(runtimeOverlays(cfg)).map(expand));
+  return roots.filter(Boolean);
+}
+
 export function hostReadRoots(cfg: Config): string[] {
-  const roots = (cfg.exec.shell.host?.readRoots ?? []).map(expand).filter(Boolean);
+  const roots = [
+    ...configuredVolumeRoots(cfg),
+    ...(cfg.exec.shell.host?.readRoots ?? []).map(expand).filter(Boolean),
+  ];
   try {
     const parsed = JSON.parse(fs.readFileSync(allowFile(cfg), "utf8"));
     if (Array.isArray(parsed)) roots.push(...parsed.map((p) => expand(String(p))).filter(Boolean));

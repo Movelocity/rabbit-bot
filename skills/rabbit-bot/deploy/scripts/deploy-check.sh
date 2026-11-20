@@ -172,6 +172,29 @@ if [ -n "$RUNTIME_DIR" ]; then
   fi
 fi
 
+# ---------- 任务执行器默认模型 ----------
+# rabbit-bot 只在 task.model 非空时传 -m；空值会由本地编码 CLI 自己选。
+# OpenCode 没配全局 model 会回退到最新可用模型，实测可能是免费模型，任务容易跑飞。
+EXECUTOR="opencode"
+if [ -f "$DATA_DIR/run/executor.json" ]; then
+  EXECUTOR="$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).executor||"opencode")}catch{console.log("opencode")}' "$DATA_DIR/run/executor.json" 2>/dev/null || echo opencode)"
+fi
+if [ "$EXECUTOR" = "opencode" ]; then
+  if command -v opencode >/dev/null 2>&1; then
+    CLI_MODEL="$( (cd "$HOME" && opencode debug config 2>/dev/null) | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const m=a.map(x=>x&&x.info&&x.info.model).filter(Boolean)[0];console.log(m?m.providerID+"/"+m.model:"")}catch{console.log("")}})' 2>/dev/null)"
+    if [ -z "$CLI_MODEL" ]; then
+      warn coding_cli_model "opencode 没有配置默认模型，会回退到最新可用模型（可能是免费模型）；在 ~/.config/opencode/opencode.json 设 \"model\": \"deepseek/deepseek-flash\"，或建任务时显式指定 model"
+    else
+      case "$CLI_MODEL" in
+        *free*) warn coding_cli_model "opencode 默认模型是免费模型 ${CLI_MODEL}，任务可能跑飞；建议换 deepseek/deepseek-flash" ;;
+        *) ok coding_cli_model "opencode 默认模型 ${CLI_MODEL}" ;;
+      esac
+    fi
+  else
+    warn coding_cli_model "找不到 opencode；默认 worker=opencode 时任务无法执行"
+  fi
+fi
+
 if [ "$LAYER" = "production" ]; then
   if [ "$EXEC_MODE" = "docker" ]; then
     ok exec_mode "production 使用 docker 沙盒"

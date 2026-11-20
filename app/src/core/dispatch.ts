@@ -125,7 +125,9 @@ try {
     detached: true,
     shell: !!spec.shell,
     stdio: ["ignore", out, out],
-    env: process.env,
+    // Node spawn 只改真实 cwd，不会同步 PWD。opencode（Bun）用 $PWD 认项目目录，
+    // 不覆盖就会跑回 rabbit-bot 自己的目录（任务 #71/#72/#74 都是这么挂的）。
+    env: Object.assign({}, process.env, { PWD: spec.cwd }),
   });
 } catch (e) {
   fs.closeSync(out);
@@ -917,7 +919,6 @@ export function buildOpencodeArgs(
   if (caps?.directory && wd) args.push("--directory", wd);
   args.push("run");
   if (caps?.dir && wd) args.push("--dir", wd);
-  else if (caps?.positionalDir && wd) args.push(wd); // 2.0.32：目录是 run 的位置参数
   if (caps?.standalone) args.push("--standalone");   // 私有 server：目录与热更新双隔离
   args.push(prompt);
 
@@ -941,6 +942,10 @@ export function buildOpencodeArgs(
 
   if (!caps) args.push("--dangerously-skip-permissions");
   else if (caps.permission) args.push(caps.permission);
+  // 2.0.32 的全局用法是 `<opencode> <subcommand> [flags] [<directory>]`，
+  // 目录必须是最后一个位置参数。放到 run 后面会被当成 message 吞进 prompt，
+  // 真正决定目录的反而是 $PWD（见 RUNNER_REAPER_JS 里的覆盖）。
+  if (!caps?.directory && !caps?.dir && caps?.positionalDir && wd) args.push(wd);
   return args;
 }
 

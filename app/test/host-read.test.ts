@@ -8,7 +8,7 @@ import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
 
-function setup(opts: { decision?: "approved" | "rejected"; allowHostRoot?: boolean } = {}) {
+function setup(opts: { decision?: "approved" | "rejected"; allowHostRoot?: boolean; configuredVolume?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-host-read-"));
   const runtime = path.join(dir, "runtime");
   const hostDir = path.join(dir, "host");
@@ -21,7 +21,11 @@ function setup(opts: { decision?: "approved" | "rejected"; allowHostRoot?: boole
     dataDir: path.join(dir, "data"),
     exec: {
       dir: runtime,
-      shell: { mode: "docker", host: { readRoots: opts.allowHostRoot ? [hostDir] : [] } },
+      shell: {
+        mode: "docker",
+        ...(opts.configuredVolume ? { volumes: [{ host: hostDir, container: "/work/extra" }] } : {}),
+        host: { readRoots: opts.allowHostRoot ? [hostDir] : [] },
+      },
     },
   });
   const asked: string[] = [];
@@ -87,7 +91,7 @@ test("host 白名单外：被拒就不读", async () => {
   } finally { cleanup(s); }
 });
 
-test("sandbox 下给绝对路径：沙盒内自动转相对，沙盒外自动按 host 走审批", async () => {
+test("scope=sandbox 下绝对路径只做根内换算，不偷偷切 host", async () => {
   const s = setup({ decision: "approved" });
   try {
     const inSandbox: any = await s.read.execute("id", { path: path.join(s.runtime, "sandbox.txt") });
@@ -96,9 +100,38 @@ test("sandbox 下给绝对路径：沙盒内自动转相对，沙盒外自动按
     assert.equal(s.asked.length, 0, "沙盒内绝对路径不该申请");
 
     const onHost: any = await s.read.execute("id", { path: path.join(s.hostDir, "host.txt") });
-    assert.equal(onHost.details.ok, true);
-    assert.equal(text(onHost), "host ok");
-    assert.equal(s.asked.length, 1, "沙盒外绝对路径应自动走 host 审批");
+    assert.equal(onHost.details.ok, false);
+    assert.match(text(onHost), /scope="host"/);
+    assert.equal(s.asked.length, 0, "没显式 scope=host 不该触发审批");
+
+    const explicit: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
+    assert.equal(explicit.details.ok, true);
+    assert.equal(text(explicit), "host ok");
+    assert.equal(s.asked.length, 1, "显式 host 才走审批");
+  } finally { cleanup(s); }
+});
+
+test("scope=sandbox 接受 /work 和 /shared 别名", async () => {
+  const s = setup();
+  try {
+    fs.mkdirSync(path.join(s.runtime, "shared/issues"), { recursive: true });
+    fs.writeFileSync(path.join(s.runtime, "shared/issues/a.md"), "issue ok");
+    for (const p of ["/work/shared/issues/a.md", "/shared/issues/a.md"]) {
+      const r: any = await s.read.execute("id", { path: p });
+      assert.equal(r.details.ok, true, p);
+      assert.equal(text(r), "issue ok", p);
+    }
+    assert.equal(s.asked.length, 0);
+  } finally { cleanup(s); }
+});
+
+test("已配置 volume 的宿主目录直接可读，不申请", async () => {
+  const s = setup({ configuredVolume: true });
+  try {
+    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
+    assert.equal(r.details.ok, true);
+    assert.equal(text(r), "host ok");
+    assert.equal(s.asked.length, 0, "配置成 volume 的路径不该申请");
   } finally { cleanup(s); }
 });
 
