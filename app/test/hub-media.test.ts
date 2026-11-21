@@ -19,6 +19,21 @@ const img = (msgId: string, seqKey = msgId) => ({
   attachment: { path: `/tmp/${seqKey}.jpg`, mime: "image/jpeg", width: 10, height: 10, bytes: 100 },
 });
 
+const groupText = (msgId: string) => ({
+  platform: "feishu" as const, external_chat_id: "oc_group", pool_kind: "group" as const,
+  msg_id: msgId, sender_id: "ou_2", sender_name: "同事", ts: Date.now(), text: "群消息",
+  reply_to: null, mentions: [], is_mention_me: true, media_type: "text" as const, from_self: false,
+});
+
+test("群聊唤醒关闭：takeUnread 不消费群消息，消息仍在库里", () => {
+  const store = new Store(":memory:");
+  const hub = new Hub(store, loadConfig({ scheduler: { tickMs: 0 } }), log, {} as any);
+  const saved = hub.ingest(groupText("g1"))!;
+  assert.equal(hub.takeUnread().length, 0, "群消息不随其它唤醒被读走");
+  assert.equal(store.unread(saved.pool_id, 10).length, 1, "消息照常存着");
+  assert.equal(hub.takeUnread([saved.pool_id]).length, 1, "显式指定池仍能读");
+});
+
 test("图片被 takeUnread 消费后仍留档，下一轮能取回", () => {
   const { hub } = setup();
   hub.ingest(img("m1"));

@@ -266,3 +266,52 @@ test("updateConfig 改变群聊间隔后重新排期", () => {
   assert.equal(wakes[0].type, "tick");
   s.stop();
 });
+
+test("群聊唤醒间隔 0：群未读不进 tick，被 @ 也不唤醒", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { g1: "group" };
+  const { clock, wakes, s, state } = setup({ tickMs: 0 }, { poolKind: (id) => kinds[id] });
+  s.start();
+  state.unread = ["g1"];
+  clock.advance(600_000);
+  assert.equal(wakes.length, 0, "群未读不自动唤醒");
+  s.onMessage("g1", true, "群聊被@", "group", true);
+  clock.advance(60_000);
+  assert.equal(wakes.length, 0, "被 @ 也不唤醒");
+  s.stop();
+});
+
+test("群聊唤醒间隔 0：私聊消息和私聊未读兜底照常", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { p1: "private", g1: "group" };
+  const { clock, wakes, s, state } = setup(
+    { tickMs: 0, privateWakeMs: 5_000 },
+    { poolKind: (id) => kinds[id] },
+  );
+  s.start();
+  state.unread = ["p1"];
+  clock.advance(60_000);
+  assert.equal(wakes.length, 1, "私聊未读仍由 tick 兜底");
+  assert.equal(wakes[0].type, "tick");
+  assert.deepEqual([...wakes[0].pools], ["p1"]);
+
+  wakes.length = 0;
+  state.unread = [];
+  s.onMessage("p1", true, "私聊新消息", "private");
+  clock.advance(5_000);
+  assert.equal(wakes.length, 1, "私聊消息照常去抖唤醒");
+  assert.equal(wakes[0].type, "message");
+  s.stop();
+});
+
+test("群聊唤醒间隔从 0 恢复后，群未读重新参与 tick", () => {
+  const kinds: Record<string, "private" | "group" | "task"> = { g1: "group" };
+  const { clock, wakes, s, state } = setup({ tickMs: 0 }, { poolKind: (id) => kinds[id] });
+  s.start();
+  state.unread = ["g1"];
+  clock.advance(60_000);
+  assert.equal(wakes.length, 0);
+  s.updateConfig({ tickMs: 60_000 });
+  clock.advance(60_000);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].type, "tick");
+  s.stop();
+});

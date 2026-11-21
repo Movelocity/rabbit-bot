@@ -80,16 +80,22 @@ export function SchedulerTickStatus() {
       >
         <div className="mb-1.5 font-semibold text-text">自然 tick</div>
         <p>
-          调度器按固定周期检查各池未读：群聊攒到 tick 一起读，私聊 / @ 会更快唤醒，活跃对话期间会自动缩短间隔。
+          {status && status.tick_ms <= 0
+            ? "群聊唤醒已关闭：群消息只入库、不自动唤醒（含被 @）。自然 tick 仍按活跃间隔运行，负责私聊兜底和主动开口。"
+            : "调度器按固定周期检查各池未读：群聊攒到 tick 一起读，私聊 / @ 会更快唤醒，活跃对话期间会自动缩短间隔。"}
         </p>
         {status?.available && (
           <dl className="mt-2 space-y-0.5 border-t border-border pt-2">
             <div className="flex justify-between gap-3">
               <dt className="text-faint">周期</dt>
               <dd className="tabular-nums">
-                每 {Math.round(status.tick_ms / 1000)}s
-                {status.active_tick_ms !== status.tick_ms &&
-                  `（活跃时 ${Math.round(status.active_tick_ms / 1000)}s）`}
+                {status.tick_ms <= 0
+                  ? "群聊已关闭"
+                  : `每 ${Math.round(status.tick_ms / 1000)}s${
+                      status.active_tick_ms !== status.tick_ms
+                        ? `（活跃时 ${Math.round(status.active_tick_ms / 1000)}s）`
+                        : ""
+                    }`}
               </dd>
             </div>
             {status.last_tick_at ? (

@@ -98,16 +98,24 @@ export class Hub {
     //   群聊＝默认潜水，攒到 tick 周期一起看；只有被 @ 才立刻看这一屏
     //          （"被点到名"是别人明确在跟你说话，等 tick 就错过了对话时机）
     //   主人没有特权：谁的消息都一样等 tick，标 [主人] 只是给她一个"这是谁"的线索
-    const urgent = saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
-    const where = pool.kind === "private" ? "私聊" : saved.is_mention_me ? "群聊被@：立刻看" : "群聊：等 tick";
+    //   群聊唤醒间隔 = 0（scheduler.tickMs）时群消息只入池，被 @ 也不唤醒
+    const groupWakeOff = pool.kind === "group" && (this.cfg.scheduler.tickMs ?? 0) <= 0;
+    const urgent = !groupWakeOff && saved.media_type !== "reaction" && (pool.kind === "private" || saved.is_mention_me);
+    const where = pool.kind === "private"
+      ? "私聊"
+      : groupWakeOff
+        ? "群聊：不唤醒"
+        : saved.is_mention_me
+          ? "群聊被@：立刻看"
+          : "群聊：等 tick";
     const who = this.store.userDisplayName(saved.platform, saved.sender_id) || saved.sender_name;
     this.log.info(`入池 ${saved.pool_id} #${saved.seq} ${who}: ${saved.text.slice(0, 60)}〔${where}〕`);
     this.scheduler?.onMessage(
       saved.pool_id,
       urgent,
-      pool.kind === "private" ? "私聊新消息" : "群聊被@",
+      pool.kind === "private" ? "私聊新消息" : groupWakeOff ? "群聊唤醒已关闭" : "群聊被@",
       pool.kind === "private" ? "private" : "group",
-      pool.kind === "group" && saved.is_mention_me,
+      pool.kind === "group" && saved.is_mention_me && !groupWakeOff,
     );
     return saved;
   }
@@ -155,7 +163,11 @@ export class Hub {
 
   /** 收集所有池的未读并推进游标（send 返回值、唤醒时读池都走这里） */
   takeUnread(poolIds?: string[], opts: { excludeTask?: boolean } = {}): StoredMessage[] {
-    const ids = poolIds ?? this.store.poolsWithUnread();
+    // 群聊唤醒间隔 = 0：群消息只入池、不参与任何唤醒（包括私聊唤醒时顺带读池），
+    // 避免她在私聊里醒来却顺手回了一个没被唤醒的群。显式指定池（任务等）不受影响。
+    const groupOff = (this.cfg.scheduler?.tickMs ?? 0) <= 0;
+    const ids = (poolIds ?? this.store.poolsWithUnread())
+      .filter((id) => !(poolIds === undefined && groupOff && this.store.getPool(id)?.kind === "group"));
     const out: StoredMessage[] = [];
     for (const id of ids) {
       // 任务池事件只是进度，不是「他又说话了」：send 时不拿它打断正常对话

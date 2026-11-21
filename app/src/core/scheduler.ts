@@ -32,6 +32,7 @@ export interface SchedulerDeps {
   warn?: (msg: string) => void;
 }
 export interface SchedulerConfig {
+  /** 群聊唤醒间隔；0 = 关闭群聊自动唤醒（群消息只入池，含被 @），私聊 / 任务 / 日程照常 */
   tickMs: number; activeTickMs: number; activeWindowMs: number; debounceMs: number; debounceMaxWaitMs: number;
   /** 私聊消息后的唤醒延迟；缺省沿用 debounceMs */
   privateWakeMs?: number;
@@ -114,9 +115,14 @@ export class Scheduler {
     this.scheduleScheduleTick();
   }
 
+  /** 群聊唤醒间隔 0 = 关闭群聊唤醒；tick 仍按活跃间隔跑，负责私聊兜底和主动开口 */
+  private baseTickMs(): number {
+    return this.cfg.tickMs > 0 ? this.cfg.tickMs : Math.max(this.cfg.activeTickMs, 1000);
+  }
   currentTickMs(): number {
     const now = this.d.clock.now();
-    return now - this.lastActivity < this.cfg.activeWindowMs ? Math.min(this.cfg.activeTickMs, this.cfg.tickMs) : this.cfg.tickMs;
+    const base = this.baseTickMs();
+    return now - this.lastActivity < this.cfg.activeWindowMs ? Math.min(this.cfg.activeTickMs, base) : base;
   }
   /** Agent 发送了消息 / 有人说话 → 视为活跃对话 */
   markActive() {
@@ -128,8 +134,13 @@ export class Scheduler {
   /** 新消息入池后调用。urgent = 私聊 / 群里 @我 / 群里主人说话；forceDirect = 别攒到 tick，立刻去抖唤醒 */
   onMessage(poolId: string, urgent: boolean, reason: string, kind?: "private" | "group", forceDirect = false) {
     this.markActive();
-    if (!urgent) return; // 群里未 @：等 tick
     const resolvedKind = kind ?? this.d.poolKind?.(poolId) ?? "group";
+    // 群聊唤醒间隔 = 0：群消息只入池，不自动唤醒（被 @ 也一样）；私聊 / 任务 / 日程不受影响
+    if (resolvedKind === "group" && this.cfg.tickMs <= 0) {
+      this.d.log?.(`群聊唤醒已关闭，消息只入池 ${poolId}（${reason}）`);
+      return;
+    }
+    if (!urgent) return; // 群里未 @：等 tick
     const now = this.d.clock.now();
     // 攒给 tick：不做单独唤醒。tick 会把未读一起读走，上下文还是同一个 session，
     // 前缀缓存命中（pi 报 cacheRead，按 1/10 计价）。
@@ -195,8 +206,12 @@ export class Scheduler {
     if (this.d.isPaused()) return false;
     const now = this.d.clock.now();
     let enqueued = false;
+    // tickMs = 0 时群聊不参与 tick；其它池（私聊兜底）和主动开口照常
+    const groupOff = this.cfg.tickMs <= 0;
+    const kindOf = (poolId: string) => this.d.poolKind?.(poolId) ?? "group";
     // 自省 + 门控都过了：即使没有未读也要给 agent 一次「要不要自己开口」的机会
-    const pro = this.d.proactivePools?.(now) ?? [];
+    const pro = (this.d.proactivePools?.(now) ?? [])
+      .filter((x) => !groupOff || !x.pool || kindOf(x.pool) !== "group");
     if (pro.length) {
       const proPools = pro.map((x) => x.pool).filter((x): x is string => !!x);
       this.d.queue.enqueue(makeWake("tick", proPools, `她想说话了：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
@@ -206,7 +221,8 @@ export class Scheduler {
     // 任务池走独立的任务事件 tick，不在这里逐条/逐池唤醒
     const pools = this.d.poolsWithUnread()
       .filter((p) => !this.debounces.has(p))
-      .filter((p) => (this.d.poolKind?.(p) ?? "group") !== "task");
+      .filter((p) => kindOf(p) !== "task")
+      .filter((p) => !groupOff || kindOf(p) !== "group");
     if (pools.length) {
       this.d.queue.enqueue(makeWake("tick", pools, "tick: 有未读", [], now));
       enqueued = true;
@@ -220,6 +236,7 @@ export class Scheduler {
    */
   tickKind(kind: "private" | "group" | "task"): boolean {
     if (this.d.isPaused()) return false;
+    if (kind === "group" && this.cfg.tickMs <= 0) return false;
     const now = this.d.clock.now();
     const pools = this.d.poolsWithUnread()
       .filter((p) => !this.debounces.has(p))

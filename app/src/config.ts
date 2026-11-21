@@ -39,6 +39,7 @@ export interface Config {
    */
   paths?: { desktopDir?: string };
   scheduler: {
+    /** 群聊唤醒间隔；0 = 关闭群聊自动唤醒（群消息只入池，含被 @） */
     tickMs: number; taskTickMs: number; privateWakeMs: number; activeTickMs: number; activeWindowMs: number;
     debounceMs: number; debounceMaxWaitMs: number; watchdogMs: number; overdueGraceMs: number;
     batchToTick?: boolean; runnerWatchMs?: number;
@@ -337,7 +338,9 @@ export function validateConfig(cfg: Config): void {
   const pos = (n: number, name: string) => {
     if (!(typeof n === "number" && n > 0)) throw new Error(`config: ${name} 必须是正数`);
   };
-  pos(cfg.scheduler.tickMs, "scheduler.tickMs");
+  if (!(typeof cfg.scheduler.tickMs === "number" && cfg.scheduler.tickMs >= 0)) {
+    throw new Error("config: scheduler.tickMs 必须是非负数（0 = 关闭群聊自动唤醒）");
+  }
   pos(cfg.scheduler.taskTickMs, "scheduler.taskTickMs");
   pos(cfg.scheduler.privateWakeMs, "scheduler.privateWakeMs");
   pos(cfg.scheduler.debounceMs, "scheduler.debounceMs");

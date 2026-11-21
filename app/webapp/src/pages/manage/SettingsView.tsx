@@ -117,16 +117,16 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   }, [reloadSignal, load]);
 
   const save = async () => {
-    const fields: [keyof SchedulerSettings, string, string][] = [
-      ["privateWakeMs", privateSec, "私聊唤醒间隔"],
-      ["groupWakeMs", groupSec, "群聊唤醒间隔"],
-      ["taskWakeMs", taskSec, "任务群唤醒间隔"],
+    const fields: [keyof SchedulerSettings, string, string, boolean][] = [
+      ["privateWakeMs", privateSec, "私聊唤醒间隔", false],
+      ["groupWakeMs", groupSec, "群聊唤醒间隔", true],
+      ["taskWakeMs", taskSec, "任务群唤醒间隔", false],
     ];
     const body = {} as SchedulerSettings;
-    for (const [key, raw, label] of fields) {
+    for (const [key, raw, label, allowZero] of fields) {
       const seconds = Number(raw);
-      if (!Number.isFinite(seconds) || seconds <= 0) {
-        setStatus({ text: `${label}必须大于 0 秒`, error: true });
+      if (!Number.isFinite(seconds) || seconds < 0 || (!allowZero && seconds <= 0)) {
+        setStatus({ text: allowZero ? `${label}不能小于 0 秒` : `${label}必须大于 0 秒`, error: true });
         return;
       }
       body[key] = Math.round(seconds * 1000);
@@ -278,7 +278,7 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
             <Field label="群聊唤醒间隔（秒）">
               <Input
                 type="number"
-                min={1}
+                min={0}
                 step={1}
                 value={groupSec}
                 onChange={(e) => setGroupSec(e.target.value)}
@@ -294,6 +294,9 @@ export function SettingsView({ reloadSignal }: { reloadSignal: number }) {
               />
             </Field>
           </div>
+          <p className="mt-3 text-sm text-muted">
+            群聊唤醒间隔填 <code>0</code> 表示不自动唤醒群聊：群消息照常入库，但不会被 tick 或 @ 唤醒；私聊、任务、日程不受影响。
+          </p>
           <div className="my-3">
             <Button variant="primary" disabled={saving} onClick={() => void save()}>
               {saving ? "保存中…" : "保存"}

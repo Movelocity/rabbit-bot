@@ -155,6 +155,19 @@ test("PUT /v1/scheduler：非法值 400，且不应用", async () => {
   assert.equal(cfg.scheduler.privateWakeMs, 12000);
 });
 
+test("PUT /v1/scheduler：群聊唤醒间隔可以填 0（关闭群聊自动唤醒）", async () => {
+  const r = await call("/v1/scheduler", {
+    method: "PUT",
+    body: JSON.stringify({ privateWakeMs: 12000, groupWakeMs: 0, taskWakeMs: 30000 }),
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.data, { privateWakeMs: 12000, groupWakeMs: 0, taskWakeMs: 30000 });
+  assert.equal(cfg.scheduler.tickMs, 0);
+  assert.deepEqual(updates.at(-1), { privateWakeMs: 12000, tickMs: 0, taskTickMs: 30000 });
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "run", "scheduler.json"), "utf8"));
+  assert.equal(saved.groupWakeMs, 0);
+});
+
 test("旧 scheduler.json 缺 taskWakeMs 时用默认值加载", () => {
   const oldDir = path.join(APP_ROOT, ".scratch", "scheduler-api-old");
   const file = path.join(oldDir, "run", "scheduler.json");

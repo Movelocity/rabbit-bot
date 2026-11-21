@@ -37,13 +37,14 @@ export function effectiveSchedulerSettings(cfg: Config): SchedulerSettings {
   };
 }
 
-function pickMs(raw: unknown, key: keyof SchedulerSettings): number {
+function pickMs(raw: unknown, key: keyof SchedulerSettings, opts: { allowZero?: boolean } = {}): number {
   const v = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)[key] : undefined;
   if (typeof v !== "number" || !Number.isInteger(v)) {
     throw new Error(`${key} 必须是整数（毫秒）`);
   }
-  if (v < MIN_MS || v > MAX_MS) {
-    throw new Error(`${key} 必须在 ${MIN_MS}~${MAX_MS} 毫秒之间`);
+  const min = opts.allowZero ? 0 : MIN_MS;
+  if (v < min || v > MAX_MS) {
+    throw new Error(`${key} 必须在 ${min}~${MAX_MS} 毫秒之间${opts.allowZero ? "（0 = 关闭群聊自动唤醒）" : ""}`);
   }
   return v;
 }
@@ -52,7 +53,8 @@ function pickMs(raw: unknown, key: keyof SchedulerSettings): number {
 export function validateSchedulerSettings(raw: unknown): SchedulerSettings {
   return {
     privateWakeMs: pickMs(raw, "privateWakeMs"),
-    groupWakeMs: pickMs(raw, "groupWakeMs"),
+    // 群聊唤醒间隔允许 0：消息照常入池，只是不再自动唤醒
+    groupWakeMs: pickMs(raw, "groupWakeMs", { allowZero: true }),
     taskWakeMs: pickMs(raw, "taskWakeMs"),
   };
 }
