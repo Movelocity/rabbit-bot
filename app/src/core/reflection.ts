@@ -33,8 +33,8 @@ export type ParseResult =
   | { ok: false; error: string };
 
 /** 下次自省的间隔夹逼：太短会一直烧 token，太长她就「睡着了」 */
-export const MIN_NEXT_SEC = 300;
-export const MAX_NEXT_SEC = 3 * 3600;
+export const MIN_NEXT_SEC = 3600;
+export const MAX_NEXT_SEC = 24 * 3600;
 
 function clamp01(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);
@@ -174,13 +174,13 @@ export function buildReflectionPrompt(i: ReflectionPromptInput): string {
   "urgency": 0.0,
   "topic_pick": "要他拍板/给权限/给资源的事，或可交付结果、真卡点，没有就空字符串",
   "topic_angle": "从哪个角度切入，没有就空字符串",
-  "next_reflection_in": 1800
+  "next_reflection_in": 3600
 }`);
   parts.push("");
   parts.push("urgency 的锚（必须对着这个表给分，不要都给 0.5）：");
   parts.push(URGENCY_ANCHORS);
   parts.push("");
-  parts.push("next_reflection_in 是「过多少秒之后你愿意再想一次」，自己定，300 到 10800 之间。");
+  parts.push("next_reflection_in 是「过多少秒之后你愿意再想一次」，自己定，3600 到 86400 之间。");
   parts.push("没有正事就给低于 0.3 的分；别硬找话题，也别为了刷存在感开口。");
 
   return parts.join("\n");

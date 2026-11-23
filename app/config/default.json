@@ -155,7 +155,7 @@
     }
   },
   "proactive": {
-    "enabled": true,
+    "enabled": false,
     "reflectionDelayMs": 300000,
     "urgencyThreshold": 0.35,
     "minSilentMs": 300000,

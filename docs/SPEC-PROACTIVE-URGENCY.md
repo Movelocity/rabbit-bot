@@ -1,5 +1,8 @@
 # SPEC：主动对话重做（urgency 驱动）
 
+> **历史设计稿。** 当前实现、配置与「后来越做越偏成工作任务汇报」的记录见
+> [SPEC-REFLECTION.md](SPEC-REFLECTION.md)（2026-11-23）。本文保留 2026-11-03 的原始意图。
+
 > 替换 `energy.ts` / `wave.ts` / `tide.ts` 三件套。
 > 参考 Shikigami Protocol（AGPL-3.0）的 ASE 思路：**主动开口由模型自己产生的"想说程度"驱动，不由代码拍概率**。
 > 只借思路，不复制代码。README 备注一句即可。

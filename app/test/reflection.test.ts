@@ -8,13 +8,13 @@ import {
 test("干净 JSON 直接解析", () => {
   const r = parseReflection(JSON.stringify({
     thought: "他今天说了三次加班", style_hint: "随口问一句", urgency: 0.72,
-    topic_pick: "加班", topic_angle: "问累不累，别说教", next_reflection_in: 1800,
+    topic_pick: "加班", topic_angle: "问累不累，别说教", next_reflection_in: 7200,
   }));
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.equal(r.value.urgency, 0.72);
   assert.equal(r.value.thought, "他今天说了三次加班");
-  assert.equal(r.value.nextReflectionInSec, 1800);
+  assert.equal(r.value.nextReflectionInSec, 7200);
 });
 
 test("代码围栏和前后废话都能容忍", () => {
@@ -56,7 +56,7 @@ test("坏 JSON 报 bad-json", () => {
   assert.equal(r.error, "bad-json");
 });
 
-test("next_reflection_in 被夹进 300..10800", () => {
+test("next_reflection_in 被夹进 3600..86400", () => {
   assert.equal((parseReflection('{"urgency":0.5,"next_reflection_in":10}') as any).value.nextReflectionInSec, MIN_NEXT_SEC);
   assert.equal((parseReflection('{"urgency":0.5,"next_reflection_in":99999}') as any).value.nextReflectionInSec, MAX_NEXT_SEC);
   assert.equal((parseReflection('{"urgency":0.5}') as any).value.nextReflectionInSec, null);

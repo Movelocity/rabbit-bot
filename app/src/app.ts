@@ -7,7 +7,7 @@ import { Store } from "./core/db.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
 import { evaluateGate } from "./core/gate.ts";
-import { buildReflectionPrompt, extractJsonObject, parseReflection } from "./core/reflection.ts";
+import { MIN_NEXT_SEC, buildReflectionPrompt, extractJsonObject, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
 import {
   appendNote, archiveSettledTaskPools, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
@@ -969,13 +969,13 @@ export class App {
       this.store.saveReflection({
         user_id: this.store.lastUserId(poolId), pool_id: poolId,
         thought: "", style_hint: "", urgency: 0, topic_pick: "", topic_angle: "",
-        next_at: now + 15 * 60e3, created_at: now,
+        next_at: now + MIN_NEXT_SEC * 1000, created_at: now,
       });
       return;
     }
 
     const value = parsed.value;
-    const nextAt = now + (value.nextReflectionInSec ?? 1800) * 1000;
+    const nextAt = now + (value.nextReflectionInSec ?? MIN_NEXT_SEC) * 1000;
     this.store.saveReflection({
       user_id: this.store.lastUserId(poolId), pool_id: poolId,
       thought: value.thought, style_hint: value.styleHint, urgency: value.urgency,
