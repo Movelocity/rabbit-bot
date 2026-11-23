@@ -41,19 +41,6 @@ CREATE TABLE IF NOT EXISTS tide_events (
   stage INTEGER -- 退潮第几档：0 = 首档，1.. = 每退一半一档
 );
 CREATE INDEX IF NOT EXISTS idx_tide_day ON tide_events(day, pool_id, anchor_kind, kind);
-CREATE TABLE IF NOT EXISTS reflections (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, pool_id TEXT NOT NULL,
-  thought TEXT NOT NULL DEFAULT '', style_hint TEXT NOT NULL DEFAULT '',
-  urgency REAL NOT NULL DEFAULT 0, topic_pick TEXT NOT NULL DEFAULT '', topic_angle TEXT NOT NULL DEFAULT '',
-  next_at INTEGER, created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_reflections_pool ON reflections(pool_id, created_at DESC);
-CREATE TABLE IF NOT EXISTS proactive_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, pool_id TEXT NOT NULL,
-  ts INTEGER NOT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL,
-  urgency REAL, silent_sec INTEGER, cooldown_req INTEGER, msg_id INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_proactive_ts ON proactive_log(ts DESC);
 CREATE TABLE IF NOT EXISTS plan_fires (plan_id INTEGER NOT NULL, fire_ts INTEGER NOT NULL, fired_at INTEGER NOT NULL, PRIMARY KEY(plan_id, fire_ts));
 CREATE TABLE IF NOT EXISTS schedules (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -635,66 +622,6 @@ export class Store {
       .run(e.plan_id ?? null, e.pool_id ?? null, e.day, e.ts, e.kind, e.anchor_kind ?? null, e.reason ?? null, e.why ?? null, e.wave_a ?? null, e.stage ?? null);
   }
 
-  /**
-   * 这段沉默里她「醒过来了又决定不说」连了几次。
-   *
-   * 用途：她连着憋几次就别再惯着——提示词里点一句「这轮必须说」。
-   * 旧实现数的是 tide_events 的 wave 档，那套已经删了，所以改数 proactive_log 的 agent_silent。
-   * 遇到第一条真正说出口的就断，因为「憋」只对连续的沉默有意义。
-   */
-  silentStreak(poolId: string, limit = 5): number {
-    const rows = this.db.prepare(
-      "SELECT decision, reason FROM proactive_log WHERE pool_id=? ORDER BY ts DESC LIMIT ?").all(poolId, limit) as any[];
-    let n = 0;
-    for (const r of rows) {
-      if (r.decision === "skip" && String(r.reason).startsWith("agent_silent")) n++;
-      else break;
-    }
-    return n;
-  }
-
-  /** 池里她说的最后一条。主动判定拿它当基准：她一答完时钟就重新起步，
-   *  用「任何人最后说话」的话，热聊时永远差几分钟，聊得越热主动机制越死 */
-  lastSelfMessage(poolId: string | null): { ts: number; text: string } | null {
-    if (poolId === null) return null;
-    const row = this.db.prepare(
-      "SELECT ts, text FROM messages WHERE pool_id=? AND from_self=1 ORDER BY ts DESC LIMIT 1").get(poolId);
-    return (row as any) ?? null;
-  }
-
-  /** 池里最后一条消息（时间和是不是她说的），充能判定要用「最后谁说的话」 */
-  lastMessage(poolId: string | null): { ts: number; from_self: number } | null {
-    const row = poolId === null
-      ? this.db.prepare("SELECT ts, from_self FROM messages ORDER BY ts DESC LIMIT 1").get()
-      : this.db.prepare("SELECT ts, from_self FROM messages WHERE pool_id=? ORDER BY ts DESC LIMIT 1").get(poolId);
-    return (row as any) ?? null;
-  }
-
-  // ---------- 自省 / 主动门控 ----------
-
-  saveReflection(r: {
-    user_id: string; pool_id: string; thought: string; style_hint: string;
-    urgency: number; topic_pick: string; topic_angle: string; next_at: number | null; created_at: number;
-  }): number {
-    const info = this.db.prepare(
-      `INSERT INTO reflections(user_id,pool_id,thought,style_hint,urgency,topic_pick,topic_angle,next_at,created_at)
-       VALUES(?,?,?,?,?,?,?,?,?)`,
-    ).run(r.user_id, r.pool_id, r.thought, r.style_hint, r.urgency, r.topic_pick, r.topic_angle, r.next_at ?? null, r.created_at);
-    return Number(info.lastInsertRowid);
-  }
-
-  /** 这个池最新的一条自省。没有就 null */
-  latestReflection(poolId: string): any | null {
-    const row = this.db.prepare(
-      "SELECT * FROM reflections WHERE pool_id=? ORDER BY created_at DESC LIMIT 1").get(poolId);
-    return (row as any) ?? null;
-  }
-
-  /** 清掉过期自省，别让它一直长。返回删了几条 */
-  pruneReflections(beforeTs: number): number {
-    return Number(this.db.prepare("DELETE FROM reflections WHERE created_at < ?").run(beforeTs).changes);
-  }
-
   /** 最后一条用户消息的时间戳；poolId=null 时跨池取最大。0 = 从没说过话 */
   lastUserMessageTs(poolId?: string | null): number {
     const row = poolId
@@ -706,15 +633,10 @@ export class Store {
   }
 
   /**
-   * 给自省看的最近一段消息：只取 user/self 的正文，按时间正序。
-   * 只给最近 N 条——自省是判断「现在该不该开口」，不是复盘，给太多她会写读后感。
-   */
-  /**
-   * 自省看到的最近对话。
+   * 最近一段消息窗口：只取 user/self 的正文，按时间正序。
+   * 风格闸用它查最近说过的话。
    *
-   * 只给「最近 10 条」会出大问题：话密的晚上 10 条可能只覆盖二十分钟，
-   * 真正的事实（他早就答过的那句）落在十条之外，而她自己刚说的错误结论正好在里面，
-   * 于是念头越滚越像真的（2026-11-03 钥匙那回就是这样）。
+   * 只给「最近 10 条」会漏：话密的晚上 10 条可能只覆盖二十分钟，
    * 所以按「时间跨度 + 条数」双下限取：至少覆盖 recentMs，至少 limit 条，总量封顶 cap。
    */
   messagesForReflection(
@@ -741,61 +663,7 @@ export class Store {
     return rows.map((r) => ({ seq: Number(r.seq), ts: Number(r.ts), from_self: r.from_self, text: String(r.text ?? "") }));
   }
 
-  logProactive(e: {
-    user_id: string; pool_id: string; ts: number; decision: "speak" | "skip"; reason: string;
-    urgency?: number | null; silent_sec?: number | null; cooldown_req?: number | null; msg_id?: number | null;
-  }): void {
-    this.db.prepare(
-      `INSERT INTO proactive_log(user_id,pool_id,ts,decision,reason,urgency,silent_sec,cooldown_req,msg_id)
-       VALUES(?,?,?,?,?,?,?,?,?)`,
-    ).run(e.user_id, e.pool_id, e.ts, e.decision, e.reason,
-      e.urgency ?? null, e.silent_sec ?? null, e.cooldown_req ?? null, e.msg_id ?? null);
-  }
-
-  /** 时间窗内主动开口了几次（decision='speak'） */
-  countProactiveSpeaks(fromTs: number, toTs: number, poolId?: string | null): number {
-    const row = poolId
-      ? this.db.prepare("SELECT COUNT(*) AS n FROM proactive_log WHERE decision='speak' AND pool_id=? AND ts>=? AND ts<?").get(poolId, fromTs, toTs)
-      : this.db.prepare("SELECT COUNT(*) AS n FROM proactive_log WHERE decision='speak' AND ts>=? AND ts<?").get(fromTs, toTs);
-    return Number((row as any)?.n ?? 0);
-  }
-
-  /** 上次主动开口的时间戳（0 = 从没主动说过） */
-  lastProactiveSpeakTs(poolId: string): number {
-    const row = this.db.prepare(
-      "SELECT MAX(ts) AS t FROM proactive_log WHERE decision='speak' AND pool_id=?").get(poolId);
-    return Number((row as any)?.t ?? 0) || 0;
-  }
-
-  /**
-   * 上一次「真的被唤醒过一次」的时刻：发出去算，醒来了决定不说也算。
-   *
-   * 冷却要挂在这个上，不能挂在「上一次真发」上——她忍住不说的那些轮次以前不留痕迹，
-   * 于是每 tick 门全开、同一个念头被反复唤醒（线上实测一个念头连醒 19 次，只发出 2 条）。
-   *
-   * 只认 agent_silent 开头的 skip：被门拦下也记 skip，那是「没被唤醒」，不能当尝试，
-   * 否则冷却会被自己的拦截不断刷新，她就再也开不了口。
-   */
-  lastProactiveAttemptTs(poolId: string): number {
-    const row = this.db.prepare(
-      `SELECT MAX(ts) AS t FROM proactive_log
-       WHERE pool_id=? AND (decision='speak' OR reason LIKE 'agent_silent%')`).get(poolId);
-    return Number((row as any)?.t ?? 0) || 0;
-  }
-
-  /** 最近 N 条主动决策，调试用：查「她为什么今天没说话」 */
-  recentProactive(limit = 40): any[] {
-    return this.db.prepare("SELECT * FROM proactive_log ORDER BY ts DESC LIMIT ?").all(limit) as any[];
-  }
-
-  /** 这个池最近一条主动决策（skip 记账节流用） */
-  lastProactiveLog(poolId: string): { ts: number; reason: string } | null {
-    const row = this.db.prepare(
-      "SELECT ts, reason FROM proactive_log WHERE pool_id=? ORDER BY ts DESC LIMIT 1").get(poolId);
-    return (row as any) ?? null;
-  }
-
-  /** 这个池最近说话的真人是谁（主动日志要记 user_id，没有就空串） */
+  /** 这个池最近说话的真人是谁（记忆/任务记 user_id 用，没有就空串） */
   lastUserId(poolId: string): string {
     const row = this.db.prepare(
       "SELECT user_id FROM messages WHERE pool_id=? AND user_id IS NOT NULL ORDER BY ts DESC LIMIT 1").get(poolId);

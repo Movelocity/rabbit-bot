@@ -1,7 +1,28 @@
-# 自省（reflection）现状与偏移记录
+# 自省 / proactive：拆除记录与重开发说明
 
-> 2026-11-23。记录当前实现、配置、观测方式，以及「proactive 本意是主动搭话，后来偏成工作任务汇报」的判断依据。
+> 2026-11-23。记录拆除前的实现、配置、观测方式，以及「proactive 本意是主动搭话，后来偏成工作任务汇报」的判断依据。
 > 设计初版见 [SPEC-PROACTIVE-URGENCY.md](SPEC-PROACTIVE-URGENCY.md)（2026-11-03）。
+
+> **结论（2026-11-23）**：这不是「参数调歪了」，是机制本身做错了。设计理念是**一切皆 tick**——
+> 所有对话行为都由调度器 tick 驱动：tick 唤醒 Agent，读池，用户有新消息就回、没有新消息也可以决定
+> 主动开口，然后结束。`proactive` / `reflection` 另开了一条「定时器 + 独立门控」的并行唤醒通道，
+> 绕过了 tick，等于在同一套系统里造了第二个唤醒源。只有**完全的后台整理任务**（记忆梳理、上下文
+> 交接等不面向对话的事情）才应该独立于 tick 运行。
+>
+> **这条通道已于 2026-11-23 整体拆除**，本文保留给后续重新开发 proactive 时参考。重开发时不要再起
+> 定时器、不要再维护独立的 `next_at` / 门控状态，把「要不要主动开口」放进 tick 的决策里。
+
+---
+
+## 0. 拆除清单（2026-11-23）
+
+- 删除文件：`app/src/core/reflection.ts`、`app/src/core/gate.ts`、`app/scripts/probe-proactive.ts`
+- 删除测试：`reflection.test.ts`、`gate.test.ts`、`proactive-attempt.test.ts`
+- 删除代码：`App.proactivePools` / `startReflectionLoop` / `reflectDue` / `runReflection` / `logProactiveThrottled`，`PiEngine.reflect`，`Scheduler.proactivePools`，`makeWake` 的 proactive 参数，`Wake.proactive` 字段，prompt 里的 proactive / silentStreak 状态行
+- 删除配置：`config/default.json` 的 `proactive` 块，`Config.proactive` 字段与校验
+- 删除数据表定义：`reflections`、`proactive_log`（旧库里已有的表不主动 drop，只是不再读写）
+- 保留：`messagesForReflection` 消息窗口函数（风格闸还在用）、`lastUserMessageTs`、后台记忆梳理 `engine.review`
+
 
 ---
 
@@ -26,7 +47,7 @@
 
 ---
 
-## 2. 当前行为（2026-11-23）
+## 2. 拆除前的行为（供重开发参考）
 
 ### 2.1 什么时候跑
 
@@ -82,7 +103,9 @@
 
 ---
 
-## 3. 数据与观测
+## 3. 拆除前的数据与观测
+
+> 下面两张表已不再创建/写入，只作为当年观测方式的记录。
 
 | 表 | 内容 |
 |---|---|
@@ -101,7 +124,7 @@ FROM reflections WHERE pool_id='<pool>' ORDER BY created_at DESC LIMIT 10;
 
 ---
 
-## 4. 配置与关闭
+## 4. 拆除前的配置（已随代码删除）
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
@@ -114,9 +137,9 @@ FROM reflections WHERE pool_id='<pool>' ORDER BY created_at DESC LIMIT 10;
 | `proactive.maxConsecutive` | 3 | 连说没人回的上限 |
 | `proactive.quietStart` / `quietEnd` | 23:30 / 08:00 | 只拦开口，不拦自省 |
 
-**关闭方式**：`app/config/default.json` 里 `proactive.enabled=false`，然后 `pm2 restart rabbit-bot`。没有前端开关。
+**当年的关闭方式**：`app/config/default.json` 里 `proactive.enabled=false`。2026-11-23 拆除后这些配置项全部不存在，也不需要开关——因为已经没有任何 proactive/reflection 代码在跑。
 
-需要注意这是**总开关**：自省的 `urgency` 是主动发言唯一依据，关掉自省等于关掉主动开口。历史 `reflections` 行还在，但不再更新、不再被读取。若将来只想关「主动发言」而保留「想一想」，需要把开关拆成 `reflectionEnabled` 和 `proactiveSpeakEnabled` 两个。
+历史 `reflections` / `proactive_log` 行如果旧库里还在，保留但不读写；新库不会建这两张表。
 
 ---
 
@@ -152,15 +175,27 @@ FROM reflections WHERE pool_id='<pool>' ORDER BY created_at DESC LIMIT 10;
 - 群聊池几乎永远给低分，自省仍按 1~2 小时定期烧一次上下文（单次可能出现 60 万级 cache hit）；
 - 用户感知变成「机制很奇怪、不知道什么时候设计的」——设计时间是 2026-11-03，偏掉发生在 2026-11-11。
 
-当前默认关闭属于止血，不是结论。往下有两条路：
+但要看清的是：**即使把口径改回社交，这条并行通道本身仍然是错的。** 它违反的是更底层的「一切皆 tick」：
 
-- **A. 恢复「主动搭话」语义**：把锚点和 thought 口径改回社交/关系向，任务提醒另走计划/日程。
-- **B. 承认它是「任务汇报触发器」**：从聊天主动机制里拆出来，命名、配置、观测都按任务提醒重做。
+- tick 本来就是「Agent 被唤醒、看一眼所有池、决定说不说」的唯一时机；「有没有新消息」只是 tick 的输入之一，不是唤醒的必要条件。
+- `reflection` 另外维护了一份「想不想说」的状态（`reflections` 表）、一套周期（`next_at`）、一套门控（`gate.ts`），等于把 tick 里本该由 Agent 当场做的判断拆出来，做成第二个调度器。
+- 两个唤醒源还会互相打架：tick 在对话、reflection 在后台烧 token；门控拦下的和 Agent 自己决定不说的，是两套沉默语义。
+- 唯一值得独立于 tick 的，是**完全的后台整理任务**——记忆梳理、上下文交接、日志/数据整理，这些不面向对话、不产生用户可见消息，才可以有自己的节奏。
+
+所以当前默认关闭不是「调参止血」，而是承认这条通道应该退场。正确的形态是：把「主动开口」的判断收回 tick，Agent 在 tick 里同时看到「有没有未读」和「距上次说话多久」，自己决定回不回、要不要起个话头；`proactive_log` 里关于沉默的观测可以保留，`reflection` 定时器、`next_at`、独立门控这套壳则不该继续存在。
 
 ---
 
-## 7. 待决
+## 7. 重新开发时的约束与待决
 
-- [ ] 选 A 还是 B，或者两套并存
-- [ ] 是否把 `proactive.enabled` 拆成「自省」和「主动发言」两个开关
-- [ ] 是否给管理台加一个只读的「自省记录」页（需要新增 `/v1/reflections`）
+**硬约束**：
+
+- 不再起独立定时器、不再维护 `next_at`、不再做第二套门控；一切唤醒机会只从 tick 来。
+- tick 里 Agent 同时看到「有没有未读」和「距上次说话多久」；要不要开口由它在同一轮里决定。
+- 只有完全的后台整理任务（记忆梳理、上下文交接、数据整理）可以独立于 tick，且不产生用户可见消息。
+
+**待决**：
+
+- [ ] tick 里「距上次说话多久」怎么给（原来由 `reflectionDelayMs` 间接提供）
+- [ ] 主动开口后来如果还要上限/冷却，放在 tick 的哪一层，避免又长成第二个调度器
+- [ ] 是否给管理台加只读的「tick 决策 / 沉默原因」页

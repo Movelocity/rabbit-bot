@@ -10,7 +10,7 @@
  */
 import type { Clock } from "./clock.ts";
 import { makeWake, type RunQueue } from "./queue.ts";
-import type { Schedule, Wake } from "../types.ts";
+import type { Schedule } from "../types.ts";
 
 export interface SchedulerDeps {
   clock: Clock;
@@ -18,8 +18,6 @@ export interface SchedulerDeps {
   isPaused: () => boolean;
   /** 有未读的池（tick 用） */
   poolsWithUnread: () => string[];
-  /** 水位退潮到档的池（tick 用）：没有未读也可能因为这些池唤醒 agent 自己找话题 */
-  proactivePools?: (now: number) => NonNullable<Wake["proactive"]>;
   /** 池的类型；不提供时一律按 group 处理（老测试/只读进程兼容） */
   poolKind?: (poolId: string) => "private" | "group" | "task" | "schedule" | undefined;
   /** 到点的日程（日程 tick 用） */
@@ -115,7 +113,7 @@ export class Scheduler {
     this.scheduleScheduleTick();
   }
 
-  /** 群聊唤醒间隔 0 = 关闭群聊唤醒；tick 仍按活跃间隔跑，负责私聊兜底和主动开口 */
+  /** 群聊唤醒间隔 0 = 关闭群聊唤醒；tick 仍按活跃间隔跑，负责私聊兜底 */
   private baseTickMs(): number {
     return this.cfg.tickMs > 0 ? this.cfg.tickMs : Math.max(this.cfg.activeTickMs, 1000);
   }
@@ -206,17 +204,9 @@ export class Scheduler {
     if (this.d.isPaused()) return false;
     const now = this.d.clock.now();
     let enqueued = false;
-    // tickMs = 0 时群聊不参与 tick；其它池（私聊兜底）和主动开口照常
+    // tickMs = 0 时群聊不参与 tick；其它池（私聊兜底）照常
     const groupOff = this.cfg.tickMs <= 0;
     const kindOf = (poolId: string) => this.d.poolKind?.(poolId) ?? "group";
-    // 自省 + 门控都过了：即使没有未读也要给 agent 一次「要不要自己开口」的机会
-    const pro = (this.d.proactivePools?.(now) ?? [])
-      .filter((x) => !groupOff || !x.pool || kindOf(x.pool) !== "group");
-    if (pro.length) {
-      const proPools = pro.map((x) => x.pool).filter((x): x is string => !!x);
-      this.d.queue.enqueue(makeWake("tick", proPools, `她想说话了：${pro.map((x) => x.detail).join("；")}`, [], now, pro));
-      enqueued = true;
-    }
     // 正在去抖的池交给去抖处理，tick 不重复唤醒；
     // 任务池走独立的任务事件 tick，不在这里逐条/逐池唤醒
     const pools = this.d.poolsWithUnread()

@@ -338,13 +338,13 @@ test("消息唤醒：多个池同时触发时，选有未读的那个", async ()
   // 第一个池的消息已经读过了，只有新池有未读
   const last = store.unread(pool!).at(-1);
   if (last) store.advanceCursor(pool!, last.seq);
-  const wake: any = { type: "message", pools: new Set([pool, other]), planFires: [], proactive: [], reasons: [], enqueuedAt: Date.now() };
+  const wake: any = { type: "message", pools: new Set([pool, other]), planFires: [], reasons: [], enqueuedAt: Date.now() };
   assert.equal(resolvePrimaryPool(store, wake), other);
 });
 
 test("纯 tick：什么都没有就退回最近有消息的池，实在没有才给 null", async () => {
   const { store, pool } = setup();
-  const wake: any = { type: "tick", pools: new Set(), planFires: [], proactive: [], reasons: [], enqueuedAt: Date.now() };
+  const wake: any = { type: "tick", pools: new Set(), planFires: [], reasons: [], enqueuedAt: Date.now() };
   assert.equal(resolvePrimaryPool(store, wake), pool);
   assert.equal(resolvePrimaryPool(new Store(":memory:"), wake), null);
 });

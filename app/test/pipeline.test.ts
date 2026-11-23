@@ -27,11 +27,6 @@ async function setup(over: any = {}) {
   if (over.batchToTick === undefined) cfg.scheduler.batchToTick = false;
   // 分条节奏默认关掉：这层测的是链路，不该每条之间都真等一秒
   if (cfg.send.pacing === undefined) cfg.send.pacing = { enabled: false };
-  // 主动开口默认关掉：这层用例守的是「别把用户晾着」「别每 3 分钟叫一次」这类链路行为，
-  // 不该被「她现在想不想说话」左右。专测主动的用例自己传 proactive 打开。
-  if ((over as any).proactive === undefined) {
-    cfg.proactive = { ...(cfg.proactive ?? {}), enabled: false };
-  }
   const { model, modelRuntime } = await createFauxModel(dataDir);
   const clock = new FakeClock(Date.parse("2026-10-22T01:00:00Z"));
   // rb 工具在线上走容器里的客户端；这里注入进程内实现（mem-add），
@@ -204,139 +199,6 @@ test("暂停开关：暂停时不唤醒，恢复后 tick 处理积压", async ()
   await t.done();
 });
 
-/** 塞一条「她想说话了」的自省结果，让门控有分可判 */
-function seedReflection(t: any, poolId: string, over: Record<string, unknown> = {}) {
-  const now = t.clock.now();
-  t.app.store.saveReflection({
-    user_id: "mia", pool_id: poolId, thought: "想问问他吃饭没", style_hint: "随口问一句",
-    urgency: 0.9, topic_pick: "晚饭", topic_angle: "别像在检查", next_at: now + 3600_000, created_at: now,
-    ...over,
-  });
-}
-
-test("tick：没有未读，但自省说她想说 → 仍然给一次自己找话题的机会", async () => {
-  const t = await setup({ proactive: { enabled: true } });
-  const now = t.clock.now();
-  // 三轮对话，都直接入库（不进未读队列），模拟「聊完了、人没再说话」
-  let lastMsg: any = null;
-  for (const [i, min] of [40, 37, 34].entries()) {
-    lastMsg = t.app.store.insertMessage({
-      platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `w${i}`,
-      sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
-      text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
-      reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-    });
-  }
-  t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
-  assert.equal(t.app.store.poolsWithUnread().length, 0, "前提：没有未读");
-  seedReflection(t, lastMsg.pool_id);
-
-  assert.equal(t.app.scheduler.tick(), true, "自省过了门控，tick 必须入队");
-  await t.settle(0);
-  const last = t.wakes[t.wakes.length - 1];
-  assert.equal(last.type, "tick");
-  assert.notEqual(last.outcome, "skipped:nothing-new", "不该被当成「没新东西」跳过");
-  await t.done();
-});
-
-test("平台关掉后，不再为它的历史池自省（飞书腾出去后别白烧 token）", async () => {
-  // 2026-11-09：飞书适配器关掉后，库里的 feishu 池还在，自省照样每小时为它跑一次，
-  // 白白烧 token，还把「那个频道永远没人回」当成她自己的问题。
-  const t = await setup({ proactive: { enabled: true }, adapters: { mock: { enabled: false } } });
-  const now = t.clock.now();
-  const last = t.app.store.insertMessage({
-    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "dead1",
-    sender_id: "mia", sender_name: "mia", ts: now - 20 * 60_000, text: "先这样，我忙",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  });
-  t.app.store.setCursor(last.pool_id, last.seq);
-  seedReflection(t, last.pool_id);
-  assert.equal(t.app.scheduler.tick(), false, "平台已关，不该再为它的池自省");
-  await t.done();
-});
-
-test("任务池不产生主动唤醒（进度事件不是「她想说话了」）", async () => {
-  const t = await setup({ proactive: { enabled: true } });
-  const now = t.clock.now();
-  // 有个正常的私聊池垫底，确保全局沉默时间是算得出来的
-  const dm = t.app.store.insertMessage({
-    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "dm-old",
-    sender_id: "mia", sender_name: "mia", ts: now - 40 * 60_000, text: "先忙了",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  })!;
-  t.app.store.setCursor(dm.pool_id, dm.seq);
-  const task = t.app.store.insertMessage({
-    platform: "task", external_chat_id: "task:7", pool_kind: "task", msg_id: "task-e1",
-    sender_id: "task", sender_name: "任务", ts: now - 40 * 60_000, text: "任务 #7 进度 50%",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  })!;
-  t.app.store.setCursor(task.pool_id, task.seq);
-  seedReflection(t, task.pool_id);
-  assert.equal(t.app.scheduler.tick(), false, "任务池不该进主动候选");
-  await t.done();
-});
-
-test("任务池不跑自省（别对任务进度做内省）", async () => {
-  const t = await setup({ proactive: { enabled: true } });
-  const now = t.clock.now();
-  const task = t.app.store.insertMessage({
-    platform: "task", external_chat_id: "task:8", pool_kind: "task", msg_id: "task-e2",
-    sender_id: "task", sender_name: "任务", ts: now - 40 * 60_000, text: "任务 #8 失败",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  })!;
-  t.app.store.setCursor(task.pool_id, task.seq);
-  // 到期且没有后续自省：不跳过的话这一轮就会真的调模型写一条
-  seedReflection(t, task.pool_id, { created_at: now - 1000, next_at: now - 1 });
-  const before = t.app.store.latestReflection(task.pool_id)!.created_at;
-  await (t.app as any).reflectDue();
-  assert.equal(t.app.store.latestReflection(task.pool_id)!.created_at, before, "任务池不该被自省");
-  await t.done();
-});
-
-test("tick 主动：说过一次之后，冷却期内不再问（也别每 3 分钟问一次）", async () => {
-  const t = await setup({ proactive: { enabled: true } });
-  const now = t.clock.now();
-  let lastMsg: any = null;
-  for (const [i, min] of [40, 37, 34].entries()) {
-    lastMsg = t.app.store.insertMessage({
-      platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: `r${i}`,
-      sender_id: "mia", sender_name: "mia", ts: now - min * 60_000,
-      text: ["今天加班到九点", "饭都没吃", "刚到家"][i],
-      reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-    });
-  }
-  t.app.store.setCursor(lastMsg.pool_id, lastMsg.seq);
-  seedReflection(t, lastMsg.pool_id, { urgency: 0.4 });
-
-  assert.equal(t.app.scheduler.tick(), true, "第一次该叫醒她");
-  await t.settle(0);
-  // 真的说出去了：冷却从这一刻开始算
-  t.app.store.logProactive({
-    user_id: "mia", pool_id: lastMsg.pool_id, ts: t.clock.now(), decision: "speak", reason: "ok", urgency: 0.4,
-  });
-  t.clock.advance(3 * 60_000);
-  assert.equal(t.app.scheduler.tick(), false, "urgency 0.4 要等约 6.6 分钟，3 分钟不该重问");
-  await t.done();
-});
-
-test("tick 主动：她想了但决定不说，也会留一行账（agent_silent）", async () => {
-  const t = await setup({ proactive: { enabled: true } });
-  const now = t.clock.now();
-  const m = t.app.store.insertMessage({
-    platform: "mock", external_chat_id: "dm-mia", pool_kind: "private", msg_id: "s1",
-    sender_id: "mia", sender_name: "mia", ts: now - 40 * 60_000, text: "睡了",
-    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
-  })!;
-  t.app.store.setCursor(m.pool_id, m.seq);
-  seedReflection(t, m.pool_id);
-  assert.equal(t.app.scheduler.tick(), true);
-  await t.settle(0);
-  const rows = t.app.store.recentProactive(10);
-  assert.ok(rows.length > 0, "开口与否都要记账，否则查不出「她今天为什么没说话」");
-  assert.ok(rows.every((r: any) => typeof r.reason === "string" && r.reason.length > 0));
-  await t.done();
-});
-
 test("额度用尽：发一条提示给等着的人，不走模型，也不进上下文", async () => {
   const t = await setup({ limits: { dailyLlmCalls: 0, dailyTokens: 0 } });
   t.dm("在吗");
@@ -457,9 +319,14 @@ test("谈资：工作场景不再翻话题库，条目也不进提示词", async
   assert.match(sys, /scene-X\.md|scene-\{\{/, "主提示词要写清「读 scene-X.md」这条路由");
   assert.doesNotMatch(msgPrompt, /冰箱里的钱拿去充原神/, "话题条目不该被塞进提示词");
 
+  // tick 唤醒要有未读才会真的跑（tick 不再有并行的主动通道）
+  t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-alice", pool_kind: "private", msg_id: "tick-unread",
+    sender_id: "mia", sender_name: "mia", ts: t.clock.now(), text: "顺手再问一句",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  });
   await (t.app as any).handleWake({
     id: "w2", type: "tick", reasons: ["定时检查"], pools: new Set([pool].filter(Boolean)), planFires: [], wakeAt: t.clock.now(),
-    proactive: [{ pool, stage: 1, a: 1.2, peak: 2.4, sessionTs: t.clock.now() - 3600e3, detail: "退潮第 1 档" }],
   });
   const tickPrompt = seen[seen.length - 1] ?? "";
   // 唤醒消息这层：只有信号和数据，不再重复贴话题库说明

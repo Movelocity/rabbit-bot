@@ -4,10 +4,9 @@ import fs from "node:fs";
 import type { Config } from "./config.ts";
 import { isChatCall } from "./core/tool-call.ts";
 import { Store } from "./core/db.ts";
+import { extractJsonObject } from "./core/json.ts";
 import { Hub } from "./core/hub.ts";
 import { Logger } from "./core/logger.ts";
-import { evaluateGate } from "./core/gate.ts";
-import { MIN_NEXT_SEC, buildReflectionPrompt, extractJsonObject, parseReflection } from "./core/reflection.ts";
 import { RunQueue, makeWake } from "./core/queue.ts";
 import {
   appendNote, archiveSettledTaskPools, getTask, listTasks, listTasksUpdatedSince, takePendingTick, markPendingTick,
@@ -165,7 +164,7 @@ export class App {
   /** 发完消息后的看门狗：静默 10s 后复核是否可以直接执行等点头的项目动作 */
   readonly watchdog: AgentWatchdog;
   private clock: Clock;
-  /** 当前正在处理的唤醒，工具用它判断这轮是不是主动开口 */
+  /** 当前正在处理的唤醒 */
   private activeWake: Wake | null = null;
   /** 本轮读进来的未读消息：记记忆时绑来源 seq，唤醒结束即清空 */
   private currentUnread: StoredMessage[] = [];
@@ -256,7 +255,6 @@ export class App {
       clock: this.clock, queue: this.queue, isPaused: () => this.store.isPaused(),
       poolsWithUnread: () => this.store.poolsWithUnread(),
       poolKind: (id) => this.store.getPool(id)?.kind,
-      proactivePools: (now) => this.proactivePools(now),
       dueSchedules: (now) => this.store.dueSchedules(now),
       fireSchedule: (s, now) => {
         const updated = fireSchedule(this.store, s, now, cfg.timezone);
@@ -348,7 +346,6 @@ export class App {
   async start() {
     await this.hub.startAdapters();
     this.scheduler.start();
-    this.startReflectionLoop();
     this.startApprovalSweep();
     this.startRunnerWatch();
     this.recoverPendingTaskApprovals();
@@ -358,7 +355,6 @@ export class App {
   async stop() {
     this.watchdog.stop();
     this.scheduler.stop();
-    if (this.reflectionTimer) { clearInterval(this.reflectionTimer as any); this.reflectionTimer = null; }
     if (this.approvalSweepTimer) { clearInterval(this.approvalSweepTimer as any); this.approvalSweepTimer = null; }
     if (this.runnerWatchTimer) { clearInterval(this.runnerWatchTimer as any); this.runnerWatchTimer = null; }
     await this.queue.idle();
@@ -366,88 +362,6 @@ export class App {
     await this.engine.dispose();
     setTaskEventNotifier(this.store, null);
     this.store.close();
-  }
-
-  /**
-   * 每个 tick 问一次：哪个池该主动开口。
-   *
-   * 这里不再掷骰子。「想不想说」由自省（core/reflection.ts）给，
-   * 这里只跑门控（core/gate.ts）——一道不过就闭嘴，并把理由记进 proactive_log。
-   * 以前只在「说了」的时候记账，所以线上永远查不出「她今天为什么一天没说话」。
-   */
-  private proactivePools(now: number): NonNullable<Wake["proactive"]> {
-    const cfg = this.o.cfg;
-    if (!cfg.proactive?.enabled) return [];
-    const dayStart = dayStartOf(now, cfg.timezone);
-    const dayEnd = dayStart + 86400e3;
-    // 沉默时长跨池算：切到别的池不代表用户消失了
-    const globalLast = this.store.lastUserMessageTs(null);
-    const out: NonNullable<Wake["proactive"]> = [];
-    // 群聊比私聊克制得多：门槛更高、间隔更长、一天更少（字段在 config.proactive.group）
-    const { group: groupOverride, ...baseGate } = cfg.proactive ?? ({} as typeof cfg.proactive);
-    const gateFor = (kind: string) =>
-      kind === "group" ? { ...baseGate, ...(groupOverride ?? {}) } : baseGate;
-
-    for (const pool of this.store.listPools()) {
-      // 任务池是任务事件的落点，不是她跟人说话的地方：不主动、不自省
-      if (pool.kind === "task" || pool.kind === "schedule") continue;
-      if (!this.platformLive(pool.platform)) continue;
-      const pid = pool.pool_id;
-      const r = this.store.latestReflection(pid);
-      const urgency = r ? Number(r.urgency) : null;
-      // 连说没人回：用户最后一条之后，她主动说了几次。不用存计数器，从库里数出来
-      const consecutive = globalLast > 0
-        ? this.store.countProactiveSpeaks(globalLast, now + 1, pid)
-        : 0;
-
-      const v = evaluateGate({
-        now,
-        urgency,
-        lastUserTs: globalLast,
-        poolLastUserTs: this.store.lastUserMessageTs(pid),
-        // 冷却锚点用「上次尝试」而不是「上次真发」：醒了又忍住不说的那轮也得冷静一下
-        lastSpeakTs: this.store.lastProactiveAttemptTs(pid),
-        speaksToday: this.store.countProactiveSpeaks(dayStart, dayEnd, pid),
-        consecutiveSpeaks: consecutive,
-        chatStreaming: this.queue.isBusy(),
-        tz: cfg.timezone,
-        cfg: gateFor(pool.kind),
-      });
-
-      // 只在「被拦下」时记账：真开口的要等这一轮结束才知道发没发出去（她可能决定不说）
-      if (!v.speak) {
-        this.logProactiveThrottled({
-          user_id: this.store.lastUserId(pid), pool_id: pid, ts: now,
-          decision: "skip", reason: v.reason,
-          urgency, silent_sec: Number.isFinite(v.silentMs) ? Math.round(v.silentMs / 1000) : null,
-          cooldown_req: Number.isFinite(v.cooldownRequiredMs) ? Math.round(v.cooldownRequiredMs) : null,
-        });
-        continue;
-      }
-      const parts = [
-        `想说的程度 ${(urgency ?? 0).toFixed(2)}`,
-        r?.thought ? `你刚才在想：${r.thought}` : "",
-        r?.style_hint ? `语气：${r.style_hint}` : "",
-        r?.topic_pick ? `想聊：${r.topic_pick}${r.topic_angle ? `（${r.topic_angle}）` : ""}` : "",
-        `距对方最后说话 ${Math.round(v.silentMs / 60e3)} 分钟`,
-      ].filter(Boolean);
-      out.push({
-        pool: pid, stage: 1, a: urgency ?? 0, peak: 1, sessionTs: now, detail: parts.join("｜"),
-      });
-    }
-    return out;
-  }
-
-  /**
-   * skip 的记账要节流：tick 三分钟一次，不节流一天能写五百行。
-   * 规则：说了一律记；没说只在「理由变了」或「距上次超过 30 分钟」时记——
-   * 这样「她为什么一整天没说话」仍然查得到，只是不会刷满库。
-   */
-  private logProactiveThrottled(e: Parameters<Store["logProactive"]>[0]): void {
-    if (e.decision === "speak") { this.store.logProactive(e); return; }
-    const last = this.store.lastProactiveLog(e.pool_id);
-    if (last && last.reason === e.reason && e.ts - last.ts < 30 * 60e3) return;
-    this.store.logProactive(e);
   }
 
   // ---------- 审批超时 ----------
@@ -726,7 +640,7 @@ export class App {
 
   /**
    * 后台记忆梳理：到点就 fork 一个只带 memory 的临时会话。
-   * 技能和业务关系都不在这里做——它们走主动（ufa-maintenance 技能）。
+   * 技能和业务关系不在这里做，也不额外起后台会话。
    */
   private async maybeMemoryReview(unread: StoredMessage[]): Promise<void> {
     const cfg = this.o.cfg;
@@ -843,64 +757,6 @@ export class App {
     this.queue.enqueue(makeWake("message", [poolId], "看门狗：放行项目内动作", [], now));
   }
 
-  // ---------- 自省 ----------
-
-  private reflectionTimer: unknown = null;
-  private reflectionBusy = false;
-
-  /**
-   * 自省循环：独立于 tick 单独跑。
-   *
-   * 为什么不等 tick：tick 是同步的（要立刻返回候选），自省要调模型。
-   * 所以自省在后台把结果写进 reflections 表，tick 只读表。
-   */
-  private startReflectionLoop(): void {
-    const cfg = this.o.cfg;
-    if (!cfg.proactive?.enabled) return;
-    const every = Math.max(30_000, Math.min(cfg.scheduler.tickMs, 120_000));
-    const t = setInterval(() => { void this.reflectDue(); }, every);
-    (t as any).unref?.();
-    this.reflectionTimer = t;
-  }
-
-  /**
-   * 平台适配器关掉了（例如把飞书 app 让给别人），它的历史池还留在库里给人查，
-   * 但自省和主动不该再为它跑——那只是白白烧 token、还把「没人回」当成她自己的问题。
-   */
-  private platformLive(platform: string): boolean {
-    const a = (this.o.cfg.adapters as unknown as Record<string, { enabled?: boolean }> | undefined)?.[platform];
-    return a ? a.enabled !== false : true;
-  }
-
-  /** 挑一个「该想一想了」的池，跑一次自省。一次只做一个，省额度也避免打堆 */
-  private async reflectDue(): Promise<void> {
-    if (this.reflectionBusy || this.store.isPaused()) return;
-    const cfg = this.o.cfg;
-    const now = this.clock.now();
-    const delay = cfg.proactive?.reflectionDelayMs ?? 300_000;
-    for (const pool of this.store.listPools()) {
-      // 任务池的进度/完成事件不该触发「她想说话了」
-      if (pool.kind === "task" || pool.kind === "schedule") continue;
-      if (!this.platformLive(pool.platform)) continue;
-      const pid = pool.pool_id;
-      const lastUser = this.store.lastUserMessageTs(pid);
-      // 刚说完话不急着想到底想说什么——先让对话自然停一停
-      if (!lastUser || now - lastUser < delay) continue;
-      const prev = this.store.latestReflection(pid);
-      const nextAt = Number(prev?.next_at ?? 0);
-      if (nextAt > now) continue;
-      this.reflectionBusy = true;
-      try {
-        await this.runReflection(pid, now);
-      } catch (e) {
-        this.log.warn(`自省失败（${pid}）：${(e as Error).message}`);
-      } finally {
-        this.reflectionBusy = false;
-      }
-      return;
-    }
-  }
-
   /**
    * 一次运行 → 记账用的四个数（2026-11-07）。
    * 三段 token 由 pi 报的 usage 拆出来；美元成本按官方单价表 × 当前时段自己算一遍，
@@ -911,80 +767,6 @@ export class App {
     const split = { hit: res.cacheHit ?? 0, miss: res.cacheMiss ?? 0, out: res.outTokens ?? 0 };
     const usd = costUsd(cfg.llm.model, split, Date.now(), cfg.limits.offPeakHolidays ?? []);
     return { cacheHit: split.hit, cacheMiss: split.miss, outTokens: split.out, costUsd: usd };
-  }
-
-  private async runReflection(poolId: string, now: number): Promise<void> {
-    const cfg = this.o.cfg;
-    const day = dayKey(now, cfg.timezone);
-    const usage = this.store.getUsage(day);
-    const tokensLeft = tokensLeftOf(cfg, usage.tokens);
-    // 自省是「想一想」，不是干活。额度见底就别想了，把额度留给真正的对话
-    if (tokensLeft < 2000 || cfg.limits.dailyLlmCalls >= 0 && usage.llm_calls >= cfg.limits.dailyLlmCalls) return;
-
-    // 按时间跨度取，不是死数 10 条：话密的时候 10 条只够二十分钟，
-    // 他早先说过的事实落在窗口外，她自己刚说错的话却在窗口里，越滚越像真的
-    const rows = this.store.messagesForReflection(poolId, 12, { sinceMs: now - 90 * 60e3, cap: 40 });
-    const nameOf = (r: { from_self: number }) => (r.from_self ? cfg.agent.name : "对方");
-    const recentLines = rows.map((r) => {
-      const t = new Intl.DateTimeFormat("zh-CN", {
-        timeZone: cfg.timezone, hour: "2-digit", minute: "2-digit", hour12: false,
-      }).format(new Date(r.ts));
-      return `[${t}] ${nameOf(r)}：${r.text.slice(0, 200)}`;
-    });
-
-    const prev = this.store.latestReflection(poolId);
-    const lastSpeak = this.store.lastProactiveSpeakTs(poolId);
-    const lastUser = this.store.lastUserMessageTs(null);
-    // 上次主动说的原话：自省要知道「我上次说了什么、他回没回」，
-    // 不然她会每次都从零开始想，说出来的话也会重复
-    const lastSelf = lastSpeak > 0 ? this.store.lastSelfMessage(poolId) : null;
-    const prompt = buildReflectionPrompt({
-      now,
-      tz: cfg.timezone,
-      agentName: cfg.agent.name,
-      recentLines,
-      silentMinutes: (now - this.store.lastUserMessageTs(poolId)) / 60e3,
-      lastProactive: lastSpeak > 0
-        ? { text: String(lastSelf?.text ?? ""), replied: lastUser > lastSpeak }
-        : null,
-      prevThought: prev?.thought ? String(prev.thought) : null,
-      consecutiveSpeaks: lastUser > 0 ? this.store.countProactiveSpeaks(lastUser, now + 1, poolId) : 0,
-    });
-
-    const res = await this.engine.reflect(
-      prompt,
-      { tokensLeft, callsLeft: callsLeftOf(cfg, usage.llm_calls) },
-      `你正在独处。只做一件事：判断手上有没有需要主动开口的工作事项、有多急。没有正事就不说。只输出 JSON，不要任何别的内容。`,
-    );
-    this.store.addUsage(day, res.llmCalls, res.tokens, 0, this.usageExtra(res));
-
-    const parsed = parseReflection(res.assistantText ?? "");
-    if (!parsed.ok) {
-      this.log.warn(`自省输出解析失败（${poolId}）：${parsed.error}｜原文 ${String(res.assistantText ?? "").slice(0, 120)}`);
-      this.store.logProactive({
-        user_id: this.store.lastUserId(poolId), pool_id: poolId, ts: now,
-        decision: "skip", reason: `reflection_parse_error:${parsed.error}`,
-      });
-      // 解析失败也要排下一次，否则会每个 tick 重试一次，白烧钱
-      this.store.saveReflection({
-        user_id: this.store.lastUserId(poolId), pool_id: poolId,
-        thought: "", style_hint: "", urgency: 0, topic_pick: "", topic_angle: "",
-        next_at: now + MIN_NEXT_SEC * 1000, created_at: now,
-      });
-      return;
-    }
-
-    const value = parsed.value;
-    const nextAt = now + (value.nextReflectionInSec ?? MIN_NEXT_SEC) * 1000;
-    this.store.saveReflection({
-      user_id: this.store.lastUserId(poolId), pool_id: poolId,
-      thought: value.thought, style_hint: value.styleHint, urgency: value.urgency,
-      topic_pick: value.topicPick, topic_angle: value.topicAngle,
-      next_at: nextAt, created_at: now,
-    });
-    // 自省只留 7 天：它不是档案，是「刚才想了什么」
-    this.store.pruneReflections(now - 7 * 86400e3);
-    this.log.info(`自省 ${poolId} urgency=${value.urgency.toFixed(2)} 下次=${new Date(nextAt).toISOString()} thought=${value.thought.slice(0, 60)}`);
   }
 
   /**
@@ -1251,13 +1033,9 @@ export class App {
     const cursorsBefore = new Map(this.store.poolsWithUnread().map((p) => [p, this.store.getCursor(p)]));
     const unread = this.hub.takeUnread();
     this.currentUnread = unread;
-    const proactive = w.proactive ?? [];
-    if (!unread.length && !proactive.length) return finish("skipped:nothing-new");
+    if (!unread.length) return finish("skipped:nothing-new");
 
-    const involved = new Set<string>([
-      ...unread.map((m) => m.pool_id),
-      ...proactive.map((x) => x.pool).filter((x): x is string => !!x),
-    ]);
+    const involved = new Set<string>(unread.map((m) => m.pool_id));
     const context = new Map<string, StoredMessage[]>();
     for (const pid of involved) {
       if (!this.store.getPool(pid)) continue;
@@ -1314,18 +1092,6 @@ export class App {
 
     const sent = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError).map((c) => c.args);
     this.sendsThisTurn = sent.length;
-    // 主动这一轮的真实结果：发了才记 speak（连说计数和冷却都靠这张表），
-    // 她决定不说也记一行，理由是 agent_silent——这跟「被门控拦下」是两件事，别混
-    if (proactive.length) {
-      for (const p of proactive) {
-        this.store.logProactive({
-          user_id: this.store.lastUserId(p.pool ?? ""), pool_id: p.pool ?? "", ts: this.clock.now(),
-          decision: sent.length ? "speak" : "skip",
-          reason: sent.length ? "ok" : `agent_silent:${this.silenceReason ?? "no-reason"}`,
-          urgency: p.a,
-        });
-      }
-    }
     if (this.silenceReason) entry.silent = this.silenceReason;
     entry.sentCount = sent.length;
     // LLM 出错且什么都没发：回滚游标，下次 tick 重试
@@ -1334,7 +1100,7 @@ export class App {
       // 模型/接口报错也是「程序的事」，别让她背锅
       await this.notifySys("error", this.errorText(res.error));
     }
-    // 后台只做记忆梳理；技能和业务关系走主动，不在这里触发
+    // 后台只做记忆梳理；技能和业务关系不在这里触发
     this.noteInboundMessages(unread);
     void this.maybeMemoryReview(unread).catch((e) => this.log.warn(`记忆梳理异常：${(e as Error).message}`));
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {

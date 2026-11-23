@@ -1,6 +1,5 @@
 /** 配置加载：config/default.json ← config/local.json ← $RABBIT_BOT_CONFIG（后者覆盖前者）。密钥只从环境变量读取。 */
 import fs from "node:fs";
-import type { GateConfig } from "./core/gate.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHome, hostModeSupported } from "./core/platform.ts";
@@ -93,15 +92,8 @@ export interface Config {
     dailyCap: { L1: number; L2: number };
   };
   /**
-   * 主动开口：自省（模型自己判断有多想说）+ 六道门。
-   * 取代旧的 tide.wave / tide.energy——那两套都是拿代码拍概率，跟「她想不想说」无关。
+   * 主动开口：机制已拆除（2026-11-23），等按「一切皆 tick」重新设计。
    */
-  proactive: { enabled: boolean } & Partial<GateConfig> & {
-    /** 用户最后一条消息之后多久开始自省 */
-    reflectionDelayMs?: number;
-    /** 群聊池的额外收紧：群里主动开口要更克制，覆盖上面的同名字段 */
-    group?: Partial<GateConfig>;
-  };
   llm: {
     provider: string;
     model: string;
@@ -420,22 +412,6 @@ export function validateConfig(cfg: Config): void {
     const { L1, L2 } = cfg.tide.dailyCap;
     if (!(Number.isInteger(L1) && L1 >= 0)) throw new Error("config: tide.dailyCap.L1 必须是 >=0 的整数");
     if (!(Number.isInteger(L2) && L2 >= 0)) throw new Error("config: tide.dailyCap.L2 必须是 >=0 的整数");
-  }
-  // 主动开口：门控参数定标。定错了不是不开口就是话痨，两头都难看
-  const pr = cfg.proactive;
-  if (pr?.enabled) {
-    const thr = pr.urgencyThreshold;
-    if (thr !== undefined && !(thr > 0 && thr < 1)) throw new Error("config: proactive.urgencyThreshold 必须在 (0,1) 开区间");
-    for (const k of ["minSilentMs", "minIntervalMs", "reflectionDelayMs"] as const) {
-      const v = pr[k];
-      if (v !== undefined && !(Number.isFinite(v) && v >= 0)) throw new Error(`config: proactive.${k} 必须是非负数`);
-    }
-    if (pr.maxPerDay !== undefined && !(Number.isInteger(pr.maxPerDay) && pr.maxPerDay > 0)) {
-      throw new Error("config: proactive.maxPerDay 必须是正数（0 次等于关掉，请用 enabled=false）");
-    }
-    if (pr.maxConsecutive !== undefined && !(Number.isInteger(pr.maxConsecutive) && pr.maxConsecutive > 0)) {
-      throw new Error("config: proactive.maxConsecutive 必须是正整数");
-    }
   }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");

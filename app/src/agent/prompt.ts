@@ -117,7 +117,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
   const lastChatTs = primaryPool ? store.lastMessageTs(primaryPool) : null;
-  const silentN = primaryPool ? store.silentStreak(primaryPool) : 0;
 
   // 状态不写成模板片段，直接拼成几行数据：文案（怎么读这些数）在 scene-*.md 里
   const state: string[] = ["## 状态"];
@@ -125,10 +124,6 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
     state.push(`- 主聊天：${store.poolAlias(x.mainPool)}（任务汇报只发这里，不发群聊）`);
   }
   state.push(`- 距上次对话：${lastChatTs ? fmtAgo(x.now - lastChatTs) : "（没有记录）"}`);
-  if (x.wake.proactive?.length) {
-    state.push(`- 独处时的念头：${x.wake.proactive.map((p) => p.detail).join("；")}（这一轮没有人在找你；只有正事才开口，没正事就 chat（action=skip），别硬找）`);
-  }
-  if (silentN >= 2) state.push(`- 你已经连着 ${silentN} 次醒过来没开口：说明确实没正事，继续保持沉默，别为了刷存在感硬找话说`);
 
   return render("wake", {
     handoff_block: x.handoff ? `【上一会话的交接文档】\n${x.handoff}\n【交接文档结束】\n\n` : "",

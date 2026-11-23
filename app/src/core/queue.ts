@@ -8,11 +8,10 @@ export type WakeHandler = (w: Wake) => Promise<void>;
 
 export function makeWake(
   type: WakeType, pools: string[] = [], reason = "", planFires: Wake["planFires"] = [], now = Date.now(),
-  proactive: NonNullable<Wake["proactive"]> = [],
 ): Wake {
   return {
     type, pools: new Set(pools), planFires: [...planFires],
-    proactive: proactive.length ? [...proactive] : undefined, reasons: reason ? [reason] : [], enqueuedAt: now,
+    reasons: reason ? [reason] : [], enqueuedAt: now,
   };
 }
 
