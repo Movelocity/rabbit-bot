@@ -216,6 +216,27 @@ test("进程自然退出：写事件、清 runner_pid、stage=exited", async () 
   store.close();
 });
 
+test("startTask：每拉起一次执行器 attempt +1，事件按轮次留痕", async () => {
+  const { store, task } = setup();
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  process.env.FAKE_EXEC_SLEEP = "5000";
+  const deps = { apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin };
+
+  await startTask(store, task, deps);
+  assert.equal(getTask(store, task.id)?.attempt, 1);
+  await stopTask(store, getTask(store, task.id)!, { dataDir: root });
+
+  await startTask(store, getTask(store, task.id)!, deps);
+  assert.equal(getTask(store, task.id)?.attempt, 2);
+  await stopTask(store, getTask(store, task.id)!, { dataDir: root });
+
+  const texts = listTaskEvents(store, task.id).map((e) => e.text).join("\n");
+  assert.match(texts, /第 1 次尝试/);
+  assert.match(texts, /第 2 次尝试/);
+  delete process.env.FAKE_EXEC_SLEEP;
+  store.close();
+});
+
 test("startTask：model 分别走 -m / --model", async () => {
   const { store, task } = setup();
   writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });

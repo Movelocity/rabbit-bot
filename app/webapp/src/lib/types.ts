@@ -94,6 +94,7 @@ export interface TaskView {
   task_pool_id: string;
   status: TaskStatus;
   stage: string;
+  attempt: number;
   worker_id: string | null;
   note: string;
   deliverable: string;

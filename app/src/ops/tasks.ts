@@ -14,6 +14,7 @@ export function formatTask(t: Task) {
     task_pool_id: t.task_pool_id,
     status: t.status,
     stage: t.stage,
+    attempt: t.attempt,
     worker_id: t.worker_id,
     note: t.note,
     deliverable: t.deliverable,

@@ -31,6 +31,7 @@ import {
 } from "./core/workers.ts";
 import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
 import { resumeTask, runnerAlive, startTask, stopTask, taskDocPath, writeTaskDoc } from "./core/dispatch.ts";
+import { retryTask } from "./core/task-retry.ts";
 import {
   APPROVAL_STATUSES, ApprovalConflictError, createApproval, decideApproval, getApproval,
   isApprovalStatus,
@@ -708,6 +709,14 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             });
             return reply(200, formatTask(started.task));
           }
+          if (parts.length === 4 && parts[3] === "retry" && method === "POST") {
+            const task = getTask(d.store, id);
+            if (!task) throw new HttpError(404, `没有任务 #${id}`);
+            if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 正在运行，先停止再重派`);
+            const retried = retryTask(d.store, id);
+            d.onTaskCreated?.(retried);
+            return reply(200, formatTask(retried));
+          }
           if (parts.length === 4 && parts[3] === "resume" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
@@ -827,7 +836,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               recent_events: recent,
             });
           }
-          throw new HttpError(404, "用法：GET|POST /v1/tasks、GET /v1/tasks/:id、GET /v1/tasks/:id/events、POST /v1/tasks/:id/approve|reject|start|resume|stop|note|cancel|status|touch|progress|complete|fail、GET /v1/tasks/:id/snapshot");
+          throw new HttpError(404, "用法：GET|POST /v1/tasks、GET /v1/tasks/:id、GET /v1/tasks/:id/events、POST /v1/tasks/:id/approve|reject|start|resume|retry|stop|note|cancel|status|touch|progress|complete|fail、GET /v1/tasks/:id/snapshot");
         }
         case "approvals": {
           if (parts.length === 2 && method === "POST") {

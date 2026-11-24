@@ -626,7 +626,7 @@ function recordRunnerExit(
   const ms = own && Number.isFinite(own.ms) ? Number(own.ms) : startedAt ? Math.max(0, now - startedAt) : 0;
   const secs = (ms / 1000).toFixed(1);
   appendTaskEvent(store, task.id, {
-    text: `执行器进程已退出：${exitDescription(own, opts.via)}（pid=${pid}，session=${task.session_id || "（未捕获）"}，${secs}s）`,
+    text: `第 ${task.attempt || 1} 次尝试：执行器进程已退出：${exitDescription(own, opts.via)}（pid=${pid}，session=${task.session_id || "（未捕获）"}，${secs}s）`,
     sender: "dispatcher",
     senderName: "调度器",
   });
@@ -1103,12 +1103,15 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
   if (boot && boot !== state.boot) patchRunnerState(dataDir, fresh.id, { boot });
 
   const startedAt = state.started_at || (opts.now ?? Date.now());
+  // 每次真正拉起执行器算一轮尝试（重派/恢复都递增），便于历史按轮次串起来。
+  const attempt = fresh.attempt + 1;
   updateTask(store, fresh.id, {
     status: "running",
     worker_id: workerId,
     claimed_at: startedAt,
     lease_until: null,
     stage: "starting",
+    attempt,
     session_id: opts.resume ? fresh.session_id : "",
     runner_pid: pid,
     runner_started_at: startedAt,
@@ -1141,8 +1144,8 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
 
   appendTaskEvent(store, fresh.id, {
     text: opts.resume
-      ? "恢复执行（沿用 session）"
-      : `已启动 ${executor}（session ${sessionId ? "已捕获" : "未捕获"}）`,
+      ? `第 ${attempt} 次尝试：恢复执行（沿用 session）`
+      : `第 ${attempt} 次尝试：已启动 ${executor}（session ${sessionId ? "已捕获" : "未捕获"}）`,
     sender: "dispatcher",
     senderName: "调度器",
   });

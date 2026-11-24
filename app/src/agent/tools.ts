@@ -37,6 +37,7 @@ import {
   TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
 } from "../core/tasks.ts";
 import { listTaskEvents } from "../core/task-events.ts";
+import { retryTask } from "../core/task-retry.ts";
 import {
   DEFAULT_CAPTURE_MS, resumeTask, runnerAlive, stopTask,
   type DispatchDeps,
@@ -833,6 +834,7 @@ export function createTools(d: ToolDeps) {
     "  get     id                                                          看一条（带最近 3 条事件）",
     "  updates id limit?                                                   看任务池最近事件（带时间戳）",
     "  resume  id                                                          用同一 session id 恢复执行",
+    "  retry   id                                                          重派：取消/失败后复用原任务回待审批，不新建",
     "  note    id line                                                     追加说明",
     "  cancel  id                                                          取消（会先杀在跑的进程）",
     "  status  id status result? artifact?                                 改状态/回填结果",
@@ -866,11 +868,11 @@ export function createTools(d: ToolDeps) {
       "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name / executor / model / start_at 可选。deliverable / constraints / acceptance / files 只有用户明确说了才填，别替 WA 编实现计划；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
-      + "resume（用同一 session id 恢复执行）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
+      + "resume（用同一 session id 恢复执行）/ retry（重派：复用原任务回到待审批，不新建）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
       + "任务按工作目录起一次性进程，不常驻 worker；任务卡住或要权限时，把情况转述给用户。",
     parameters: Type.Object({
-      action: Type.String({ description: "create / list / get / updates / resume / note / cancel / status / help" }),
-      id: Type.Optional(Type.Number({ description: "get、updates、resume、note、cancel、status 用：任务 id" })),
+      action: Type.String({ description: "create / list / get / updates / resume / retry / note / cancel / status / help" }),
+      id: Type.Optional(Type.Number({ description: "get、updates、resume、retry、note、cancel、status 用：任务 id" })),
       name: Type.Optional(Type.String({ description: "create 用：可选短标签；不给就用系统返回的任务号" })),
       work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
       executor: Type.Optional(Type.String({ description: `create 用：${executorChoices()}；不填走设置里的默认 worker` })),
@@ -1007,6 +1009,25 @@ export function createTools(d: ToolDeps) {
             const resumed = await resumeTask(d.store, task, deps);
             const view = formatTask(resumed.task);
             return txt(`#${resumed.task.id} 恢复执行（session=${resumed.session_id}）。`, { ok: true, task: view });
+          }
+
+          case "retry": {
+            if (p.id === undefined) return txt("retry 要 id。", { ok: false });
+            const task = getTask(d.store, p.id);
+            if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
+            if (runnerAlive(task, d.cfg.dataDir)) return txt(`#${p.id} 正在运行，先 stop 再重派。`, { ok: false });
+            const retried = retryTask(d.store, p.id);
+            const view = formatTask(retried);
+            const gate = d.taskApproval;
+            let notice = "已回到待审批，等审批通过后重新执行。";
+            if (gate?.enabled) {
+              let sent = false;
+              try { sent = await gate.notify(retried); } catch { sent = false; }
+              notice = sent
+                ? "已回到待审批并发了审批提示，主人贴 OK 后重新执行。"
+                : "已回到待审批（审批消息没发出去，可在 Web 任务页审批）。";
+            }
+            return txt(`#${retried.id} 已重派，${notice}`, { ok: true, task: view });
           }
 
           case "note": {

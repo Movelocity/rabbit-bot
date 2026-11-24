@@ -104,6 +104,7 @@ function buildDetailRows(t: TaskView): DetailRow[] {
   add("work_dir", t.work_dir, true);
   add("model", t.model, true);
   add("stage", t.stage);
+  add("attempt", t.attempt ? `第 ${t.attempt} 次` : "");
   add("worker", t.worker_id, true);
   add("executor", t.executor || "opencode");
   add("worker_id", t.worker_id, true);
