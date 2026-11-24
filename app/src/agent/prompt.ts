@@ -12,6 +12,7 @@ import { businessDir, runtimeDir, sharedDir, topicsEnabled } from "../core/runti
 import { readWorkingMemory } from "../core/working-memory.ts";
 import { knowledgeIndexLine } from "../ops/knowledge.ts";
 import { memoryIndexLine } from "../ops/memories.ts";
+import { recallBlock } from "./recall.ts";
 
 export function systemPrompt(cfg: Config, emojis: string[], store?: Store): string {
   // 「[当前状态]」那一段借的是破甲提示词的形式：配置项比祈使句管用。
@@ -113,6 +114,13 @@ export function wakePrompt(store: Store, x: WakePromptInput): string {
   }
   if (x.unread.length) blocks.push("未读消息：\n" + fmtGrouped(store, x.unread));
   else blocks.push("没有未读消息。");
+  // 按提及注入：真人在说事时，把命中的知识摘要/地图对象端出来；没命中就零增长。
+  const humanMsg = x.unread.find((m) => !m.from_self && String(m.text ?? "").trim()
+    && !["task", "schedule"].includes(store.getPool(m.pool_id)?.kind ?? ""));
+  if (humanMsg) {
+    const recall = recallBlock(store, x.unread);
+    if (recall) blocks.push(recall);
+  }
   // 潮汐状态：它现在根本不知道自己说过几次、有没有人理——这几行直接决定该不该开口
   const primaryPool = x.unread[0]?.pool_id ?? [...x.context.keys()][0] ?? null;
   // 时间感：她得知道「我们多久没说话了」，否则主动性没有重量
