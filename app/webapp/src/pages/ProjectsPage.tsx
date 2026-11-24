@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { useApi } from "../lib/api-context.tsx";
 import { cx } from "../lib/cx.ts";
 import { badgeVariant, formatTs, friendlyError } from "../lib/format.ts";
+import { nextStepOf } from "../lib/plan.ts";
 import type { Project, TaskView } from "../lib/types.ts";
 import {
   Badge,
@@ -69,36 +70,6 @@ function MarkdownBlock({ text }: { text: string }) {
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
-}
-
-function cleanPlanLine(line: string): string {
-  return line
-    .replace(/^[-*]\s+/, "")
-    .replace(/^\d+\.\s+/, "")
-    .replace(/`/g, "")
-    .replace(/\*\*/g, "")
-    .trim();
-}
-
-function nextStepOf(plan: string): string {
-  const lines = plan.split("\n");
-  const index = lines.findIndex((line) => /下一步/.test(line));
-  if (index >= 0) {
-    const inline = cleanPlanLine(
-      lines[index].replace(/^#{1,6}\s*/, "").replace(/下一步[:：\s]*/, ""),
-    );
-    if (inline) return inline;
-    for (let i = index + 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-      if (/^#{1,6}\s/.test(line)) break;
-      return cleanPlanLine(line);
-    }
-  }
-  const first = lines
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith("#"));
-  return first ? cleanPlanLine(first) : "";
 }
 
 type ProjectGroupKey = "active" | "planned" | "done";
