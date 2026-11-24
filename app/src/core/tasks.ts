@@ -1,5 +1,6 @@
 /** 任务面板：UFA 登记、WA 执行、双方都从这里读写（SPEC §3.3）。 */
 import type { Store } from "./db.ts";
+import { matchProjectSlugByWorkDir, projectPathEntries } from "./project-match.ts";
 
 export type TaskStatus = "pending_approval" | "pending" | "running" | "blocked" | "done" | "failed" | "cancelled";
 
@@ -181,6 +182,30 @@ export function ensureTaskPool(store: Store, id: number): Task {
   return row(id, store);
 }
 
+/**
+ * 建任务时按 work_dir 自动补 `project:<slug>`（需求 R1）。
+ * 已显式带了任何 project 对象就不覆盖；work_dir 无命中或多项目同长度歧义时都留空、不报错。
+ */
+function autoAttachProject(
+  store: Store,
+  workDir: string,
+  context: TaskContext | string | null | undefined,
+): TaskContext | string | null | undefined {
+  const wd = String(workDir ?? "").trim();
+  if (!wd) return context;
+  const parsed = parseTaskContext(typeof context === "string" ? context : normalizeTaskContext(context ?? null));
+  if (parsed.objects.some((id) => id.startsWith(PROJECT_OBJECT_PREFIX))) return context;
+  let slug: string | null = null;
+  try {
+    slug = matchProjectSlugByWorkDir(wd, projectPathEntries(store.listBusinessObjects()));
+  } catch {
+    slug = null;
+  }
+  if (!slug) return context;
+  parsed.objects.push(PROJECT_OBJECT_PREFIX + slug);
+  return parsed;
+}
+
 export function createTask(store: Store, t: CreateTaskInput): Task {
   const name = String(t.name ?? "").trim() ? normalizeTaskName(t.name) : "";
   const goal = String(t.goal ?? "");
@@ -191,15 +216,17 @@ export function createTask(store: Store, t: CreateTaskInput): Task {
   const now = Date.now();
   const startAt = Number.isFinite(t.start_at) ? Number(t.start_at) : now;
   const status: TaskStatus = t.status ?? "pending";
+  const workDir = String(t.work_dir ?? "");
+  const contextValue = autoAttachProject(store, workDir, t.context);
   const r = store.db.prepare(`INSERT INTO tasks(
     user_id,pool_id,name,goal,deliverable,constraints,acceptance,files,context,status,stage,note,result,artifact,
     start_at,end_at,work_dir,executor,model,session_id,runner_pid,runner_started_at,doc_path,created_at,updated_at
   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     t.userId, t.poolId, name, goal,
     t.deliverable ?? "", t.constraints ?? "", t.acceptance ?? "",
-    normalizeFiles(t.files), normalizeTaskContext(t.context), status, t.stage ?? "", t.note ?? "", t.result ?? "", t.artifact ?? "",
+    normalizeFiles(t.files), normalizeTaskContext(contextValue), status, t.stage ?? "", t.note ?? "", t.result ?? "", t.artifact ?? "",
     startAt, t.end_at ?? null,
-    String(t.work_dir ?? ""), String(t.executor ?? "opencode") || "opencode", String(t.model ?? ""),
+    workDir, String(t.executor ?? "opencode") || "opencode", String(t.model ?? ""),
     String(t.session_id ?? ""), t.runner_pid ?? null, t.runner_started_at ?? null, String(t.doc_path ?? ""),
     now, now,
   );

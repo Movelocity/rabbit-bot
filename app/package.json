@@ -21,7 +21,8 @@
     "web:build": "npm --prefix webapp run build",
     "web:typecheck": "npm --prefix webapp run typecheck",
     "idle": "node scripts/idle.mjs",
-    "pm": "tsx scripts/pm-audit.ts"
+    "pm": "tsx scripts/pm-audit.ts",
+    "backfill-projects": "tsx scripts/backfill-task-projects.ts"
   },
   "keywords": [],
   "author": "",
