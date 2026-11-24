@@ -43,6 +43,7 @@ import {
   type DispatchDeps,
 } from "../core/dispatch.ts";
 import { EXECUTORS, executorChoices, isExecutor } from "../core/executor.ts";
+import { parseEtaMs } from "../core/eta.ts";
 import { effectiveExecutorPreference } from "../ops/executor-preference.ts";
 import { resolveApiToken } from "../api-token.ts";
 import { formatTask, getTaskView, listTaskViews } from "../ops/tasks.ts";
@@ -829,7 +830,7 @@ export function createTools(d: ToolDeps) {
 
   const TASK_HELP = [
     "task 的用法（action 必填）：",
-    "  create  goal work_dir name? executor? model? start_at?             建任务（等审批通过后执行）",
+    "  create  goal work_dir name? executor? model? start_at? eta?         建任务（等审批通过后执行）",
     "  list    status? limit?                                              看任务",
     "  get     id                                                          看一条（带最近 3 条事件）",
     "  updates id limit?                                                   看任务池最近事件（带时间戳）",
@@ -842,6 +843,7 @@ export function createTools(d: ToolDeps) {
     "",
     "create 的 name 可选：给了就用它当短标签（# 自动补），不给就用系统返回的任务号。",
     `create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 ${executorChoices()}，不填走设置里的默认 worker（默认 opencode）。`,
+    "create 的 eta 是预估耗时（分钟，也可写 30m / 2h）：运行超过它会在任务群提醒一次；不填按默认 10 分钟。",
     "objects 里的 project:<slug> 表示关联项目，任务文档会自动带上 shared/projects/<slug>/ 下 context.md / plan.md 的绝对路径。",
     "deliverable / constraints / acceptance / files 只有用户明确说了才填；别替 WA 写实现计划或验收清单，它自己会读仓库约定、WA-BEST-PRACTICES.md 和 handoffs/ 里的旧交接。",
     "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
@@ -865,7 +867,7 @@ export function createTools(d: ToolDeps) {
     label: "task",
     executionMode: "sequential",
     description:
-      "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name / executor / model / start_at 可选。deliverable / constraints / acceptance / files 只有用户明确说了才填，别替 WA 编实现计划；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
+      "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name / executor / model / start_at / eta 可选。deliverable / constraints / acceptance / files 只有用户明确说了才填，别替 WA 编实现计划；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
       + "resume（用同一 session id 恢复执行）/ retry（重派：复用原任务回到待审批，不新建）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
@@ -886,6 +888,7 @@ export function createTools(d: ToolDeps) {
       relations: Type.Optional(Type.Array(Type.String(), { description: "create 用：必须关注/遵守的关系 id" })),
       forbidden: Type.Optional(Type.Array(Type.String(), { description: "create 用：不能碰的对象/关系 id" })),
       start_at: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "create 用：ISO 时间或毫秒时间戳，默认现在" })),
+      eta: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "create 用：预估耗时（分钟；也可写 30m / 2h）。运行超过它就在任务群提醒一次；不填默认 10 分钟" })),
       status: Type.Optional(Type.String({ description: `list、status 用：${TASK_STATUSES.join(" / ")}` })),
       limit: Type.Optional(Type.Number({ description: "list 用：最多几条" })),
       line: Type.Optional(Type.String({ description: "note 用：追加的一行说明" })),
@@ -917,6 +920,8 @@ export function createTools(d: ToolDeps) {
             if (!poolId) return txt("建任务需要知道是哪个池，这一轮没有对应的池。", { ok: false });
             const startAt = parseStartAt(p.start_at);
             if (startAt === null) return txt("start_at 看不懂：给 ISO 时间或毫秒时间戳。", { ok: false });
+            const etaMs = parseEtaMs(p.eta);
+            if (etaMs === null) return txt("eta 看不懂：给分钟数或 30m / 2h。", { ok: false });
             const context = {
               objects: Array.isArray(p.objects) ? p.objects : [],
               relations: Array.isArray(p.relations) ? p.relations : [],
@@ -947,6 +952,7 @@ export function createTools(d: ToolDeps) {
               work_dir: workDir,
               executor,
               model: p.model,
+              eta_ms: etaMs ?? undefined,
               status: "pending_approval",
             });
             const view = formatTask(created);

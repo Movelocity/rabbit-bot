@@ -26,6 +26,7 @@ import {
 } from "./core/board.ts";
 import { formatBoard } from "./ops/board.ts";
 import { appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, TASK_STATUSES, taskDisplayName, taskProjectSlugs, updateTask, type Task } from "./core/tasks.ts";
+import { parseEtaMs } from "./core/eta.ts";
 import {
   WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
 } from "./core/workers.ts";
@@ -551,6 +552,10 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             const executor = body.executor === undefined
               ? effectiveExecutorPreference(d.cfg)
               : validateExecutor(body.executor);
+            const etaMs = body.eta_ms !== undefined
+              ? (typeof body.eta_ms === "number" && Number.isFinite(body.eta_ms) ? Math.max(0, Math.floor(body.eta_ms)) : null)
+              : parseEtaMs(body.eta);
+            if (etaMs === null) throw new HttpError(400, "eta/eta_ms 看不懂：eta 给分钟数或 30m/2h，eta_ms 给毫秒");
             const task = createTask(d.store, {
               userId: typeof body.user_id === "string" ? body.user_id : "",
               poolId: typeof body.pool_id === "string" ? body.pool_id : "",
@@ -564,6 +569,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               work_dir: workDir,
               executor,
               model: typeof body.model === "string" ? body.model : undefined,
+              eta_ms: etaMs ?? undefined,
               status: "pending_approval",
             });
             // dispatch=true 只作为测试/内部逃生口，Web 和 UFA 都不走这条路。
@@ -657,6 +663,13 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (body.work_dir !== undefined) put("work_dir", validateWorkDir(body.work_dir));
             if (body.executor !== undefined) put("executor", validateExecutor(body.executor));
             put("model", optString("model"));
+            if (body.eta_ms !== undefined || body.eta !== undefined) {
+              const etaMs = body.eta_ms !== undefined
+                ? (typeof body.eta_ms === "number" && Number.isFinite(body.eta_ms) ? Math.max(0, Math.floor(body.eta_ms)) : null)
+                : parseEtaMs(body.eta);
+              if (etaMs === null) throw new HttpError(400, "eta/eta_ms 看不懂：eta 给分钟数或 30m/2h，eta_ms 给毫秒");
+              if (etaMs !== undefined) put("eta_ms", etaMs);
+            }
 
             const updated = Object.keys(patch).length ? updateTask(d.store, id, patch) : task;
             writeTaskDoc(d.store, updated, { apiBase, runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg) });
@@ -826,6 +839,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 claimed_at: task.claimed_at,
                 lease_until: task.lease_until,
                 attempt: task.attempt,
+                eta_ms: task.eta_ms,
                 exec_usage_at: task.exec_usage_at,
                 exec_steps: task.exec_steps,
                 exec_duration_ms: task.exec_duration_ms,

@@ -420,7 +420,7 @@ export class App {
     try {
       const r = sweepLongRunningTasks(this.store, { now: this.clock.now(), thresholdMs });
       if (r.warned.length) {
-        this.log.info(`长任务巡检：${r.warned.length} 个任务超过 ${Math.round(thresholdMs / 60_000)} 分钟，已写进任务池并唤醒 UFA（${r.warned.map((id) => `#${id}`).join(" ")}）`);
+        this.log.info(`长任务巡检：${r.warned.length} 个任务超过各自预估耗时（未设时默认 ${Math.round(thresholdMs / 60_000)} 分钟），已写进任务池并唤醒 UFA（${r.warned.map((id) => `#${id}`).join(" ")}）`);
       }
     } catch (e) {
       this.log.warn(`长任务巡检失败：${(e as Error).message}`);

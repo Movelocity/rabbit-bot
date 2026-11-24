@@ -105,6 +105,7 @@ function buildDetailRows(t: TaskView): DetailRow[] {
   add("model", t.model, true);
   add("stage", t.stage);
   add("attempt", t.attempt ? `第 ${t.attempt} 次` : "");
+  add("eta", t.eta_ms ? `${Math.round(t.eta_ms / 60_000)} 分钟（超时在任务群提醒）` : "");
   add("worker", t.worker_id, true);
   add("executor", t.executor || "opencode");
   add("worker_id", t.worker_id, true);
@@ -146,6 +147,7 @@ function TaskApprovalForm({
   const [deliverable, setDeliverable] = useState(task.deliverable || "");
   const [constraints, setConstraints] = useState(task.constraints || "");
   const [acceptance, setAcceptance] = useState(task.acceptance || "");
+  const [etaMin, setEtaMin] = useState(task.eta_ms ? String(Math.round(task.eta_ms / 60_000)) : "");
   const [rejectReason, setRejectReason] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -160,6 +162,8 @@ function TaskApprovalForm({
     collect("deliverable", deliverable);
     collect("constraints", constraints);
     collect("acceptance", acceptance);
+    const origEta = task.eta_ms ? String(Math.round(task.eta_ms / 60_000)) : "";
+    if (etaMin.trim() !== origEta) body.eta = etaMin.trim() || "0";
 
     setConfirming(false);
     setBusy(true);
@@ -224,6 +228,13 @@ function TaskApprovalForm({
             className="min-h-[72px]"
             value={acceptance}
             onChange={(e) => setAcceptance(e.target.value)}
+          />
+        </Field>
+        <Field label="预估耗时（分钟，超时在任务群提醒）">
+          <Input
+            value={etaMin}
+            onChange={(e) => setEtaMin(e.target.value)}
+            placeholder="30（留空用默认 10 分钟）"
           />
         </Field>
       </div>

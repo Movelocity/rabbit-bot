@@ -66,6 +66,27 @@ test("新一轮执行重置后可以再提醒一次", () => {
   assert.equal(listTaskEvents(store, task.id).length, 2);
 });
 
+test("预估耗时：按任务自己的 eta 触发，不设时用默认阈值", () => {
+  const store = new Store(":memory:");
+  const mk = (eta: number) => {
+    const t = createTask(store, {
+      userId: "u1", poolId: "p1", name: "#x", goal: "g", work_dir: "/tmp", status: "running", eta_ms: eta,
+    });
+    updateTask(store, t.id, {
+      status: "running", runner_pid: t.id + 100, runner_started_at: NOW - 2 * 60_000,
+    });
+    return t;
+  };
+  const fast = mk(1 * 60_000);
+  const slow = mk(30 * 60_000);
+  const r = sweepLongRunningTasks(store, { now: NOW, thresholdMs: 10 * 60_000 });
+  assert.deepEqual(r.warned, [fast.id], "只有超过自己预估耗时的才提醒");
+  const ev = listTaskEvents(store, fast.id).find((e) => /超过预估耗时/.test(e.text));
+  assert.ok(ev, "提醒语要说超过预估耗时");
+  assert.match(ev!.text, /预估 1 分钟/);
+  store.close();
+});
+
 test("thresholdMs=0 关闭提醒", () => {
   const { store } = setup(NOW - 60 * 60_000);
   const r = sweepLongRunningTasks(store, { now: NOW, thresholdMs: 0 });

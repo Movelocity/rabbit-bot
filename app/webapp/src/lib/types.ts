@@ -95,6 +95,7 @@ export interface TaskView {
   status: TaskStatus;
   stage: string;
   attempt: number;
+  eta_ms: number;
   worker_id: string | null;
   note: string;
   deliverable: string;

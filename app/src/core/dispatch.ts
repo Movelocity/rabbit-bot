@@ -39,6 +39,7 @@ import {
 } from "./runner-state.ts";
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 import { normalizeExecutor, type Executor } from "./executor.ts";
+import { formatEta } from "./eta.ts";
 
 export type { Executor } from "./executor.ts";
 
@@ -776,8 +777,9 @@ export interface LongRunningSweepResult {
 }
 
 /**
- * 长任务提醒：running 且超过阈值（默认 10 分钟）的任务，在任务池写一条普通事件。
+ * 长任务提醒：running 且超过「预估耗时」的任务，在任务池写一条普通事件。
  *
+ * 阈值按任务走：任务自己带 `eta_ms` 就用它，否则用默认阈值（默认 10 分钟）。
  * 只提醒一次：用 `UPDATE ... WHERE long_run_notified_at IS NULL` 原子认领；
  * 每次启动/恢复任务时把这个字段清空，所以「同一轮执行」只提醒一次。
  * 不标 internal、不关 notify：事件算任务池未读，会触发任务 tick 并让 UFA 在上下文里看到。
@@ -786,24 +788,30 @@ export function sweepLongRunningTasks(
   store: Store,
   opts: { now?: number; thresholdMs?: number } = {},
 ): LongRunningSweepResult {
-  const thresholdMs = opts.thresholdMs ?? 10 * 60_000;
+  const defaultThresholdMs = opts.thresholdMs ?? 10 * 60_000;
   const now = opts.now ?? Date.now();
-  if (!(thresholdMs > 0)) return { checked: 0, warned: [] };
+  if (!(defaultThresholdMs > 0)) return { checked: 0, warned: [] };
   const running = store.db.prepare(
     "SELECT * FROM tasks WHERE status='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
   ).all() as Task[];
   const warned: number[] = [];
   for (const task of running) {
+    const etaMs = Number(task.eta_ms ?? 0);
+    const threshold = etaMs > 0 ? etaMs : defaultThresholdMs;
+    if (!(threshold > 0)) continue;
     const startedAt = task.runner_started_at ?? task.start_at;
-    if (now - startedAt < thresholdMs) continue;
+    if (now - startedAt < threshold) continue;
     const claimed = store.db.prepare(
       "UPDATE tasks SET long_run_notified_at=?, updated_at=? WHERE id=? AND long_run_notified_at IS NULL AND status='running'",
     ).run(now, now, task.id);
     if (Number(claimed.changes) === 0) continue;
     warned.push(task.id);
     const mins = Math.round((now - startedAt) / 60_000);
+    const text = etaMs > 0
+      ? `任务 #${task.id} 已超过预估耗时（预估 ${formatEta(etaMs)}，已跑 ${mins} 分钟），可能有异常。勿回复此消息。`
+      : `任务 #${task.id} 已持续 ${mins} 分钟，可能有异常。勿回复此消息。`;
     appendTaskEvent(store, task.id, {
-      text: `任务 #${task.id} 已持续 ${mins} 分钟，可能有异常。勿回复此消息。`,
+      text,
       sender: "dispatcher",
       senderName: "调度器",
     });

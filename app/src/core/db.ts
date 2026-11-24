@@ -173,6 +173,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   runner_pid        INTEGER,
   runner_started_at INTEGER,
   long_run_notified_at INTEGER,
+  -- 预估耗时（ms）：超过就在任务群提醒一次；0 = 用默认阈值（默认 10 分钟）
+  eta_ms            INTEGER NOT NULL DEFAULT 0,
   doc_path          TEXT    NOT NULL DEFAULT '',
   -- 执行耗费（2026-11-11）：进程退出时从 runner.jsonl 聚合 token / 费用 / 实际耗时
   exec_usage_at          INTEGER,
@@ -316,6 +318,8 @@ export class Store {
     }
     // 长任务提醒（2026-11-11）：同一轮执行只提醒一次；老库补列
     try { this.db.exec("ALTER TABLE tasks ADD COLUMN long_run_notified_at INTEGER"); } catch { /* 已存在 */ }
+    // 预估耗时（2026-11-24）：按任务自定义超时提醒阈值；0 = 用默认；老库补列
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN eta_ms INTEGER NOT NULL DEFAULT 0"); } catch { /* 已存在 */ }
     // 执行耗费（2026-11-11）：从 data/tasks/<id>/runner.jsonl 聚合；老库补列
     for (const col of [
       "exec_usage_at INTEGER",
