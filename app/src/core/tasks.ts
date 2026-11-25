@@ -53,6 +53,8 @@ export interface Task {
   runner_started_at: number | null;
   /** 本次执行超过阈值时在任务池提醒过一次的时刻；每次启动/恢复重置 */
   long_run_notified_at: number | null;
+  /** 本次执行静默超阈值时自动上报过一次的时刻；每次启动/恢复重置 */
+  stuck_notified_at: number | null;
   /** 预估耗时（ms）：超过就在任务群提醒一次；0 = 用默认阈值 */
   eta_ms: number;
   /** 任务文档路径（<runtimeDir>/.ufa/tasks/task-<id>.md） */
@@ -264,7 +266,7 @@ export type TaskPatch = Partial<Pick<Task,
   "name" | "goal" | "deliverable" | "constraints" | "acceptance" | "files" | "context"
   | "status" | "stage" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "note" | "result" | "artifact" | "end_at"
   | "work_dir" | "executor" | "model" | "session_id" | "runner_pid" | "runner_started_at"
-  | "long_run_notified_at" | "eta_ms" | "doc_path"
+  | "long_run_notified_at" | "stuck_notified_at" | "eta_ms" | "doc_path"
   | "exec_usage_at" | "exec_steps" | "exec_duration_ms" | "exec_total_tokens" | "exec_input_tokens"
   | "exec_output_tokens" | "exec_reasoning_tokens" | "exec_cache_read_tokens" | "exec_cache_write_tokens" | "exec_cost_usd"
 >>;
@@ -273,7 +275,7 @@ const PATCH_KEYS = [
   "name", "goal", "deliverable", "constraints", "acceptance", "files", "context",
   "status", "stage", "worker_id", "claimed_at", "lease_until", "attempt", "note", "result", "artifact", "end_at",
   "work_dir", "executor", "model", "session_id", "runner_pid", "runner_started_at",
-  "long_run_notified_at", "eta_ms", "doc_path",
+  "long_run_notified_at", "stuck_notified_at", "eta_ms", "doc_path",
   "exec_usage_at", "exec_steps", "exec_duration_ms", "exec_total_tokens", "exec_input_tokens",
   "exec_output_tokens", "exec_reasoning_tokens", "exec_cache_read_tokens", "exec_cache_write_tokens", "exec_cost_usd",
 ] as const;

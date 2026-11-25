@@ -12,6 +12,7 @@ import { listTaskEvents } from "../src/core/task-events.ts";
 import {
   buildOpencodeArgs, isRunnerAlive, resumeTask, startTask, stopTask, sweepDeadRunners, writeTaskDoc,
 } from "../src/core/dispatch.ts";
+import { interruptTask } from "../src/core/task-controls.ts";
 
 const root = path.join(APP_ROOT, ".scratch", "dispatch-test");
 const workDir = path.join(root, "work");
@@ -447,6 +448,24 @@ test("resumeTask：用同一个 session id 带 -s，提示词要求先读任务�
   store.close();
 });
 
+test("resumeTask：带 instruction 时拼进本轮 prompt，不改任务文档", async () => {
+  const { store, task } = setup();
+  const docPath = writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  updateTask(store, task.id, { session_id: "ses_keep_me" });
+  const out = recordPath();
+  process.env.FAKE_EXEC_OUT = out;
+  await resumeTask(store, getTask(store, task.id)!, {
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+  }, { instruction: "先补只读准入测试，再继续" });
+
+  const argv: string[] = (await readRecord(out)).argv;
+  assert.equal(argv[1].startsWith(`继续任务，先读 ${docPath}`), true);
+  assert.match(argv[1], /本次补充要求：/);
+  assert.match(argv[1], /先补只读准入测试/);
+  assert.equal(fs.readFileSync(docPath, "utf8").includes("先补只读准入测试"), false, "补充要求不写任务文档");
+  store.close();
+});
+
 test("resumeTask：没有 session_id 直接报错", async () => {
   const { store, task } = setup();
   writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
@@ -520,6 +539,45 @@ test("stopTask：杀进程树、清 runner_pid、running 回到 pending，并落
     delete process.env.FAKE_EXEC_TOKENS;
   }
   store.close();
+});
+
+test("interruptTask：先等旧进程退出再续跑，新 runner 不被旧清理覆盖", async () => {
+  const { store, task } = setup();
+  writeTaskDoc(store, task, { apiBase: "http://127.0.0.1:9999", runtimeDir });
+  process.env.FAKE_EXEC_SLEEP = "10000";
+  const deps = {
+    apiBase: "http://127.0.0.1:9999", token: "t", dataDir: root, runtimeDir, executorBin: fakeBin,
+  };
+  try {
+    const started = await startTask(store, task, deps);
+    const firstPid = started.pid;
+    assert.equal(typeof firstPid, "number");
+    assert.equal(isRunnerAlive(firstPid), true);
+
+    const resumed = await interruptTask(store, task.id, deps, "先补只读准入测试，再继续", {
+      source: "tool", actorName: "测试",
+    });
+    assert.notEqual(resumed.pid, firstPid, "续跑必须是新进程");
+    assert.equal(isRunnerAlive(firstPid), false, "旧进程要真的退出");
+
+    const fresh = getTask(store, task.id)!;
+    assert.equal(fresh.runner_pid, resumed.pid, "新 runner pid 不能被旧 stopTask 覆盖");
+    assert.equal(fresh.status, "running");
+    assert.equal(fresh.attempt, 2);
+    assert.match(fresh.note, /先补只读准入测试/);
+
+    const events = listTaskEvents(store, task.id);
+    assert.ok(events.some((e) => /已停止执行/.test(e.text)), "要留下停止事件");
+    assert.ok(events.some((e) => /已中断原执行/.test(e.text)), "要留下中断续跑事件");
+    assert.ok(
+      events.some((e) => e.meta?.kind === "task_command" && /^\/interrupt #/.test(e.text)),
+      "要写 interrupt 审计",
+    );
+    await stopTask(store, getTask(store, task.id)!, { graceMs: 2000, dataDir: root });
+  } finally {
+    delete process.env.FAKE_EXEC_SLEEP;
+    store.close();
+  }
 });
 
 test("sweepDeadRunners：进程没了就清 runner 状态并在任务池发调度器消息", () => {

@@ -34,12 +34,16 @@ import { archivePool, listPools, readPool, searchPool } from "../ops/pools.ts";
 import { mainPoolId } from "../ops/send-review-settings.ts";
 import { createSchedule, formatSchedule, isScheduleStatus, type ScheduleInput } from "../core/schedules.ts";
 import {
-  TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, taskDisplayName, updateTask,
+  TASK_STATUSES, appendNote, cancelTask, createTask, getTask, isTaskStatus, normalizeTaskName, taskDisplayName, updateTask,
 } from "../core/tasks.ts";
 import { listTaskEvents } from "../core/task-events.ts";
 import { retryTask } from "../core/task-retry.ts";
 import {
-  DEFAULT_CAPTURE_MS, resumeTask, runnerAlive, stopTask,
+  interruptTask, logTask, resumeWithInstruction, stopTaskWithAudit, updateTaskFields, taskIsRunning,
+} from "../core/task-controls.ts";
+import { appendTaskAudit, buildAuditLine, quoteArg } from "../core/task-audit.ts";
+import {
+  DEFAULT_CAPTURE_MS, runnerAlive, stopTask,
   type DispatchDeps,
 } from "../core/dispatch.ts";
 import { EXECUTORS, executorChoices, isExecutor } from "../core/executor.ts";
@@ -830,20 +834,28 @@ export function createTools(d: ToolDeps) {
 
   const TASK_HELP = [
     "task 的用法（action 必填）：",
-    "  create  goal work_dir name? executor? model? start_at? eta?         建任务（等审批通过后执行）",
-    "  list    status? limit?                                              看任务",
-    "  get     id                                                          看一条（带最近 3 条事件）",
-    "  updates id limit?                                                   看任务池最近事件（带时间戳）",
-    "  resume  id                                                          用同一 session id 恢复执行",
-    "  retry   id                                                          重派：取消/失败后复用原任务回待审批，不新建",
-    "  note    id line                                                     追加说明",
-    "  cancel  id                                                          取消（会先杀在跑的进程）",
-    "  status  id status result? artifact?                                 改状态/回填结果",
-    "  help                                                                看这份说明",
+    "  create    goal work_dir name? executor? model? start_at? eta?      建任务（等审批通过后执行）",
+    "  list      status? limit?                                           看任务",
+    "  get       id                                                       看一条（带最近 3 条事件）",
+    "  updates   id limit?                                                看任务池最近事件（带时间戳）",
+    "  log       id lines?                                                看执行器最后在干什么（只读日志，不启停）",
+    "  update    id goal? deliverable? constraints? acceptance? files? …  运行前改需求（只改任务和文档）",
+    "  resume    id instruction?                                          用同一 session id 恢复执行",
+    "  interrupt id instruction                                           运行中追加要求：先停再续（仅 running）",
+    "  stop      id                                                       只停执行器，任务回 pending（不取消）",
+    "  retry     id                                                       重派：取消/失败后复用原任务回待审批，不新建",
+    "  note      id line                                                  追加说明",
+    "  cancel    id                                                       取消（会先杀在跑的进程）",
+    "  status    id status result? artifact?                              改状态/回填结果",
+    "  help                                                               看这份说明",
     "",
     "create 的 name 可选：给了就用它当短标签（# 自动补），不给就用系统返回的任务号。",
     `create 的 work_dir 必填且必须是已存在的绝对路径；executor 是 ${executorChoices()}，不填走设置里的默认 worker（默认 opencode）。`,
     "create 的 eta 是预估耗时（分钟，也可写 30m / 2h）：运行超过它会在任务群提醒一次；不填按默认 10 分钟。",
+    "update 只用于运行前（pending_approval / pending / blocked）；运行中改方向用 interrupt，已停下用 resume。",
+    "interrupt 只接受正在跑的任务；没在跑会被拒绝。它不是实时插话，而是停掉当前进程后用同一会话续跑。",
+    "log 只读 runner 日志尾部，输出会脱敏/截断；不要自己读 runner.jsonl 或起进程。",
+    "所有写操作都会在任务池留一条 internal 的 /... 审计指令，不计未读、不进上下文，只是方便回放。",
     "objects 里的 project:<slug> 表示关联项目，任务文档会自动带上 shared/projects/<slug>/ 下 context.md / plan.md 的绝对路径。",
     "deliverable / constraints / acceptance / files 只有用户明确说了才填；别替 WA 写实现计划或验收清单，它自己会读仓库约定、WA-BEST-PRACTICES.md 和 handoffs/ 里的旧交接。",
     "create 只登记成 pending_approval，不会立刻执行；开启任务审批时发到任务发起的聊天（或配置的审批房），主人贴 OK 后才启动；没开时在 Web 任务页审批。",
@@ -870,10 +882,13 @@ export function createTools(d: ToolDeps) {
       "任务面板。action 决定做什么：create（建任务，必填 goal + work_dir；name / executor / model / start_at / eta 可选。deliverable / constraints / acceptance / files 只有用户明确说了才填，别替 WA 编实现计划；objects 是业务地图对象 id，先用 map 查；建完是 pending_approval，等审批通过后才执行）/ "
       + "list（看任务，可按 status、limit 筛）/ get（看一条，带最近 3 条事件和 session_id / work_dir / executor / doc_path）/ "
       + "updates（看任务池最近事件：阶段、完成、失败、权限申请，都带时间戳）/ "
-      + "resume（用同一 session id 恢复执行）/ retry（重派：复用原任务回到待审批，不新建）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
-      + "任务按工作目录起一次性进程，不常驻 worker；任务卡住或要权限时，把情况转述给用户。",
+      + "log（看执行器最后在干什么：最近助手文本、工具调用、静默时长；只读日志）/ "
+      + "update（运行前改需求：goal / deliverable / constraints / acceptance / files / work_dir / executor / model / eta 等）/ "
+      + "resume（用同一 session id 恢复执行，可带 instruction）/ interrupt（正在跑时追加要求：先停再续，可带 instruction；没在跑会拒绝）/ stop（只停执行器，任务回 pending）/ "
+      + "retry（重派：复用原任务回到待审批，不新建）/ note（追加说明）/ cancel（取消，会先杀进程）/ status（改状态或回填 result / artifact）/ help。"
+      + "所有写操作都会在任务池写一条 internal 审计指令；任务卡住或要权限时，把情况转述给用户。",
     parameters: Type.Object({
-      action: Type.String({ description: "create / list / get / updates / resume / retry / note / cancel / status / help" }),
+      action: Type.String({ description: "create / list / get / updates / log / update / resume / interrupt / stop / retry / note / cancel / status / help" }),
       id: Type.Optional(Type.Number({ description: "get、updates、resume、retry、note、cancel、status 用：任务 id" })),
       name: Type.Optional(Type.String({ description: "create 用：可选短标签；不给就用系统返回的任务号" })),
       work_dir: Type.Optional(Type.String({ description: "create 用：任务工作目录，必须是已存在的绝对路径" })),
@@ -891,6 +906,8 @@ export function createTools(d: ToolDeps) {
       eta: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "create 用：预估耗时（分钟；也可写 30m / 2h）。运行超过它就在任务群提醒一次；不填默认 10 分钟" })),
       status: Type.Optional(Type.String({ description: `list、status 用：${TASK_STATUSES.join(" / ")}` })),
       limit: Type.Optional(Type.Number({ description: "list 用：最多几条" })),
+      lines: Type.Optional(Type.Number({ description: "log 用：摘要里带最近几个事件，默认 8" })),
+      instruction: Type.Optional(Type.String({ description: "resume / interrupt 用：补充要求；interrupt 只接受正在跑的任务" })),
       line: Type.Optional(Type.String({ description: "note 用：追加的一行说明" })),
       result: Type.Optional(Type.String({ description: "status 用：结果" })),
       artifact: Type.Optional(Type.String({ description: "status 用：产出物路径或链接" })),
@@ -956,6 +973,14 @@ export function createTools(d: ToolDeps) {
               status: "pending_approval",
             });
             const view = formatTask(created);
+            appendTaskAudit(d.store, {
+              taskId: created.id,
+              action: "create",
+              text: buildAuditLine("create", created.id, `work_dir=${quoteArg(created.work_dir)} executor=${created.executor}`),
+              source: "tool",
+              args: { work_dir: created.work_dir, executor: created.executor, goal: created.goal },
+              ok: true,
+            });
             const gate = d.taskApproval;
             let notice = "等待 Web 审批，审批通过后才执行。";
             if (gate?.enabled) {
@@ -1003,18 +1028,105 @@ export function createTools(d: ToolDeps) {
             );
           }
 
-          case "resume": {
-            if (p.id === undefined) return txt("resume 要 id。", { ok: false });
+          case "log": {
+            if (p.id === undefined) return txt("log 要 id。", { ok: false });
             const task = getTask(d.store, p.id);
             if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
-            if (!task.session_id.trim()) {
-              return txt(`#${p.id} 没有 session_id，不能恢复；请先 start 或重新创建。`, { ok: false });
+            const r = logTask(d.store, task, { dataDir: d.cfg.dataDir }, {
+              now: d.now(),
+              lines: p.lines,
+              source: "tool",
+              actorName: d.cfg.agent.name,
+            });
+            return txt(r.text, { ok: true, task_id: task.id, digest: r.digest });
+          }
+
+          case "update": {
+            if (p.id === undefined) return txt("update 要 id。", { ok: false });
+            const task = getTask(d.store, p.id);
+            if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
+            if (taskIsRunning(task, d.cfg.dataDir)) {
+              return txt(`#${p.id} 正在运行，不能直接改需求；运行中改方向用 interrupt。`, { ok: false });
             }
-            if (runnerAlive(task, d.cfg.dataDir)) return txt(`#${p.id} 已在运行。`, { ok: false });
+            const patch: Record<string, unknown> = {};
+            if (p.name !== undefined) {
+              if (!p.name.trim()) return txt("update 的 name 不能为空。", { ok: false });
+              patch.name = normalizeTaskName(p.name);
+            }
+            if (p.goal !== undefined) {
+              if (!p.goal.trim()) return txt("update 的 goal 不能为空。", { ok: false });
+              patch.goal = p.goal;
+            }
+            if (p.deliverable !== undefined) patch.deliverable = p.deliverable;
+            if (p.constraints !== undefined) patch.constraints = p.constraints;
+            if (p.acceptance !== undefined) patch.acceptance = p.acceptance;
+            if (p.files !== undefined) patch.files = Array.isArray(p.files) ? JSON.stringify(p.files) : String(p.files);
+            if (p.work_dir !== undefined) {
+              const wd = p.work_dir.trim();
+              if (!wd || !path.isAbsolute(wd)) return txt(`work_dir 必须是绝对路径：${wd || "（空）"}`, { ok: false });
+              let stat: fs.Stats;
+              try { stat = fs.statSync(wd); } catch { return txt(`work_dir 不存在：${wd}`, { ok: false }); }
+              if (!stat.isDirectory()) return txt(`work_dir 不是目录：${wd}`, { ok: false });
+              patch.work_dir = wd;
+            }
+            if (p.executor !== undefined) {
+              const executor = String(p.executor);
+              if (!isExecutor(executor)) return txt(`executor 只能是 ${EXECUTORS.join(" / ")}。`, { ok: false });
+              patch.executor = executor;
+            }
+            if (p.model !== undefined) patch.model = p.model;
+            if (p.eta !== undefined) {
+              const etaMs = parseEtaMs(p.eta);
+              if (etaMs === null) return txt("eta 看不懂：给分钟数或 30m / 2h。", { ok: false });
+              if (etaMs !== undefined) patch.eta_ms = etaMs;
+            }
+            if (!Object.keys(patch).length) return txt("update 没有要改的字段。", { ok: false });
             const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
-            const resumed = await resumeTask(d.store, task, deps);
+            const updated = updateTaskFields(d.store, p.id, patch as any, deps, {
+              source: "tool",
+              actorName: d.cfg.agent.name,
+            });
+            return txt(`#${updated.id} 已更新：${Object.keys(patch).join(", ")}`, { ok: true, task: formatTask(updated) });
+          }
+
+          case "interrupt": {
+            if (p.id === undefined) return txt("interrupt 要 id。", { ok: false });
+            const instruction = String(p.instruction ?? "").trim();
+            if (!instruction) return txt("interrupt 要 instruction：追加的具体要求。", { ok: false });
+            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
+            const resumed = await interruptTask(d.store, p.id, deps, instruction, {
+              source: "tool",
+              actorName: d.cfg.agent.name,
+            });
+            return txt(
+              `#${resumed.task.id} 已中断并按新要求恢复（session=${resumed.session_id}，attempt=${resumed.task.attempt}）。`,
+              { ok: true, task: formatTask(resumed.task) },
+            );
+          }
+
+          case "stop": {
+            if (p.id === undefined) return txt("stop 要 id。", { ok: false });
+            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
+            const stopped = await stopTaskWithAudit(d.store, p.id, deps, {
+              source: "tool",
+              actorName: d.cfg.agent.name,
+            });
+            return txt(`#${stopped.id} 已停止执行，当前状态 ${stopped.status}。`, { ok: true, task: formatTask(stopped) });
+          }
+
+          case "resume": {
+            if (p.id === undefined) return txt("resume 要 id。", { ok: false });
+            const deps = d.dispatch ?? defaultDispatchDeps(d.cfg);
+            const instruction = String(p.instruction ?? "").trim();
+            const resumed = await resumeWithInstruction(d.store, p.id, deps, instruction || undefined, {
+              source: "tool",
+              actorName: d.cfg.agent.name,
+            });
             const view = formatTask(resumed.task);
-            return txt(`#${resumed.task.id} 恢复执行（session=${resumed.session_id}）。`, { ok: true, task: view });
+            return txt(
+              `#${resumed.task.id} 恢复执行（session=${resumed.session_id}）${instruction ? "，已带上补充要求" : ""}。`,
+              { ok: true, task: view },
+            );
           }
 
           case "retry": {
@@ -1033,6 +1145,14 @@ export function createTools(d: ToolDeps) {
                 ? "已回到待审批并发了审批提示，主人贴 OK 后重新执行。"
                 : "已回到待审批（审批消息没发出去，可在 Web 任务页审批）。";
             }
+            appendTaskAudit(d.store, {
+              taskId: retried.id,
+              action: "retry",
+              text: buildAuditLine("retry", retried.id, `attempt=${retried.attempt}`),
+              source: "tool",
+              args: { attempt: retried.attempt },
+              ok: true,
+            });
             return txt(`#${retried.id} 已重派，${notice}`, { ok: true, task: view });
           }
 
@@ -1040,6 +1160,14 @@ export function createTools(d: ToolDeps) {
             if (p.id === undefined) return txt("note 要 id。", { ok: false });
             if (!p.line?.trim()) return txt("note 要 line：追加的一行说明。", { ok: false });
             const updated = appendNote(d.store, p.id, p.line);
+            appendTaskAudit(d.store, {
+              taskId: updated.id,
+              action: "note",
+              text: buildAuditLine("note", updated.id, quoteArg(p.line)),
+              source: "tool",
+              args: { line: p.line },
+              ok: true,
+            });
             const view = formatTask(updated);
             return txt(`#${updated.id} 追加了说明：${p.line}`, { ok: true, task: view });
           }
@@ -1050,6 +1178,14 @@ export function createTools(d: ToolDeps) {
             if (!task) return txt(`没有任务 #${p.id}`, { ok: false });
             if (runnerAlive(task, d.cfg.dataDir)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const updated = cancelTask(d.store, p.id);
+            appendTaskAudit(d.store, {
+              taskId: updated.id,
+              action: "cancel",
+              text: buildAuditLine("cancel", updated.id),
+              source: "tool",
+              args: { status: updated.status },
+              ok: true,
+            });
             const view = formatTask(updated);
             return txt(`#${updated.id} 已取消。`, { ok: true, task: view });
           }
@@ -1064,6 +1200,14 @@ export function createTools(d: ToolDeps) {
               status: p.status,
               result: p.result,
               artifact: p.artifact,
+            });
+            appendTaskAudit(d.store, {
+              taskId: updated.id,
+              action: "status",
+              text: buildAuditLine("status", updated.id, String(updated.status)),
+              source: "tool",
+              args: { status: updated.status, result: p.result, artifact: p.artifact },
+              ok: true,
             });
             const view = formatTask(updated);
             return txt(`#${updated.id} 状态改成 ${updated.status}。`, { ok: true, task: view });

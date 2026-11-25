@@ -69,10 +69,15 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   assert.equal(events.body.data.task_id, id);
   assert.equal(events.body.data.pool_id, created.body.data.task_pool_id);
   const messages = events.body.data.messages;
-  assert.equal(messages.length, 2);
-  assert.match(messages[0].text, /阶段 review/);
-  assert.match(messages[1].text, /任务完成：好了/);
-  for (const m of messages) {
+  const normal = messages.filter((m: any) => m.meta?.kind !== "task_command");
+  const audit = messages.filter((m: any) => m.meta?.kind === "task_command");
+  assert.equal(normal.length, 2);
+  assert.equal(audit.length, 2);
+  assert.match(normal[0].text, /阶段 review/);
+  assert.match(normal[1].text, /任务完成：好了/);
+  assert.match(audit[0].text, /\/create #/);
+  assert.match(audit[1].text, /\/status #/);
+  for (const m of normal) {
     assert.equal(typeof m.seq, "number");
     assert.equal(typeof m.ts, "number");
     assert.match(m.local, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
@@ -82,12 +87,12 @@ test("GET /v1/tasks/:id/events：401 / 404 / 200", async () => {
   const detail = await call(`/v1/tasks/${id}`);
   assert.equal(detail.status, 200);
   assert.equal(detail.body.data.task_pool_id, created.body.data.task_pool_id);
-  assert.equal(detail.body.data.recent_events.length, 2);
+  assert.equal(detail.body.data.recent_events.length, 4);
 
   const snap = await call(`/v1/tasks/${id}/snapshot`);
   assert.equal(snap.status, 200);
   assert.equal(snap.body.data.task.task_pool_id, created.body.data.task_pool_id);
-  assert.equal(snap.body.data.recent_events.length, 2);
+  assert.equal(snap.body.data.recent_events.length, 4);
 
   // 任务指导文件：未生成时 exists=false，生成后返回正文
   const docPath = taskDocPath(getTask(store, id)!, cfg.runtimeDir);

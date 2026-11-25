@@ -166,16 +166,17 @@ test("task updates / get：返回任务池里的带时间戳事件", async () =>
   const updates = await run("task", { action: "updates", id });
   assert.equal(updates.details?.ok, true, updates.text);
   assert.equal(updates.details.name, "#看进度");
-  assert.equal(updates.details.count, 2);
+  assert.equal(updates.details.count, 3);
   assert.match(updates.text, /领取任务/);
   assert.match(updates.text, /阶段 working/);
   assert.match(updates.text, /wa-1/);
+  assert.match(updates.text, /\/create #/);
 
   const got = await run("task", { action: "get", id });
   assert.equal(got.details?.ok, true, got.text);
   assert.equal(got.details.task.name, "#看进度");
   assert.ok(got.details.task.task_pool_id);
-  assert.equal(got.details.task.recent_events.length, 2);
+  assert.equal(got.details.task.recent_events.length, 3);
 
   const missing = await run("task", { action: "updates", id: 999999 });
   assert.equal(missing.details?.ok, false);

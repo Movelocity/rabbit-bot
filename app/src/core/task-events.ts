@@ -19,6 +19,8 @@ export interface AppendTaskEventInput {
   internal?: boolean;
   /** false = 不叫醒任务事件 tick；默认 true */
   notify?: boolean;
+  /** 结构化附加信息（如审计指令的 task_command / audit_only） */
+  meta?: Record<string, unknown> | null;
 }
 
 export interface TaskEvent {
@@ -27,6 +29,7 @@ export interface TaskEvent {
   local: string;
   sender: string;
   text: string;
+  meta?: Record<string, unknown> | null;
 }
 
 /** 每个 Store 一个任务事件监听器；App 把它接到调度器上，测试不接就是 null。 */
@@ -70,10 +73,11 @@ export function appendTaskEvent(store: Store, taskId: number, input: AppendTaskE
     media_type: "text",
     from_self: false,
     internal: input.internal === true,
+    meta: input.meta ?? null,
   });
   if (!stored) throw new Error(`任务 #${id} 的事件写入失败`);
   if (input.notify !== false) notifiers.get(store)?.();
-  return { seq: stored.seq, ts, local: fmtLocal(ts), sender: senderName, text };
+  return { seq: stored.seq, ts, local: fmtLocal(ts), sender: senderName, text, meta: input.meta ?? null };
 }
 
 export interface ListTaskEventsOptions {
@@ -85,13 +89,20 @@ export interface ListTaskEventsOptions {
 export function listTaskEvents(store: Store, taskId: number, opts: ListTaskEventsOptions = {}): TaskEvent[] {
   const id = requireTaskId(taskId);
   const task = ensureTaskPool(store, id);
-  const toEvent = (r: any): TaskEvent => ({
-    seq: r.seq,
-    ts: r.ts,
-    local: fmtLocal(r.ts),
-    sender: r.sender_name,
-    text: r.text,
-  });
+  const toEvent = (r: any): TaskEvent => {
+    let meta: Record<string, unknown> | null = null;
+    if (r.meta) {
+      try { meta = JSON.parse(r.meta); } catch { meta = null; }
+    }
+    return {
+      seq: r.seq,
+      ts: r.ts,
+      local: fmtLocal(r.ts),
+      sender: r.sender_name,
+      text: r.text,
+      meta,
+    };
+  };
 
   const n = opts.limit === undefined ? undefined : Math.floor(Number(opts.limit));
   if (n !== undefined && Number.isFinite(n) && n > 0) {

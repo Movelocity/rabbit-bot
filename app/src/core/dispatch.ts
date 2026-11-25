@@ -40,6 +40,8 @@ import {
 import { loadBusinessMap, renderTaskContext, renderTaskContextFromDir, type BusinessMap } from "../ops/business-map.ts";
 import { normalizeExecutor, type Executor } from "./executor.ts";
 import { formatEta } from "./eta.ts";
+import { formatRunnerDigest, readRunnerDigest } from "./runner-tail.ts";
+import { appendTaskAudit, buildAuditLine } from "./task-audit.ts";
 
 export type { Executor } from "./executor.ts";
 
@@ -801,6 +803,8 @@ export function sweepLongRunningTasks(
     if (!(threshold > 0)) continue;
     const startedAt = task.runner_started_at ?? task.start_at;
     if (now - startedAt < threshold) continue;
+    // 同一轮已经因为静默自动上报过，就不再重复发长任务提醒
+    if (task.stuck_notified_at && task.stuck_notified_at >= startedAt) continue;
     const claimed = store.db.prepare(
       "UPDATE tasks SET long_run_notified_at=?, updated_at=? WHERE id=? AND long_run_notified_at IS NULL AND status='running'",
     ).run(now, now, task.id);
@@ -812,6 +816,63 @@ export function sweepLongRunningTasks(
       : `任务 #${task.id} 已持续 ${mins} 分钟，可能有异常。勿回复此消息。`;
     appendTaskEvent(store, task.id, {
       text,
+      sender: "dispatcher",
+      senderName: "调度器",
+    });
+  }
+  return { checked: running.length, warned };
+}
+
+export interface StuckSweepResult {
+  /** 这轮扫了多少条 running 任务 */
+  checked: number;
+  /** 刚写过静默提醒的任务 id */
+  warned: number[];
+}
+
+/**
+ * 静默巡检：进程还活着，但 runner 日志超过 stuckMs 没有新事件，就自动抓一次摘要写进任务池。
+ *
+ * 每条任务每一轮执行只报一次（stuck_notified_at），启动/恢复时清空。
+ * 摘要写普通事件（会唤醒 UFA 转述），同时写一条 internal 的 /log (auto-stuck) 审计指令。
+ */
+export function sweepStuckTasks(
+  store: Store,
+  opts: { now?: number; stuckMs?: number; dataDir?: string } = {},
+): StuckSweepResult {
+  const now = opts.now ?? Date.now();
+  const stuckMs = opts.stuckMs ?? 5 * 60_000;
+  const dataDir = opts.dataDir ?? DEFAULT_DATA_DIR;
+  if (!(stuckMs > 0)) return { checked: 0, warned: [] };
+  const running = store.db.prepare(
+    "SELECT * FROM tasks WHERE status='running' AND runner_pid IS NOT NULL ORDER BY id ASC",
+  ).all() as Task[];
+  const warned: number[] = [];
+  for (const task of running) {
+    if (!runnerAlive(task, dataDir)) continue;
+    const digest = readRunnerDigest(task, dataDir, { now, alive: true, stuckMs });
+    const baseline = digest.lastEventAt ?? task.runner_started_at ?? task.start_at;
+    if (!baseline || now - baseline < stuckMs) continue;
+    const claimed = store.db.prepare(
+      "UPDATE tasks SET stuck_notified_at=?, updated_at=? WHERE id=? AND status='running' AND stuck_notified_at IS NULL",
+    ).run(now, now, task.id);
+    if (Number(claimed.changes) === 0) continue;
+    warned.push(task.id);
+    const mins = Math.max(1, Math.round(digest.silentMs / 60_000));
+    const summary = formatRunnerDigest(digest, 1200);
+    appendTaskAudit(store, {
+      taskId: task.id,
+      action: "log",
+      text: buildAuditLine("log", task.id, "(auto-stuck)"),
+      source: "dispatcher",
+      args: { auto: true, silentMs: digest.silentMs, pid: task.runner_pid },
+      ok: true,
+      result: summary,
+      sender: "dispatcher",
+      senderName: "调度器",
+    });
+    appendTaskEvent(store, task.id, {
+      text: `任务 #${task.id} 进程还活着，但已静默 ${mins} 分钟，可能有异常。\n${summary}`,
       sender: "dispatcher",
       senderName: "调度器",
     });
@@ -1002,6 +1063,8 @@ function executorArgs(
 
 interface LaunchOptions extends DispatchDeps {
   resume: boolean;
+  /** 续跑/中断时追加给执行器的要求，只进本轮 prompt，不写任务文档 */
+  instruction?: string;
 }
 
 async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<LaunchResult> {
@@ -1028,7 +1091,10 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
   const scratchDir = runtimeDir ? path.join(runtimeDir, ".ufa", "work", `task-${fresh.id}`) : "";
   if (scratchDir) fs.mkdirSync(scratchDir, { recursive: true });
 
-  const prompt = opts.resume ? `继续任务，先读 ${docPath}` : `读 ${docPath} 并执行`;
+  const instruction = String(opts.instruction ?? "").trim();
+  const prompt = opts.resume
+    ? [`继续任务，先读 ${docPath}`, instruction ? `本次补充要求：\n${instruction}` : ""].filter(Boolean).join("\n\n")
+    : `读 ${docPath} 并执行`;
   const executor: Executor = normalizeExecutor(fresh.executor);
   const baseBin = executor === "codex" ? CODEX_BIN
     : executor === "claude" ? CLAUDE_BIN
@@ -1124,6 +1190,7 @@ async function launch(store: Store, task: Task, opts: LaunchOptions): Promise<La
     runner_pid: pid,
     runner_started_at: startedAt,
     long_run_notified_at: null,
+    stuck_notified_at: null,
     doc_path: docPath,
   });
 
@@ -1168,14 +1235,19 @@ export async function startTask(store: Store, task: Task, deps: DispatchDeps): P
   return launch(store, task, { ...deps, resume: false });
 }
 
-/** 用已有 session_id 恢复任务：同一会话继续，不重新开始。 */
-export async function resumeTask(store: Store, task: Task, deps: DispatchDeps): Promise<LaunchResult> {
+/** 用已有 session_id 恢复任务：同一会话继续，不重新开始。instruction 只进本轮 prompt。 */
+export async function resumeTask(
+  store: Store,
+  task: Task,
+  deps: DispatchDeps,
+  opts: { instruction?: string } = {},
+): Promise<LaunchResult> {
   const fresh = getTask(store, task.id);
   if (!fresh) throw new Error(`没有任务 #${task.id}`);
   if (!String(fresh.session_id ?? "").trim()) {
     throw new Error(`任务 #${fresh.id} 没有 session_id，不能恢复；请先 start 或重新创建`);
   }
-  return launch(store, fresh, { ...deps, resume: true });
+  return launch(store, fresh, { ...deps, resume: true, instruction: opts.instruction });
 }
 
 /** 杀进程树：TERM → graceMs → KILL；清 runner 字段，running 的任务回到 pending。 */

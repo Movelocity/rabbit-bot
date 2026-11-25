@@ -31,6 +31,7 @@ import {
   WorkerMismatchError, completeTask, failTask, progressTask, touchTask,
 } from "./core/workers.ts";
 import { appendTaskEvent, listTaskEvents } from "./core/task-events.ts";
+import { appendTaskAudit, buildAuditLine, quoteArg } from "./core/task-audit.ts";
 import { resumeTask, runnerAlive, startTask, stopTask, taskDocPath, writeTaskDoc } from "./core/dispatch.ts";
 import { retryTask } from "./core/task-retry.ts";
 import {
@@ -237,6 +238,27 @@ function normalizeFiles(raw: unknown): string | undefined {
 }
 
 /** 起 API；cfg.api.enabled=false 时返回 null。 */
+/** 写一条 API 侧的任务审计指令：只留痕，不计未读。 */
+function auditTaskApi(
+  store: Store,
+  taskId: number,
+  action: string,
+  detail = "",
+  args: Record<string, unknown> | null = null,
+  ok = true,
+  result?: string,
+): void {
+  appendTaskAudit(store, {
+    taskId,
+    action,
+    text: buildAuditLine(action, taskId, detail),
+    source: "api",
+    args,
+    ok,
+    result,
+  });
+}
+
 export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
   if (d.cfg.api?.enabled === false) return null;
   // 老库第一次启动：把 runtime/business 的文件地图导一次；之后只读 SQLite
@@ -572,6 +594,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               eta_ms: etaMs ?? undefined,
               status: "pending_approval",
             });
+            auditTaskApi(d.store, task.id, "create", `work_dir=${quoteArg(task.work_dir)} executor=${task.executor}`, {
+              work_dir: task.work_dir, executor: task.executor, goal: task.goal,
+            });
             // dispatch=true 只作为测试/内部逃生口，Web 和 UFA 都不走这条路。
             if (body.dispatch !== true) {
               d.onTaskCreated?.(task);
@@ -621,7 +646,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           if (parts.length === 4 && parts[3] === "note" && method === "POST") {
             if (typeof body.line !== "string" || !body.line.trim()) throw new HttpError(400, "line 不能为空");
             if (!getTask(d.store, id)) throw new HttpError(404, `没有任务 #${id}`);
-            return reply(200, formatTask(appendNote(d.store, id, body.line)));
+            const noted = appendNote(d.store, id, body.line);
+            auditTaskApi(d.store, id, "note", quoteArg(body.line), { line: body.line });
+            return reply(200, formatTask(noted));
           }
           if (parts.length === 4 && parts[3] === "approve" && method === "POST") {
             const task = getTask(d.store, id);
@@ -683,6 +710,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
                 apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
                 runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
               });
+              auditTaskApi(d.store, id, "approve", changed.length ? `fields=${changed.join(",")}` : "", { fields: changed, by });
               d.onTaskDecided?.(id, "approved");
               return reply(200, formatTask(started.task));
             } catch (e) {
@@ -704,6 +732,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             const reason = typeof body.reason === "string" ? body.reason.trim() : "";
             const cancelled = updateTask(d.store, id, { status: "cancelled" });
             appendNote(d.store, id, reason ? `Web 驳回：${reason}` : "Web 驳回");
+            auditTaskApi(d.store, id, "reject", reason ? quoteArg(reason) : "", { reason }, true);
             d.onTaskDecided?.(id, "rejected");
             return reply(200, formatTask(getTask(d.store, id) ?? cancelled));
           }
@@ -720,6 +749,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               apiBase, token: d.token, dataDir: d.cfg.dataDir, executorBin: d.executorBin,
               runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
             });
+            auditTaskApi(d.store, id, "start", `attempt=${started.task.attempt}`, { attempt: started.task.attempt });
             return reply(200, formatTask(started.task));
           }
           if (parts.length === 4 && parts[3] === "retry" && method === "POST") {
@@ -727,6 +757,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
             if (runnerAlive(task, d.cfg.dataDir)) throw new HttpError(409, `任务 #${id} 正在运行，先停止再重派`);
             const retried = retryTask(d.store, id);
+            auditTaskApi(d.store, id, "retry", `attempt=${retried.attempt}`, { attempt: retried.attempt });
             d.onTaskCreated?.(retried);
             return reply(200, formatTask(retried));
           }
@@ -741,18 +772,24 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               apiBase, token: d.token, dataDir: d.cfg.dataDir,
               runtimeDir: d.cfg.runtimeDir, sharedDir: sharedDir(d.cfg), businessDir: businessDir(d.cfg),
             });
+            auditTaskApi(d.store, id, "resume", `attempt=${resumed.task.attempt}`, { attempt: resumed.task.attempt });
             return reply(200, formatTask(resumed.task));
           }
           if (parts.length === 4 && parts[3] === "stop" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
-            return reply(200, formatTask(await stopTask(d.store, task, { dataDir: d.cfg.dataDir })));
+            const stopped = await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
+            auditTaskApi(d.store, id, "stop", `pid=${task.runner_pid ?? "（无）"} status=${stopped.status}`, {
+              pid: task.runner_pid, status: stopped.status,
+            });
+            return reply(200, formatTask(stopped));
           }
           if (parts.length === 4 && parts[3] === "cancel" && method === "POST") {
             const task = getTask(d.store, id);
             if (!task) throw new HttpError(404, `没有任务 #${id}`);
             if (runnerAlive(task, d.cfg.dataDir)) await stopTask(d.store, task, { dataDir: d.cfg.dataDir });
             const resumed = cancelTask(d.store, id);
+            auditTaskApi(d.store, id, "cancel", `status=${resumed.status}`, { status: resumed.status });
             d.onTaskDecided?.(id, "cancelled");
             return reply(200, formatTask(resumed));
           }
@@ -763,6 +800,9 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               status: body.status,
               result: typeof body.result === "string" ? body.result : undefined,
               artifact: typeof body.artifact === "string" ? body.artifact : undefined,
+            });
+            auditTaskApi(d.store, id, "status", String(updated.status), {
+              status: updated.status, result: body.result, artifact: body.artifact,
             });
             // 终态写一条任务事件，交给下一次任务事件 tick 批量带走；这里不立即 enqueue。
             if (body.status === "done" || body.status === "failed" || body.status === "blocked") {

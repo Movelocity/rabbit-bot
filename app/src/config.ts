@@ -46,6 +46,8 @@ export interface Config {
     scheduleTickMs?: number;
     /** running 任务超过这个时长就在任务池提醒一次；0 = 关闭，默认 10 分钟 */
     longTaskWarnMs?: number;
+    /** 执行器还活着但日志静默超过这个时长，就自动抓一次日志摘要；0 = 关闭，默认 5 分钟 */
+    stuckWarnMs?: number;
   };
   send: {
     confirmWaitMs: number; confirmViaApi: boolean;
@@ -343,6 +345,7 @@ export function validateConfig(cfg: Config): void {
   for (const [key, name] of [
     [cfg.scheduler.scheduleTickMs, "scheduler.scheduleTickMs"],
     [cfg.scheduler.longTaskWarnMs, "scheduler.longTaskWarnMs"],
+    [cfg.scheduler.stuckWarnMs, "scheduler.stuckWarnMs"],
   ] as const) {
     if (key !== undefined && !(Number.isFinite(key) && key >= 0)) {
       throw new Error(`config: ${name} 必须是非负数`);

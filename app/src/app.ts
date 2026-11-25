@@ -14,7 +14,7 @@ import {
 } from "./core/tasks.ts";
 import { sweepExpirations } from "./core/approvals.ts";
 import { setTaskEventNotifier } from "./core/task-events.ts";
-import { runnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
+import { runnerAlive, startTask, sweepDeadRunners, sweepLongRunningTasks, sweepStuckTasks, writeTaskDoc, type DispatchDeps } from "./core/dispatch.ts";
 import { resolveApiToken } from "./api-token.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { AgentWatchdog, type WatchdogDecision } from "./core/agent-watchdog.ts";
@@ -414,6 +414,17 @@ export class App {
       }
     } catch (e) {
       this.log.warn(`执行器存活巡检失败：${(e as Error).message}`);
+    }
+    const stuckMs = this.o.cfg.scheduler.stuckWarnMs ?? 300_000;
+    if (stuckMs > 0) {
+      try {
+        const r = sweepStuckTasks(this.store, { now: this.clock.now(), stuckMs, dataDir: this.o.cfg.dataDir });
+        if (r.warned.length) {
+          this.log.info(`静默巡检：${r.warned.length} 个任务进程还活着但长时间没有新事件，已抓日志摘要写进任务池（${r.warned.map((id) => `#${id}`).join(" ")}）`);
+        }
+      } catch (e) {
+        this.log.warn(`静默巡检失败：${(e as Error).message}`);
+      }
     }
     const thresholdMs = this.o.cfg.scheduler.longTaskWarnMs ?? 600_000;
     if (!(thresholdMs > 0)) return;
