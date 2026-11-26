@@ -817,13 +817,15 @@ export class App {
    * 否则他只会觉得被无视，然后一直等。
    *
    * 只发给「有未读在等」的池：没人等着的时候报错，静悄悄修就是了，不必打扰。
+   * 只发给 poolKinds 里的池类型（默认只有私聊）：群里是多人场合，程序报错不该刷到群里。
    * 同一个 kind 在 dedupeMinutes 内只发一次——报错往往连续触发，不能刷屏。
    */
   private async notifySys(kind: string, text: string): Promise<void> {
     const n = this.o.cfg.limits.errorNotice;
     if (!n?.enabled) return;
+    const kinds = n.poolKinds ?? ["private"];
     const waiting = this.store.poolsWithUnread()
-      .filter((id) => !["task", "schedule"].includes(this.store.getPool(id)?.kind ?? ""));
+      .filter((id) => kinds.includes(this.store.getPool(id)?.kind ?? ""));
     if (!waiting.length) return;
     const key = `sysNotice.${kind}`;
     const now = this.clock.now();

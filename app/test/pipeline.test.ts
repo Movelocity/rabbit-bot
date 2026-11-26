@@ -472,3 +472,31 @@ test("任务汇报冷却：5 分钟内不重复打扰，游标保留到下一轮
 
   await t.done();
 });
+
+test("程序报错提示默认只发私聊，不刷到群里", async () => {
+  const t = await setup();
+  (t.app.engine as any).run = async () => ({
+    assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: false, error: "403: Key limit exceeded",
+  });
+  t.grp("@小池 在吗", true);
+  t.dm("你好");
+  await t.settle(30_000);
+  const notices = t.mock.sent.filter((s) => s.content.includes("Key limit exceeded"));
+  assert.ok(notices.length > 0, "私聊应该收到报错提示");
+  assert.ok(notices.every((s) => s.chat === "dm-alice"), `群里不该收到报错提示：${JSON.stringify(notices.map((s) => s.chat))}`);
+  await t.done();
+});
+
+test("errorNotice.poolKinds 显式配上 group 时群里也发", async () => {
+  const t = await setup();
+  t.cfg.limits.errorNotice!.poolKinds = ["private", "group"];
+  (t.app.engine as any).run = async () => ({
+    assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: false, error: "boom",
+  });
+  t.grp("@小池 在吗", true);
+  t.dm("你好");
+  await t.settle(30_000);
+  const chats = new Set(t.mock.sent.filter((s) => s.content.includes("boom")).map((s) => s.chat));
+  assert.deepEqual([...chats].sort(), ["dm-alice", "grp"]);
+  await t.done();
+});

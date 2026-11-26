@@ -63,7 +63,8 @@
     "errorNotice": {
       "enabled": true,
       "text": "〔系统〕我这边出了点问题（{reason}）。这条不是她说的——你刚才那句话我记着，等恢复了我再回。",
-      "dedupeMinutes": 60
+      "dedupeMinutes": 60,
+      "poolKinds": ["private"]
     },
     "cacheReadRate": 0.1,
     "dailyCny": 10,
