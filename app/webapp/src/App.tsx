@@ -17,13 +17,13 @@ import { SchedulerTickStatus } from "./components/SchedulerTickStatus.tsx";
 import { FeishuStatus } from "./components/FeishuStatus.tsx";
 import { ApiStatus } from "./components/ApiStatus.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
+import { OverviewPage } from "./pages/OverviewPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
 import { TasksPage } from "./pages/TasksPage.tsx";
 import { OutputsPage } from "./pages/OutputsPage.tsx";
 import { ApprovalsPage } from "./pages/ApprovalsPage.tsx";
 import { ProjectsPage } from "./pages/ProjectsPage.tsx";
-import { MemoriesPage } from "./pages/MemoriesPage.tsx";
-import { BusinessPage } from "./pages/BusinessPage.tsx";
+import { MemoryPage } from "./pages/MemoryPage.tsx";
 import { ManagePage } from "./pages/ManagePage.tsx";
 
 type AuthState = "checking" | "authed" | "login";
@@ -32,23 +32,23 @@ type Health = "checking" | "ok" | "bad";
 const ICON_URL = `${import.meta.env.BASE_URL}logo.png`;
 
 const TAB_ITEMS: { tab: Tab; label: string }[] = [
+  { tab: "overview", label: "概览" },
   { tab: "chat", label: "会话" },
   { tab: "tasks", label: "任务" },
   { tab: "outputs", label: "产出" },
   { tab: "approvals", label: "权限" },
   { tab: "projects", label: "项目" },
   { tab: "memories", label: "记忆" },
-  { tab: "business", label: "知识" },
   { tab: "manage", label: "管理" },
 ];
 
 const TAB_HINTS: Record<string, string> = {
+  overview: "调度 / 任务 / 额度一屏看完 · 每 10 秒刷新",
   tasks: "飞书审批为主 · Web 备用",
   outputs: "任务最终交付物 · Markdown / CSV / HTML 预览",
   approvals: "只读 · 审批请在飞书里完成",
   projects: "shared/projects · context.md / plan.md · 可编辑",
-  memories: "可直接改正文或删除 · 新增/过期走 IM",
-  business: "只读 · 对象 / 关系 / 动作",
+  memories: "条目可改正文 / 删除；图谱只读 · 对象 / 关系 / 动作",
 };
 
 const MANAGE_HINTS: Record<string, string> = {
@@ -223,6 +223,18 @@ export default function App() {
         </nav>
 
         <main className="min-h-0 flex-1">
+          {tab === "overview" && (
+            <OverviewPage
+              reloadSignal={reloadSignal}
+              onOpenTask={(id) => {
+                setTaskFocus(id);
+                setTab("tasks");
+              }}
+              onOpenTasks={() => setTab("tasks")}
+              onOpenApprovals={() => setTab("approvals")}
+              onOpenLogs={() => setManageView("llm-logs")}
+            />
+          )}
           {tab === "chat" && (
             <ChatPage
               currentPool={currentPool}
@@ -260,8 +272,7 @@ export default function App() {
               }}
             />
           )}
-          {tab === "memories" && <MemoriesPage reloadSignal={reloadSignal} />}
-          {tab === "business" && <BusinessPage reloadSignal={reloadSignal} />}
+          {tab === "memories" && <MemoryPage reloadSignal={reloadSignal} />}
           {tab === "manage" && (
             <ManagePage
               view={manageView}

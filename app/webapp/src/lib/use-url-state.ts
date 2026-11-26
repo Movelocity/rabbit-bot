@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export const TABS = [
+  "overview",
   "chat",
   "tasks",
   "outputs",
   "approvals",
   "projects",
   "memories",
-  "business",
   "manage",
 ] as const;
 export type Tab = (typeof TABS)[number];
@@ -61,11 +61,12 @@ function parseUrl(search: string): ParsedUrl {
   }
   if (tab === "plans") tab = "projects";
   if (tab === "manage" && view === "business") {
-    tab = "business";
+    tab = "memories";
     view = null;
   }
+  if (tab === "business") tab = "memories";
 
-  const safeTab: Tab = isTab(tab) ? tab : "chat";
+  const safeTab: Tab = isTab(tab) ? tab : "overview";
   const safeView: ManageView | null =
     safeTab === "manage" ? (isManageView(view) ? view : "usage") : null;
   return { tab: safeTab, manageView: safeView };

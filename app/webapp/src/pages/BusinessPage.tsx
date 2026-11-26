@@ -962,7 +962,13 @@ function BusinessGraph(props: {
   );
 }
 
-export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
+export function BusinessPage({
+  reloadSignal,
+  viewSwitch,
+}: {
+  reloadSignal: number;
+  viewSwitch?: ReactNode;
+}) {
   const request = useApi();
   const [data, setData] = useState<BusinessData | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
@@ -1171,19 +1177,33 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
 
   if (!view) {
     return (
-      <div className="grid h-full place-items-center p-6">
-        <StatusText text={status.text || "加载中…"} error={status.error} />
+      <div className="flex h-full min-h-0 flex-col">
+        {viewSwitch ? (
+          <div className="flex-none border-b border-border bg-surface px-3 py-2.5">
+            {viewSwitch}
+          </div>
+        ) : null}
+        <div className="grid flex-1 place-items-center p-6">
+          <StatusText text={status.text || "加载中…"} error={status.error} />
+        </div>
       </div>
     );
   }
 
   if (!view.exists) {
     return (
-      <div className="grid h-full place-items-center p-6">
-        <div className="grid max-w-[420px] place-items-center rounded-[14px] border border-border bg-surface px-6 py-12 text-center shadow-[var(--rb-shadow)]">
-          <p className="m-0 text-[13px] leading-relaxed text-muted">
-            还没有知识数据。由任务通过 `PUT /v1/business` 写入后再刷新。
-          </p>
+      <div className="flex h-full min-h-0 flex-col">
+        {viewSwitch ? (
+          <div className="flex-none border-b border-border bg-surface px-3 py-2.5">
+            {viewSwitch}
+          </div>
+        ) : null}
+        <div className="grid flex-1 place-items-center p-6">
+          <div className="grid max-w-[420px] place-items-center rounded-[14px] border border-border bg-surface px-6 py-12 text-center shadow-[var(--rb-shadow)]">
+            <p className="m-0 text-[13px] leading-relaxed text-muted">
+              还没有知识数据。由任务通过 `PUT /v1/business` 写入后再刷新。
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -1192,15 +1212,19 @@ export function BusinessPage({ reloadSignal }: { reloadSignal: number }) {
   return (
     <div className="grid h-full min-h-0 grid-cols-[250px_minmax(0,1fr)_330px] max-[1100px]:grid-cols-[230px_minmax(0,1fr)] max-[820px]:grid-cols-1 max-[820px]:grid-rows-[minmax(0,45vh)_minmax(360px,1fr)]">
       <aside className="flex min-h-0 flex-col border-r border-border bg-surface max-[820px]:border-b max-[820px]:border-r-0">
-        <div className="flex-none px-3.5 pb-1.5 pt-3.5">
-          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
-            Business Map
+        {viewSwitch ? (
+          <div className="flex-none px-3 pb-2 pt-3">{viewSwitch}</div>
+        ) : (
+          <div className="flex-none px-3.5 pb-1.5 pt-3.5">
+            <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+              Business Map
+            </div>
+            <div className="rb-display mt-0.5 text-[17px] font-bold">知识</div>
+            <div className="mt-1 text-[11.5px] text-muted">
+              只读{lintCount !== null ? ` · lint ${lintCount} 项` : ""}
+            </div>
           </div>
-          <div className="rb-display mt-0.5 text-[17px] font-bold">知识</div>
-          <div className="mt-1 text-[11.5px] text-muted">
-            只读{lintCount !== null ? ` · lint ${lintCount} 项` : ""}
-          </div>
-        </div>
+        )}
         <div className="flex flex-none flex-wrap gap-1 px-3 pb-2">
           {CATEGORIES.map((c) => (
             <button
