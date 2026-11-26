@@ -5,6 +5,25 @@
 > 行号基于 2026-11-26 工作区（含未提交的 abort 回滚/重试改动），实施前请先重新定位。
 > 标注：【已核实】= 人工读代码/查线上数据确认；【待核实】= 审计子代理读代码得出，实施前先复核。
 
+## 实施进度（2026-11-26）
+
+PR1 已完成（P0-A + B1/B2/B4，含测试）：
+
+- A1 ✅ 硬超时 + 宽限期；abort signal 贯通审批与命令执行。host 模式杀进程组；docker 模式只能杀 `docker exec` CLI，容器内进程仍由 timeout 兜底（已知缺口）。
+- A2 ✅ 中止/报错不写交接；交接改用独立 `handoff.timeoutMs`（默认 90s）。
+- A3 ✅ 交接与 wake_log 的 assistantText 只取本轮新消息，不再把上一轮回复当交接。
+- A4 ✅ handoff 主体 `try/finally`，写文件/落库失败也必定 dispose 并重置会话。
+- A5 ✅ 上下文溢出错误直接换新会话，不写交接。
+- A6 ✅ `engine.run` 抛异常时回滚游标、还原交接、记 wake_log error。
+- B1 ✅ 发送成功统一按 `details.ok === true` 判定。
+- B2 ✅ 任务转述把 `res.aborted` 纳入失败判定，0 发送不推进游标。
+- B4 ✅ 401/402/403/额度等不可重试：回滚 + 5 分钟冷却 + 提示；429/5xx/网络按 0/1/5 分钟退避，最多 3 次。
+- B6 ⚠️ 已做一半：本轮回滚时跳过 `noteInboundMessages` / `maybeMemoryReview`；重复计数场景未单独验证。
+
+验证：`npm run typecheck`、`npm test`（800/800）、`npm run build` 通过。
+
+仍待处理：A1 docker 模式强杀容器内进程；B3/B5/B7/B8/B9；C1/C2/C3；D1–D5；P2。重试账本（`abortRetries` / `llmRetries`）仍在内存，进程重启会丢，属 B9 范围。
+
 ## 0. 现状快照
 
 - `npm test` 788/788 通过；`npm run typecheck`、`npm run web:typecheck` 通过。
@@ -23,7 +42,7 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
 
 ## P0-A 交接 / 中止链路（`app/src/agent/engine.ts`）
 
-### A1 turn-timeout 不是硬上限【已核实：726s 实例】
+### A1 turn-timeout 不是硬上限【已核实：726s 实例】 ✅
 - 位置：`engine.ts:243`（`abort()` 只调 `s.abort()`）、`:284`（timer）、`:286`（`await s.prompt` 无竞速）。自定义工具 `execute` 均不接 abort signal（`grep signal app/src/agent/` 无结果）。
 - 场景：shell 命令或宿主审批（`tools.ts` 中 `d.approval.request`，最长 600s）在跑时超时触发，prompt 仍要等工具返回；单 runner 队列被整体阻塞，`App.stop()` 也会挂住。
 - 需求：
@@ -32,7 +51,7 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
   3. 配置校验：`approval.timeoutMs` 必须 < `turnTimeoutMs`，否则启动告警或自动取较小值。
 - 验收：测试中用一个永不返回的假工具 + 小 `turnTimeoutMs`，断言 `run()` 在 timeout+grace 内返回且 `abortReason==="turn-timeout"`；审批等待中超时，断言审批被取消、命令未执行。
 
-### A2 被中止的会话仍做交接，且交接拿到第二个完整超时【已核实】
+### A2 被中止的会话仍做交接，且交接拿到第二个完整超时【已核实】 ✅
 - 位置：`engine.ts:209`（条件只排除 `res.error`，不排除 `aborted`）、`handoff()` 内 `runPrompt` 重新起 `turnTimeoutMs` 计时。
 - 需求：
   1. `res.aborted`（尤其 `turn-timeout`）时**不写交接笔记**：直接 dispose 会话、`freshNext=true`、`seenPools.clear()`，沿用 `latestUnconsumedHandoff()` 作为 pending。
@@ -40,22 +59,22 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
   3. 参考 DS-Bot：交接只在「一轮干净结束」后做；交接失败且未超硬线时保留旧会话、按 60s/300s/900s 退避再试；超硬线才放弃笔记直接换。
 - 验收：模拟 turn-timeout + 上下文超限，断言不调用交接 prompt、会话已重置、总耗时 ≈ 一个 timeout。
 
-### A3 交接被中止时可能把上一条聊天回复存成交接文档【待核实】
+### A3 交接被中止时可能把上一条聊天回复存成交接文档【待核实】 ✅
 - 位置：`engine.ts:306`（`s.getLastAssistantText()`）、`:314`。pi 的 `getLastAssistantText()` 会跳过空的 aborted assistant 消息往前找。
 - 需求：prompt 前记 `const n0 = s.messages.length`，只从 `s.messages.slice(n0)` 中取 assistant 文本；`r.aborted && 无新文本` 视为空交接。同样修正 wake_log 的 `assistantText`。
 - 验收：构造会话「上一轮有回复 → 交接 prompt 立即 abort」，断言不写 handoff、不把旧回复当交接。
 
-### A4 交接抛异常后会话工具被清空且不释放【已核实代码路径】
+### A4 交接抛异常后会话工具被清空且不释放【已核实代码路径】 ✅
 - 位置：`engine.ts:312-318`，`s.setActiveToolsByName([])` 之后 `writeFileSync`/`addHandoff` 抛错 → `s.dispose()`、`this.session=null` 不执行。之后每轮都在零工具会话里跑，永远发不出消息。
 - 需求：`handoff()` 主体包 `try/finally`，finally 中必定 dispose + `session=null` + `freshNext=true` + `seenPools.clear()`。
 - 验收：mock `fs.writeFileSync` 抛错，断言下一次 `run()` 新建会话且工具齐全。
 
-### A5 报错时不做交接，上下文溢出死循环【已核实代码路径】
+### A5 报错时不做交接，上下文溢出死循环【已核实代码路径】 ✅
 - 位置：`engine.ts:209` `!res.error` 条件；`app.ts` error 分支回滚游标后下一 tick 在同一会话重试。
 - 需求：`res.error` 且（`ctxTokens >= contextTokenLimit` 或错误文本匹配 context length / too large / 413）时，直接丢弃会话换新（不写笔记），参考 DS-Bot「溢出错误直接 switch + resume」。
 - 验收：mock LLM 返回 context-length 错误，断言下一轮使用新会话。
 
-### A6 `engine.run` 抛异常：游标、交接、用量全丢【已核实代码路径】
+### A6 `engine.run` 抛异常：游标、交接、用量全丢【已核实代码路径】 ✅
 - 位置：`app.ts:1126`（`takePendingHandoff()` 已在 DB 标 consumed）、`:1164`（`engine.run` 无 try）。
 - 需求：`handleWakeInner` 中包住 `engine.run`：catch 时回滚 `cursorsBefore`、把交接还原为未消费（新增 `store.unconsumeHandoff(id)` 或延迟到成功后再标 consumed）、按 error 路径处理并记 wake_log。
 - 验收：mock `ensureSession` 抛错，断言游标回到原值、handoff `consumed=0`、wake_log 有 `error` 记录。
@@ -64,13 +83,13 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
 
 ## P0-B 已读未回 / 丢消息（`app/src/app.ts` 等）
 
-### B1 发送失败被算作「已发送」【已核实】
+### B1 发送失败被算作「已发送」【已核实】 ✅
 - 位置：`app.ts:1171` `sent = toolCalls.filter(send && !c.isError)`；`tools.ts:242-262` 中被压住（held）、发送失败、风格闸拦截都返回 `txt(..., {ok:false})`，`isError=false`。
 - 后果：中止/报错时 `sent.length>0`，不回滚、不提示、还清空重试账本。
 - 需求：成功判定改为 `details.ok === true`（含 `queuedForReview`），与 `relayTaskUpdates`（`app.ts:~1007`）口径一致；抽成共用函数。
 - 验收：模拟一轮「send 被 held → turn-timeout」，断言游标回滚并重排唤醒。
 
-### B2 任务转发被中止也记为已转发【待核实】
+### B2 任务转发被中止也记为已转发【待核实】 ✅
 - 位置：`app.ts:~1011`，条件 `!delivered.length && (res.error || undelivered>0)` 不含 `res.aborted`。
 - 需求：加入 `res.aborted`，中止时不推进任务池游标与 `TASK_RELAY_CURSOR_KEY`。
 - 验收：任务转发轮 turn-timeout 且 0 发送，断言游标/KV 未推进。
@@ -80,7 +99,7 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
 - 需求：唤醒开始时快照**所有**池游标（或让 hub 在每次 takeUnread 前回调记录原值），回滚/重试覆盖所有被推进的池。
 - 验收：一轮中途另一池来消息并被 send 顺带读取，随后中止，断言该池游标回滚。
 
-### B4 报错回滚无限重试【已核实：403 ×18】
+### B4 报错回滚无限重试【已核实：403 ×18】 ✅
 - 位置：`app.ts:1176-1179`。
 - 需求：
   1. 错误分类：`401/403/402`、key/额度/region/余额 → **不可重试**，不回滚游标（或回滚但暂停该类唤醒），发一次系统提示（按原因去重），并在概览标红；可考虑自动 `paused`。
@@ -92,7 +111,7 @@ sqlite3 data/rabbit-bot.db "select date(ts/1000,'unixepoch','localtime') d, json
 - 位置：`app.ts` `notifyAbort`。不可重试原因（审批拒绝、loop-guard、日额度）游标已推进，文案却说「消息还在，再发一句继续」；去重 key 只按原因，不按池。
 - 需求：按原因分文案；去重 key 加上 pool。
 
-### B6 回滚的消息被记忆梳理重复计数【待核实】
+### B6 回滚的消息被记忆梳理重复计数【待核实】 ⚠️ 部分完成
 - 位置：`app.ts:~1196` `noteInboundMessages(unread)` / `maybeMemoryReview` 在回滚时仍执行。
 - 需求：本轮发生回滚时跳过两者。
 

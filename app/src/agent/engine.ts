@@ -17,7 +17,7 @@ import { handoffPrompt } from "./prompt.ts";
 import { costUsd, splitUsage } from "../core/pricing.ts";
 import { runtimeDir } from "../core/runtime.ts";
 
-export interface ToolLog { name: string; args: unknown; result: string; isError: boolean }
+export interface ToolLog { name: string; args: unknown; result: string; isError: boolean; ok?: boolean }
 export interface RunResult {
   assistantText: string;
   toolCalls: ToolLog[];
@@ -55,6 +55,10 @@ export interface AgentEngine {
   readonly seenPools: Set<string>;
   /** 新会话首轮需要带上的交接文档 */
   takePendingHandoff(): string | null;
+  /** 本轮干净结束：把 takePendingHandoff 取走的交接标记为已消费 */
+  commitPendingHandoff(): void;
+  /** 本轮中止/报错：把取走的交接还原成未消费，下一轮还能用 */
+  restorePendingHandoff(): void;
   run(prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult>;
   /** 后台记忆梳理：独立临时会话，只给传入的工具（memory），用完即弃。 */
   review(prompt: string, limits: RunLimits, tools: ToolDefinition[], systemPrompt: string): Promise<RunResult>;
@@ -90,6 +94,8 @@ export class PiEngine implements AgentEngine {
   private session: AgentSession | null = null;
   private pendingHandoff: string | null = null;
   private pendingHandoffId: number | null = null;
+  /** 本轮已经从库里取走、但还没确认消费的交接：中止/报错时要还回去 */
+  private takenHandoff: { id: number; content: string } | null = null;
   private loopGuardImpl: "pi-death-loop-guard" | "builtin" = "builtin";
   private readonly piDir: string;
   private readonly cwd: string;
@@ -117,10 +123,28 @@ export class PiEngine implements AgentEngine {
 
   takePendingHandoff() {
     const h = this.pendingHandoff;
-    if (h !== null && this.pendingHandoffId !== null) this.d.store.markHandoffConsumed(this.pendingHandoffId);
+    const id = this.pendingHandoffId;
     this.pendingHandoff = null;
     this.pendingHandoffId = null;
+    if (h !== null && id !== null) {
+      // 先不标已消费：本轮可能被中止/报错，消息都还在池里，交接得下一轮接着用
+      if (this.takenHandoff?.id !== id) this.takenHandoff = { id, content: h };
+    }
     return h;
+  }
+
+  commitPendingHandoff() {
+    const t = this.takenHandoff;
+    this.takenHandoff = null;
+    if (t) this.d.store.markHandoffConsumed(t.id);
+  }
+
+  restorePendingHandoff() {
+    const t = this.takenHandoff;
+    this.takenHandoff = null;
+    if (!t) return;
+    this.pendingHandoff = t.content;
+    this.pendingHandoffId = t.id;
   }
 
   private systemPromptText(): string {
@@ -206,12 +230,48 @@ export class PiEngine implements AgentEngine {
     const ctxTokens = s.getContextUsage()?.tokens ?? null;
     res.contextTokens = ctxTokens;
     const tooLong = !!limits.forceHandoff;
-    if (!res.error && (tooLong || (ctxTokens !== null && ctxTokens >= this.d.cfg.handoff.contextTokenLimit))) {
+    const nearLimit = ctxTokens !== null && ctxTokens >= this.d.cfg.handoff.contextTokenLimit;
+    // 中止/报错都不能写交接：交接要的是一轮干净结束后的结论，
+    // 拿半句话或旧回复当交接，下次新会话就会带着错误记忆继续。
+    if (res.aborted) {
+      this.d.log.warn(`本轮被中止（${res.abortReason ?? "aborted"}），丢弃会话，下一轮新建`);
+      this.restorePendingHandoff();
+      this.resetSession();
+    } else if (res.error) {
+      const overflow = nearLimit || /context length|context_length|maximum context|prompt is too long|too large|413/i.test(res.error);
+      if (overflow) {
+        this.d.log.warn(`上下文溢出（${res.error.slice(0, 120)}），直接换新会话，不写交接`);
+      } else {
+        this.d.log.warn(`本轮报错（${res.error.slice(0, 120)}），丢弃会话，避免失败的 prompt 留在上下文里`);
+      }
+      this.restorePendingHandoff();
+      this.resetSession();
+    } else if (tooLong || nearLimit) {
       if (tooLong) this.d.log.info(`这个 session 累计已聊够，主动换新会话（上下文 ${ctxTokens ?? "?"} tokens）`);
-      const h = await this.handoff(s, ctxTokens ?? 0, { tokensLeft: limits.tokensLeft - res.tokens, callsLeft: limits.callsLeft - res.llmCalls });
-      res.tokens += h.tokens; res.llmCalls += h.llmCalls; res.handoffId = h.id ?? undefined;
+      let made: { id: number | null; tokens: number; llmCalls: number } | null = null;
+      try {
+        made = await this.handoff(s, ctxTokens ?? 0, { tokensLeft: limits.tokensLeft - res.tokens, callsLeft: limits.callsLeft - res.llmCalls });
+        res.tokens += made.tokens; res.llmCalls += made.llmCalls; res.handoffId = made.id ?? undefined;
+      } finally {
+        // 新交接没写成：本轮取走的旧交接还回去，别让新会话丢了唯一的上下文线索
+        if (made?.id != null) this.commitPendingHandoff();
+        else this.restorePendingHandoff();
+      }
+    } else {
+      this.commitPendingHandoff();
     }
     return res;
+  }
+
+  /** 丢掉当前会话（abort / 溢出 / 交接后都用它），下一轮从池子重建上下文。 */
+  private resetSession(): void {
+    const s = this.session;
+    this.session = null;
+    this.freshNext = true;
+    this.seenPools.clear();
+    if (s) {
+      try { s.dispose(); } catch { /* 已经坏了也要继续换新 */ }
+    }
   }
 
   /**
@@ -237,15 +297,38 @@ export class PiEngine implements AgentEngine {
     }
   }
 
-  private async runPrompt(s: AgentSession, prompt: string, limits: RunLimits, images?: ImagePart[]): Promise<RunResult> {
+  /**
+   * 只取本轮新产生的 assistant 文本：pi 的 getLastAssistantText 会跳过空的中止消息往前找，
+   * 交接 prompt 失败时就会把上一轮聊天回复当成交接文档。
+   */
+  private lastAssistantTextSince(s: AgentSession, from: number): string {
+    const fresh = (s.messages as any[]).slice(from).filter((m) => m?.role === "assistant");
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      const m = fresh[i];
+      if (m.stopReason === "aborted" && !(m.content ?? []).length) continue;
+      const text = (m.content ?? []).map((c: any) => (c.type === "text" ? c.text : "")).join("").trim();
+      if (text) return text;
+    }
+    return "";
+  }
+
+  private async runPrompt(
+    s: AgentSession,
+    prompt: string,
+    limits: RunLimits,
+    images?: ImagePart[],
+    opts: { timeoutMs?: number; timeoutReason?: string } = {},
+  ): Promise<RunResult> {
     const out: RunResult = { assistantText: "", toolCalls: [], llmCalls: 0, tokens: 0, rawTokens: 0, cost: 0, cacheHit: 0, cacheMiss: 0, outTokens: 0, aborted: false };
+    const n0 = s.messages.length;
     const pendingArgs = new Map<string, unknown>();
     const abort = (why: string) => { if (!out.aborted) { out.aborted = true; out.abortReason = why; void s.abort(); } };
     const unsub = s.subscribe((ev: any) => {
       if (ev.type === "tool_execution_start") pendingArgs.set(ev.toolCallId, ev.args);
       else if (ev.type === "tool_execution_end") {
         const r = preview(ev.result);
-        out.toolCalls.push({ name: ev.toolName, args: pendingArgs.get(ev.toolCallId), result: r, isError: ev.isError });
+        const ok = (ev.result as { details?: { ok?: unknown } } | undefined)?.details?.ok;
+        out.toolCalls.push({ name: ev.toolName, args: pendingArgs.get(ev.toolCallId), result: r, isError: ev.isError, ...(typeof ok === "boolean" ? { ok } : {}) });
         // 宿主命令审批被拒 / 超时：工具带 halt 回来，立刻打断本轮。
         // 不能让模型换个写法继续试，那等于审批形同虚设。
         const halt = (ev.result as { details?: { halt?: unknown } } | undefined)?.details?.halt;
@@ -281,13 +364,33 @@ export class PiEngine implements AgentEngine {
         else if (out.llmCalls >= limits.callsLeft) abort("daily-call-cap");
       }
     });
-    const timer = setTimeout(() => abort("turn-timeout"), this.d.cfg.limits.turnTimeoutMs);
+    const timeoutMs = Math.max(1, opts.timeoutMs ?? this.d.cfg.limits.turnTimeoutMs);
+    const timeoutReason = opts.timeoutReason ?? "turn-timeout";
+    // 宽限期：abort 之后给审批/命令一点时间收尾。到了还回不来就强制返回，
+    // 不能让一个卡死的工具把整个 runner 队列和 App.stop() 一起拖住。
+    const graceMs = Math.max(0, this.d.cfg.limits.turnTimeoutGraceMs ?? 15_000);
+    const timer = setTimeout(() => abort(timeoutReason), timeoutMs);
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    const hard = new Promise<"hard">((resolve) => {
+      hardTimer = setTimeout(() => resolve("hard"), timeoutMs + graceMs);
+    });
     try {
-      await s.prompt(prompt, images?.length ? { images } : undefined);
-    } catch (e) {
-      out.error = (e as Error).message;
+      const promptDone = s.prompt(prompt, images?.length ? { images } : undefined)
+        .then(() => "done" as const, (e) => {
+          out.error = (e as Error).message;
+          return "done" as const;
+        });
+      const winner = await Promise.race([promptDone, hard]);
+      if (winner === "hard") {
+        out.aborted = true;
+        out.abortReason ??= timeoutReason;
+        this.d.log.warn(`runPrompt 硬超时（${timeoutMs}+${graceMs}ms），强制结束本轮`);
+        // prompt 仍在后台跑：已经 abort 过，返回后由 run() 丢弃会话；这里只防止未处理 rejection
+        void promptDone.catch(() => undefined);
+      }
     } finally {
       clearTimeout(timer);
+      if (hardTimer) clearTimeout(hardTimer);
       unsub();
     }
     const last: any = s.messages[s.messages.length - 1];
@@ -303,34 +406,37 @@ export class PiEngine implements AgentEngine {
       out.abortReason ??= guardHit ? "loop-guard" : "aborted";
       if (out.error && /abort/i.test(out.error)) out.error = undefined;
     }
-    out.assistantText = s.getLastAssistantText() ?? "";
+    out.assistantText = this.lastAssistantTextSince(s, n0);
     return out;
   }
 
   private async handoff(s: AgentSession, ctxTokens: number, limits: RunLimits): Promise<{ id: number | null; tokens: number; llmCalls: number }> {
     this.d.log.info(`上下文 ${ctxTokens} tokens ≥ ${this.d.cfg.handoff.contextTokenLimit}，开始交接`);
-    s.setActiveToolsByName([]);
-    const r = await this.runPrompt(s, handoffPrompt(), { tokensLeft: Math.max(limits.tokensLeft, 1), callsLeft: Math.max(limits.callsLeft, 1) });
-    const content = r.assistantText.trim();
     let id: number | null = null;
-    if (content) {
-      const file = path.join(this.d.cfg.dataDir, "handoffs", `handoff-${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
-      fs.writeFileSync(file, content + "\n");
-      id = this.d.store.addHandoff(content, ctxTokens, file);
-      this.pendingHandoff = content;
-      this.pendingHandoffId = id;
-      this.d.log.info(`交接文档 #${id} 已存档：${file}`);
-    } else {
-      this.d.log.warn(`交接文档为空（${r.error ?? r.abortReason ?? "未知"}），仍然新开会话`);
-      const prev = this.d.store.latestUnconsumedHandoff();
-      this.pendingHandoff = prev?.content ?? null;
-      this.pendingHandoffId = prev?.id ?? null;
+    let r: RunResult | null = null;
+    try {
+      s.setActiveToolsByName([]);
+      // 交接是收尾活，不能再用一整个 turnTimeout：主轮已经超时的情况下再等 5 分钟等于没超时
+      r = await this.runPrompt(s, handoffPrompt(), { tokensLeft: Math.max(limits.tokensLeft, 1), callsLeft: Math.max(limits.callsLeft, 1) }, undefined, {
+        timeoutMs: this.d.cfg.handoff.timeoutMs ?? 90_000,
+        timeoutReason: "handoff-timeout",
+      });
+      const content = r.aborted ? "" : r.assistantText.trim();
+      if (content) {
+        const file = path.join(this.d.cfg.dataDir, "handoffs", `handoff-${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
+        fs.writeFileSync(file, content + "\n");
+        id = this.d.store.addHandoff(content, ctxTokens, file);
+        this.pendingHandoff = content;
+        this.pendingHandoffId = id;
+        this.d.log.info(`交接文档 #${id} 已存档：${file}`);
+      } else {
+        this.d.log.warn(`交接文档为空（${r.error ?? r.abortReason ?? "未知"}），仍然新开会话`);
+      }
+      return { id, tokens: r.tokens, llmCalls: r.llmCalls };
+    } finally {
+      // 不管写文件/落库哪一步抛错，都必须释放旧会话；否则之后每轮都在零工具会话里空转
+      this.resetSession();
     }
-    s.dispose();
-    this.session = null;
-    this.freshNext = true;
-    this.seenPools.clear();
-    return { id, tokens: r.tokens, llmCalls: r.llmCalls };
   }
 
   switchModel(model: Model<any>, modelRuntime: ModelRuntime): void {

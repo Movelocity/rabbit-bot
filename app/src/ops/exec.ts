@@ -84,7 +84,7 @@ export async function execShell(
   cfg: Config,
   cmd: string,
   timeoutSec?: number,
-  opts: { cwd?: string; overflowFile?: string } = {},
+  opts: { cwd?: string; overflowFile?: string; signal?: AbortSignal } = {},
 ) {
   const sc = cfg.exec;
   if (!sc.shell.enabled) throw new Error("沙盒 shell 没开");
@@ -97,6 +97,7 @@ export async function execShell(
   const o = shellRunnerOptions(cfg, secs * 1000);
   if (opts.cwd) o.hostCwd = opts.cwd;
   if (opts.overflowFile) o.overflowFile = opts.overflowFile;
+  if (opts.signal) o.signal = opts.signal;
   const r = await runShell(cmd, o);
   return { code: r.code, ok: r.ok, output: r.output };
 }

@@ -323,3 +323,18 @@ test("落库：审批房拒绝也写同一张表，并置 pending tick", async (
   assert.equal(enqueued, 1, "拒绝是终态，置一次 tick");
   store.close();
 });
+
+test("本轮中止：审批立刻取消，不再等超时", async () => {
+  const { log } = fakeLog();
+  const sent: string[] = [];
+  const g = new ApprovalGate(cfg({ timeoutMs: 60_000 }), log, async (_c, t) => { sent.push(t); return { ok: true }; });
+  const ac = new AbortController();
+  const p = g.request({ cmd: "rm -rf build", cwd: "/x", why: "删", signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 10));
+  ac.abort();
+  const r = await p;
+  assert.equal(r.decision, "canceled");
+  assert.equal(g.waiting, null);
+  await new Promise((res) => setTimeout(res, 10));
+  assert.ok(sent.some((t) => /#1 本轮已中止/.test(t)), `没回状态：${JSON.stringify(sent)}`);
+});

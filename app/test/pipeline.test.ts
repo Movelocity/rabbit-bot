@@ -535,7 +535,7 @@ test("中止后自动重试成功：消息不丢，只回一次", async () => {
     }
     return {
       assistantText: "", llmCalls: 1, tokens: 0, aborted: false,
-      toolCalls: [{ name: "chat", args: { action: "send", pool: "mock:dm-alice", content: "收到" }, result: "ok", isError: false }],
+      toolCalls: [{ name: "chat", args: { action: "send", pool: "mock:dm-alice", content: "收到" }, result: "ok", isError: false, ok: true }],
     };
   };
   t.dm("你好");
@@ -543,5 +543,107 @@ test("中止后自动重试成功：消息不丢，只回一次", async () => {
   assert.equal(calls, 2);
   assert.equal(t.wakes[1].sentCount, 1);
   assert.deepEqual(t.app.store.poolsWithUnread(), []);
+  await t.done();
+});
+
+// ---------- 2026-11-26 体检：交接/中止/报错链路 ----------
+
+test("engine.run 抛异常：游标回滚、交接还原、wake_log 记 error", async () => {
+  const t = await setup();
+  const id = t.app.store.addHandoff("重启前的交接", null, null);
+  (t.app.engine as any).run = async () => { throw new Error("ensureSession 失败"); };
+  t.dm("这句话不能丢");
+  await t.settle(30_000);
+
+  assert.equal(t.wakes.length, 1);
+  assert.equal(t.wakes[0].outcome, "error");
+  assert.match(String(t.wakes[0].error), /ensureSession 失败/);
+  assert.deepEqual(t.app.store.poolsWithUnread().length, 1, "抛异常也要把消息留在未读");
+  assert.equal(t.app.store.latestUnconsumedHandoff()?.id, id, "交接要还原为未消费");
+  await t.done();
+});
+
+test("send 返回 ok=false 不算发出去：中止后仍回滚并重试", async () => {
+  const t = await setup();
+  let calls = 0;
+  (t.app.engine as any).run = async () => {
+    calls++;
+    return {
+      assistantText: "", llmCalls: 1, tokens: 0, aborted: true, abortReason: "turn-timeout",
+      toolCalls: [{ name: "chat", args: { action: "send", pool: "mock:dm-alice", content: "算了不说" }, result: "先别发", isError: false, ok: false }],
+    };
+  };
+  t.dm("你好");
+  await t.settle(30_000);
+  assert.equal(calls, 2, "第一次中止应自动重试一次");
+  assert.equal(t.wakes[0].sentCount, 0, "held 的 send 不能算已发送");
+  assert.deepEqual(t.wakes[0].abortRetry, ["mock:dm-alice"]);
+  assert.deepEqual(t.wakes[1].abortGiveUp, ["mock:dm-alice"], "重试预算用完就提示，不无限回滚");
+  await t.done();
+});
+
+test("任务转述被中止且一条没发：任务游标不推进", async () => {
+  const t = await setup();
+  const at = t.clock.now();
+  const saved = t.app.store.insertMessage({
+    platform: "mock", external_chat_id: "dm-relay-abort", pool_kind: "private", msg_id: "m_relay_abort",
+    sender_id: "ou_1", sender_name: "他", ts: at, text: "帮我干活",
+    reply_to: null, mentions: [], is_mention_me: false, media_type: "text",
+  })!;
+  const task = createTask(t.app.store, { userId: "u1", poolId: saved.pool_id, name: "#中止", goal: "目标", work_dir: process.cwd() });
+  updateTask(t.app.store, task.id, { status: "done", result: "结果" });
+  appendTaskEvent(t.app.store, task.id, { text: "任务完成", sender: "wa-1", senderName: "WA", ts: at });
+  markPendingTick(t.app.store, at);
+  (t.app.engine as any).run = async () => ({ assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: true, abortReason: "turn-timeout" });
+
+  await t.settle(t.cfg.scheduler.taskTickMs + 100);
+  assert.ok(t.wakes.some((w) => w.outcome === "error:task-relay"), "应记任务转述失败");
+  assert.equal(t.app.store.getKv("ufa.task_relay_cursor"), undefined, "0 发送时不能推进任务转述游标");
+  assert.equal(t.app.store.getKv("ufa.task_relay_last_at"), undefined);
+  await t.done();
+});
+
+test("403/额度错误不可重试：只调用一次并冷却，后续唤醒直接跳过", async () => {
+  const t = await setup();
+  let calls = 0;
+  (t.app.engine as any).run = async () => {
+    calls++;
+    return { assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: false, error: "403 Key limit exceeded" };
+  };
+  t.dm("你好");
+  await t.settle(30_000);
+  assert.equal(calls, 1, "403 不该自动重试");
+  assert.ok(t.mock.sent.some((s) => s.content.includes("403")), "要告诉用户这轮没回");
+  assert.equal(t.wakes[0].errorClass, "fatal");
+
+  t.dm("还在吗");
+  await t.settle(30_000);
+  assert.equal(calls, 1, "冷却期内不再打 LLM");
+  assert.ok(t.wakes.some((w) => w.outcome === "skipped:llm-blocked"));
+  assert.equal(t.app.store.poolsWithUnread().length, 1, "消息要留着，等冷却结束再试");
+  await t.done();
+});
+
+test("5xx/网络错误按退避重试，最多 3 次后放弃", async () => {
+  const t = await setup();
+  let calls = 0;
+  (t.app.engine as any).run = async () => {
+    calls++;
+    return { assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: false, error: "503 Service Unavailable" };
+  };
+  t.dm("你好");
+  await t.settle(30_000);
+  assert.equal(calls, 1);
+  assert.equal(t.wakes[0].errorClass, "retryable");
+  assert.deepEqual(t.wakes[0].errorRetry, ["mock:dm-alice"]);
+
+  await t.settle(0);
+  assert.equal(calls, 2, "第一次重试立即进行");
+  await t.settle(60_000);
+  assert.equal(calls, 3, "第二次重试在 1 分钟后");
+  await t.settle(300_000);
+  assert.equal(calls, 4, "第三次重试在 5 分钟后");
+  await t.settle(3_600_000);
+  assert.equal(calls, 4, "超过 3 次不再重试");
   await t.done();
 });

@@ -68,7 +68,7 @@ export interface Config {
     /** 同一个池两次自动放行之间的冷却，防止来回触发 */
     cooldownMs: number;
   };
-  handoff: { contextTokenLimit: number; sessionTokenLimit: number };
+  handoff: { contextTokenLimit: number; sessionTokenLimit: number; /** 交接 prompt 独立超时，默认 90s；不能再用一整个 turnTimeout */ timeoutMs?: number };
   loopGuard: { impl: "pi-death-loop-guard" | "builtin"; warnThreshold: number; blockThreshold: number; abortAfterBlocks: number };
   limits: {
     /** 一天最多调用几次；负数 = 不设这条闸，只按钱（dailyCny）限额 */
@@ -76,6 +76,8 @@ export interface Config {
     /** 折算 token 日额度；负数 = 不设这条闸，只按钱（dailyCny）限额 */
     dailyTokens: number;
     turnTimeoutMs: number;
+    /** abort 后等工具收尾的宽限期；超过就强制返回（默认 15s） */
+    turnTimeoutGraceMs?: number;
     /** 缓存命中的 token 按多少折算进日额度（DeepSeek 前缀缓存 = 0.1 价） */
     cacheReadRate: number;
     /** 一天最多花多少钱（人民币）。0 = 不算钱，只看 token / 调用次数 */
@@ -421,6 +423,12 @@ export function validateConfig(cfg: Config): void {
     const { L1, L2 } = cfg.tide.dailyCap;
     if (!(Number.isInteger(L1) && L1 >= 0)) throw new Error("config: tide.dailyCap.L1 必须是 >=0 的整数");
     if (!(Number.isInteger(L2) && L2 >= 0)) throw new Error("config: tide.dailyCap.L2 必须是 >=0 的整数");
+  }
+  pos(cfg.handoff.timeoutMs ?? 90_000, "handoff.timeoutMs");
+  pos(cfg.limits.turnTimeoutMs, "limits.turnTimeoutMs");
+  if (cfg.approval?.enabled && cfg.approval.timeoutMs >= cfg.limits.turnTimeoutMs) {
+    console.warn(`[config] approval.timeoutMs(${cfg.approval.timeoutMs}) ≥ limits.turnTimeoutMs(${cfg.limits.turnTimeoutMs})，已自动压到 ${cfg.limits.turnTimeoutMs - 1}ms，避免审批把一轮拖过超时`);
+    cfg.approval.timeoutMs = Math.max(500, cfg.limits.turnTimeoutMs - 1);
   }
   if (cfg.loopGuard.warnThreshold >= cfg.loopGuard.blockThreshold)
     throw new Error("config: loopGuard.warnThreshold 必须小于 blockThreshold");

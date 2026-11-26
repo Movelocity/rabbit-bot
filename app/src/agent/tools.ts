@@ -1254,7 +1254,7 @@ export function createTools(d: ToolDeps) {
       path: Type.String({ description: `路径；sandbox 用相对路径或 /work/...，例如 ${examples.readPath}；host 用绝对路径或 ~/...` }),
       scope: Type.Optional(Type.String({ description: "sandbox（默认）/ host" })),
     }),
-    async execute(_id, p) {
+    async execute(_id, p, signal) {
       let raw = String(p.path ?? "").trim();
       const scope = String(p.scope ?? "sandbox").trim().toLowerCase();
       if (scope !== "sandbox" && scope !== "host") return txt("scope 只能是 sandbox / host", { ok: false });
@@ -1310,11 +1310,11 @@ export function createTools(d: ToolDeps) {
             return txt(`读 ${target} 要主人审批（${v.why}），但审批没开，没读。可以请主人在管理台「权限 → 白名单」里加目录。`, { ok: false, needAllow: true });
           }
           const r = await d.approval.request({
-            cmd: target, cwd: path.dirname(target), kind: "read",
+            cmd: target, cwd: path.dirname(target), kind: "read", signal,
             why: `读取宿主文件：${v.why}（只放行这一次）`,
           });
           logHostRead(d.store, {
-            ...base, outcome: r.decision === "approved" ? "approved" : r.decision === "rejected" ? "rejected" : "timeout",
+            ...base, outcome: r.decision === "approved" ? "approved" : r.decision === "rejected" ? "rejected" : r.decision === "canceled" ? "unavailable" : "timeout",
             approval_id: r.rowId ?? null, by: r.by ?? null,
           });
           if (r.decision !== "approved") {
@@ -1466,7 +1466,7 @@ export function createTools(d: ToolDeps) {
       timeout_sec: Type.Optional(Type.Number({ description: `超时秒数；UFA 最多 ${shellMaxSec}，WA 最多 600` })),
       cwd: Type.Optional(Type.String({ description: "工作目录；sandbox 用容器内 /work/...，host 用宿主绝对路径；不填就是沙盒根" })),
     }),
-    async execute(_id, p) {
+    async execute(_id, p, signal) {
       const cmd = String(p.cmd ?? "");
       /** 过审批的那条序号：执行完拿它回报结果 */
       let pendingId = 0;
@@ -1486,20 +1486,27 @@ export function createTools(d: ToolDeps) {
             if (!d.approval || !d.approval.enabled) {
               return txt(`这条要和主人确认才能跑（${v.why}），审批没开，我没动。`, { ok: false, denied: true });
             }
-            const r = await d.approval.request({ cmd, cwd, why: v.why });
+            const r = await d.approval.request({ cmd, cwd, why: v.why, signal });
             pendingId = r.id;
             if (r.decision !== "approved") {
-              const why = r.decision === "timeout" ? "没等到批准" : "主人说不行";
+              const why = r.decision === "timeout" ? "没等到批准" : r.decision === "canceled" ? "本轮已中止" : "主人说不行";
               // 审批被拒＝本轮强制收手：不换命令重试，不把同一条指令拆成别的写法再问。
               // halt 由引擎读到后 abort 当前会话回合。
               return {
                 ...txt(`${why}，我没跑（${v.why}）。本轮到此为止，别再换条命令重试。`, {
-                  ok: false, denied: true, decision: r.decision, halt: `approval-${r.decision}`,
+                  ok: false, denied: true, decision: r.decision,
+                  halt: r.decision === "canceled" ? "turn-aborted" : `approval-${r.decision}`,
                 }),
                 terminate: true,
               };
             }
           }
+        }
+        if (signal?.aborted) {
+          return {
+            ...txt("本轮已中止，命令没有执行。", { ok: false, halted: true }),
+            terminate: true,
+          };
         }
         const t0 = Date.now();
         // 输出超限时落盘，别让模型只看到开头几百字还以为命令没跑完整。
@@ -1512,6 +1519,7 @@ export function createTools(d: ToolDeps) {
         const r = await execShell(d.cfg, cmd, timeoutSec, {
           cwd: p.cwd ? String(p.cwd) : undefined,
           overflowFile,
+          signal,
         });
         // 过了审批的那条，把结果也回一句到审批房：他要知道自己批的那下有没有真跑成
         if (d.cfg.exec.shell.mode === "host" && d.approval) {

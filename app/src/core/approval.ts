@@ -13,7 +13,7 @@ import type { Logger } from "./logger.ts";
 import type { Store } from "./db.ts";
 import { ApprovalConflictError, createApproval, decideApproval } from "./approvals.ts";
 
-export type Decision = "approved" | "rejected" | "timeout" | "disabled";
+export type Decision = "approved" | "rejected" | "timeout" | "canceled" | "disabled";
 
 export interface ApprovalConfig {
   enabled: boolean;
@@ -49,6 +49,8 @@ export interface ApprovalRequest {
   why: string;
   taskId?: number;
   kind?: ApprovalKind;
+  /** 本轮被中止时传进来：立刻撤掉审批，别再让命令落地 */
+  signal?: AbortSignal;
 }
 
 interface Pending {
@@ -62,6 +64,9 @@ interface Pending {
   promptEventId?: string | null;
   /** approvals 表里的行 id；落库失败时为空，退回纯内存审批 */
   approvalRowId?: number;
+  /** abort 监听：裁决/超时时要摘掉，免得下一次审批被旧 signal 误伤 */
+  signal?: AbortSignal;
+  onAbort?: () => void;
 }
 
 /** 落库/唤醒依赖；不传就是原来的纯内存闸门（测试与未接线场景）。 */
@@ -140,6 +145,7 @@ export class ApprovalGate {
 
   private ask(req: ApprovalRequest): Promise<ApprovalResult> {
     const id = ++this.seq;
+    if (req.signal?.aborted) return Promise.resolve({ id, decision: "canceled", latencyMs: 0 });
     const createdAt = Date.now();
     const timeoutMs = Math.max(500, this.cfg.timeoutMs || 600_000);
     const oneLine = req.cmd.replace(/\s+/g, " ").slice(0, 400);
@@ -173,7 +179,9 @@ export class ApprovalGate {
 
     return new Promise<ApprovalResult>((resolve) => {
       const timer = setTimeout(() => this.settle(id, "timeout"), timeoutMs);
-      this.pending = { id, cmd: req.cmd, createdAt, why: req.why, resolve, timer, approvalRowId };
+      const onAbort = () => this.settle(id, "canceled", "system:aborted");
+      this.pending = { id, cmd: req.cmd, createdAt, why: req.why, resolve, timer, approvalRowId, signal: req.signal, onAbort };
+      req.signal?.addEventListener("abort", onAbort, { once: true });
 
       this.send(this.cfg.roomId, text).then((r) => {
         if (!r.ok) {
@@ -192,6 +200,7 @@ export class ApprovalGate {
     const p = this.pending;
     if (!p || p.id !== id) return;
     clearTimeout(p.timer);
+    if (p.signal && p.onAbort) p.signal.removeEventListener("abort", p.onAbort);
     this.pending = null;
     const latencyMs = Date.now() - p.createdAt;
     this.note({ ts: p.createdAt, id, cmd: p.cmd, why: p.why, decision, by: by ?? null, latencyMs });
@@ -200,9 +209,11 @@ export class ApprovalGate {
     // 同一张表：审批房里的裁决也写 approvals；UFA 工具裁决走同一个 decideApproval。
     // timeout 不在这里写——expires_at 和定时器同一时刻到，交给 sweepExpirations 收口。
     if (this.deps.store && p.approvalRowId) {
-      if (decision === "approved" || decision === "rejected") {
+      if (decision === "approved" || decision === "rejected" || decision === "canceled") {
         try {
-          decideApproval(this.deps.store, p.approvalRowId, { decision, by: by ?? "system" }, this.deps.enqueue);
+          // canceled 在 approvals 表里按拒绝收口：不留一条永远 pending 的记录
+          const stored = decision === "canceled" ? "rejected" : decision;
+          decideApproval(this.deps.store, p.approvalRowId, { decision: stored, by: by ?? "system" }, this.deps.enqueue);
         } catch (e) {
           // 已经被 UFA 或 sweeper 裁决过了：内存里这条照常按本地结果返回，别改坏已经落定的状态
           if (!(e instanceof ApprovalConflictError)) {
@@ -219,6 +230,7 @@ export class ApprovalGate {
         decision === "approved" ? `#${id} 已批准（${by ?? "系统"}，${secs}s），开始执行`
         : decision === "rejected" ? `#${id} 已拒绝，没有执行`
         : decision === "timeout" ? `#${id} 超时 ${secs}s，按拒绝处理，没有执行`
+        : decision === "canceled" ? `#${id} 本轮已中止，审批取消，没有执行`
         : `#${id} 关掉了审批，没有执行`;
       void this.send(this.cfg.roomId, line).catch(() => undefined);
     }

@@ -1124,6 +1124,8 @@ export class Store {
     return this.db.prepare("SELECT id,content FROM handoffs WHERE consumed=0 ORDER BY id DESC LIMIT 1").get() as any;
   }
   markHandoffConsumed(id: number) { this.db.prepare("UPDATE handoffs SET consumed=1 WHERE id=?").run(id); }
+/** 本轮中止/报错：把已标消费的交接还回去，下一次新会话还能带上 */
+unconsumeHandoff(id: number) { this.db.prepare("UPDATE handoffs SET consumed=0 WHERE id=?").run(id); }
   listHandoffs(): any[] { return this.db.prepare("SELECT id,created_at,tokens,file,length(content) len,consumed FROM handoffs ORDER BY id").all(); }
   addWakeLog(entry: unknown) { this.db.prepare("INSERT INTO wake_log(ts,json) VALUES(?,?)").run(Date.now(), JSON.stringify(entry)); }
   recentWakeLogs(n: number): any[] { return (this.db.prepare("SELECT json FROM wake_log ORDER BY id DESC LIMIT ?").all(n) as any[]).map((r) => JSON.parse(r.json)); }

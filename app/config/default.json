@@ -43,7 +43,8 @@
   },
   "handoff": {
     "contextTokenLimit": 100000,
-    "sessionTokenLimit": 600000
+    "sessionTokenLimit": 600000,
+    "timeoutMs": 90000
   },
   "loopGuard": {
     "impl": "pi-death-loop-guard",
@@ -55,6 +56,7 @@
     "dailyLlmCalls": -1,
     "dailyTokens": -1,
     "turnTimeoutMs": 300000,
+    "turnTimeoutGraceMs": 15000,
     "capNotice": {
       "enabled": true,
       "text": "〔系统〕今天的额度用完了，我先歇一会儿——你说的话我记着，回头接着聊。",
@@ -62,7 +64,7 @@
     },
     "errorNotice": {
       "enabled": true,
-      "text": "〔系统〕我这边出了点问题（{reason}）。这条不是她说的——你刚才那句话我记着，等恢复了我再回。",
+      "text": "〔系统〕我这边出了点问题（{reason}）",
       "dedupeMinutes": 60,
       "poolKinds": ["private"]
     },

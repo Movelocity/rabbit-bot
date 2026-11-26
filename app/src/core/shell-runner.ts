@@ -51,6 +51,8 @@ export interface ShellRunnerOptions {
   env?: Record<string, string>;
   /** 输出被截断时把全文写到这个文件（不给就直接丢）。让模型能「翻全文」而不是只看到头。 */
   overflowFile?: string;
+  /** 本轮被中止时用来杀掉命令（host 杀进程组，docker 杀 CLI；容器里另有 timeout 兜底）。 */
+  signal?: AbortSignal;
 }
 
 export interface ShellRunnerResult {
@@ -104,12 +106,13 @@ interface RawResult {
   signal?: string;
 }
 
-function run(bin: string, args: string[], timeoutMs: number, cwd?: string, env?: NodeJS.ProcessEnv): Promise<RawResult> {
+function run(bin: string, args: string[], timeoutMs: number, cwd?: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<RawResult> {
+  if (signal?.aborted) return Promise.resolve({ code: 1, out: "", err: "aborted", killed: true, signal: "SIGKILL" });
   return new Promise((resolve) => {
     execFile(
       bin,
       args,
-      { timeout: timeoutMs, maxBuffer: 1 << 20, encoding: "utf8", cwd, env, killSignal: "SIGKILL" },
+      { timeout: timeoutMs, maxBuffer: 1 << 20, encoding: "utf8", cwd, env, killSignal: "SIGKILL", signal },
       (e, stdout, stderr) => {
         const err = e as (Error & { code?: number | string; killed?: boolean; signal?: string }) | null;
         const code = !err ? 0 : typeof err.code === "number" ? err.code : 1;
@@ -131,8 +134,9 @@ function run(bin: string, args: string[], timeoutMs: number, cwd?: string, env?:
  * execFile 的 timeout 只杀直接子进程（bash），它拉起的 npm/pytest 会继续跑成孤儿；
  * 5 秒上限就会变成「返回了但后台还在写」。这里用 detached + kill(-pid) 把整组带走。
  */
-function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, env?: NodeJS.ProcessEnv): Promise<RawResult> {
+function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<RawResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: 1, out: "", err: "aborted", killed: true, signal: "SIGKILL" }); return; }
     let child: ChildProcess;
     try {
       child = spawn(bin, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -148,11 +152,19 @@ function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const append = (cur: string, chunk: Buffer | string): string =>
       cur.length >= limit ? cur : (cur + String(chunk)).slice(0, limit);
-    const finish = (code: number, signal?: string) => {
+    const onAbort = () => {
+      if (settled) return;
+      timedOut = true;
+      if (child.pid) killTree(child.pid, "SIGKILL");
+      else try { child.kill("SIGKILL"); } catch { /* 已经退出 */ }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = (code: number, sig?: string) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve({ code, out, err, killed: timedOut || signal === "SIGKILL", signal });
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ code, out, err, killed: timedOut || sig === "SIGKILL", signal: sig });
     };
     child.stdout?.on("data", (c) => { out = append(out, c); });
     child.stderr?.on("data", (c) => { err = append(err, c); });
@@ -160,6 +172,7 @@ function runGroup(bin: string, args: string[], timeoutMs: number, cwd?: string, 
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolve({ code: 1, out, err: err || (e as Error).message });
     });
     child.on("close", (code, signal) => finish(code ?? 1, signal ?? undefined));
@@ -318,7 +331,7 @@ export async function runInDocker(cmd: string, opts: ShellRunnerOptions): Promis
     opts.container,
     "timeout", "-s", "KILL", String(secs),
     shell, "-lc", trimmed,
-  ], opts.timeoutMs + 5000);
+  ], opts.timeoutMs + 5000, undefined, undefined, opts.signal);
   const execWithShellFallback = async (): Promise<RawResult> => {
     const r = await exec("bash");
     return r.code === 127 && /bash/i.test(r.err) ? exec("sh") : r;
@@ -361,7 +374,7 @@ export async function runOnHost(cmd: string, opts: ShellRunnerOptions): Promise<
   assertHostModeSupported();
   const trimmed = checkCmd(cmd);
   const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
-  const r = await runGroup("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts));
+  const r = await runGroup("bash", ["-c", trimmed], opts.timeoutMs, hostCwd(opts), hostEnv(opts), opts.signal);
   const timedOut = r.killed === true || r.signal === "SIGKILL";
   return {
     ok: r.code === 0 && !timedOut,
@@ -390,7 +403,7 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
     const [bin, ...prefix] = opts.hostPrefix ?? [];
     if (!bin) throw new Error("host 模式需要 hostPrefix（rb 客户端入口）");
     // hostPrefix 顶替 argv[0]（容器里是 /usr/local/bin/rb，宿主上是 node docker/rb.mjs）
-    const r = await run(bin, [...prefix, ...argv.slice(1)], opts.timeoutMs, hostCwd(opts), hostEnv(opts, opts.execEnv));
+    const r = await run(bin, [...prefix, ...argv.slice(1)], opts.timeoutMs, hostCwd(opts), hostEnv(opts, opts.execEnv), opts.signal);
     const timedOut = r.killed === true || r.signal === "SIGKILL";
     return {
       ok: r.code === 0 && !timedOut,
@@ -406,7 +419,7 @@ export async function runSandboxArgv(argv: string[], opts: SandboxArgvOptions): 
   const exec = () => run(
     "docker",
     ["exec", ...envArgs, opts.container, "timeout", "-s", "KILL", String(secs), ...argv],
-    opts.timeoutMs + 5000,
+    opts.timeoutMs + 5000, undefined, undefined, opts.signal,
   );
   let r = await exec();
   if (execBroken(r) && (await rebuildContainer(opts))) r = await exec();

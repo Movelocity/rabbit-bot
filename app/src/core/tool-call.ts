@@ -3,6 +3,9 @@ export interface ToolCallShape {
   name: string;
   args?: unknown;
   isError?: boolean;
+  /** 工具 details.ok：被压住、适配器失败、审批拦截都必须显式写 false */
+  ok?: boolean;
+  queuedForReview?: boolean;
 }
 
 export function toolAction(c: ToolCallShape): string {
@@ -15,9 +18,9 @@ export function isChatCall(c: ToolCallShape, action: string): boolean {
   return c.name === "chat" && toolAction(c) === action;
 }
 
-/** 她这一轮真的发了话 */
+/** 她这一轮真的发了话：只看 isError 不够，held/发送失败也是 isError=false */
 export function didSend(c: ToolCallShape): boolean {
-  return isChatCall(c, "send") && !c.isError;
+  return isChatCall(c, "send") && !c.isError && c.ok === true;
 }
 
 /** 她这一轮明确决定不说 */

@@ -2,7 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import type { Config } from "./config.ts";
-import { isChatCall } from "./core/tool-call.ts";
+import { didSend, isChatCall } from "./core/tool-call.ts";
 import { Store } from "./core/db.ts";
 import { extractJsonObject } from "./core/json.ts";
 import { Hub } from "./core/hub.ts";
@@ -155,6 +155,22 @@ const ABORT_RETRY_LIMIT = 1;
 /** 可重试的中止原因。审批被拒/超时、额度到顶、死循环都不重试，重来一遍只会得到同样结果。 */
 const RETRYABLE_ABORT = new Set(["turn-timeout", "aborted"]);
 
+/** 可重试错误的退避：第一次立即重来，然后 1 分钟、5 分钟；最多 3 次。 */
+const ERROR_RETRY_DELAYS_MS = [0, 60_000, 300_000];
+const ERROR_RETRY_LIMIT = ERROR_RETRY_DELAYS_MS.length;
+/** 不可重试错误后的冷却：期间不再撞同一面墙（重启即解除）。 */
+const LLM_BLOCK_MS = 5 * 60_000;
+/** 鉴权/额度/区域问题：重试只会得到同样的 4xx，还白白把上下文重新灌一遍。 */
+const FATAL_ERROR_RE = /\b(401|402|403)\b|unauthorized|forbidden|invalid api key|api[ _-]?key|key limit|quota|insufficient|balance|billing|payment|region|credits?/i;
+/** 网络/限流/上游临时故障：换一次重试有意义。 */
+const RETRYABLE_ERROR_RE = /\b(408|409|425|429|5\d\d)\b|timeout|timed out|rate limit|overloaded|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|network|temporar|malformed/i;
+
+function classifyLlmError(message: string): "fatal" | "retryable" | "unknown" {
+  if (FATAL_ERROR_RE.test(message)) return "fatal";
+  if (RETRYABLE_ERROR_RE.test(message)) return "retryable";
+  return "unknown";
+}
+
 export class App {
   readonly store: Store;
   readonly hub: Hub;
@@ -182,6 +198,11 @@ export class App {
   private sendsThisTurn = 0;
   /** 中止回滚重试的记账：pool → 最近一次回滚到的 seq 和已重试次数；成功发出后清掉 */
   private abortRetries = new Map<string, { seq: number; count: number }>();
+  /** LLM 报错重试：pool → 这一批消息的 seq、已重试次数、下次可重试时间和原因 */
+  private llmRetries = new Map<string, { seq: number; count: number; nextAt: number; reason: string }>();
+  /** 不可重试错误冷却到什么时候；期间唤醒直接跳过，不打 LLM */
+  private llmBlockedUntil = 0;
+  private llmBlockedReason = "";
   /** 后台记忆梳理：计数状态、是否在跑、临时上下文和专用工具集 */
   private memoryReviewState: MemoryReviewState = { turns: 0, lastReviewAt: 0, lastOutcome: "" };
   private reviewBusy = false;
@@ -830,11 +851,13 @@ export class App {
    * 只发给 poolKinds 里的池类型（默认只有私聊）：群里是多人场合，程序报错不该刷到群里。
    * 同一个 kind 在 dedupeMinutes 内只发一次——报错往往连续触发，不能刷屏。
    */
-  private async notifySys(kind: string, text: string): Promise<void> {
+  private async notifySys(kind: string, text: string, pools?: Iterable<string>): Promise<void> {
     const n = this.o.cfg.limits.errorNotice;
     if (!n?.enabled) return;
     const kinds = n.poolKinds ?? ["private"];
-    const waiting = this.store.poolsWithUnread()
+    // 指定了池就按指定发（不可重试错误已把游标推进，池子里已经没有未读了）；
+    // 不指定才退回到「当前所有有未读的私聊池」。
+    const waiting = (pools ? [...pools] : this.store.poolsWithUnread())
       .filter((id) => kinds.includes(this.store.getPool(id)?.kind ?? ""));
     if (!waiting.length) return;
     const key = `sysNotice.${kind}`;
@@ -881,6 +904,42 @@ export class App {
       const before = cursorsBefore.get(pid);
       if (before !== undefined) this.store.setCursor(pid, before);
       retry.push(pid);
+    }
+    return { retry, giveUp };
+  }
+
+  /**
+   * 报错回滚重试：只对网络/限流/5xx 这类「再试一次可能就好」的错误开放。
+   * 每个池同一批消息最多 3 次（立即 → 1min → 5min）；用完就保留已读、提示用户，
+   * 不能再让 403/额度这种错误每个 tick 都撞一遍。
+   */
+  private planErrorRetry(
+    unread: StoredMessage[], reason: string, cursorsBefore: Map<string, number>,
+  ): { retry: string[]; giveUp: string[] } {
+    const now = this.clock.now();
+    const retry: string[] = [];
+    const giveUp: string[] = [];
+    const pools = new Set(unread.map((m) => m.pool_id));
+    for (const pid of pools) {
+      const seq = unread.reduce((max, m) => (m.pool_id === pid ? Math.max(max, m.seq) : max), 0);
+      const last = this.llmRetries.get(pid);
+      if (last && last.seq === seq && last.count >= ERROR_RETRY_LIMIT) {
+        this.llmRetries.delete(pid);
+        giveUp.push(pid);
+        continue;
+      }
+      const count = last && last.seq === seq ? last.count + 1 : 1;
+      const delay = ERROR_RETRY_DELAYS_MS[Math.min(count - 1, ERROR_RETRY_DELAYS_MS.length - 1)];
+      const at = now + delay;
+      this.llmRetries.set(pid, { seq, count, nextAt: at, reason });
+      const before = cursorsBefore.get(pid);
+      if (before !== undefined) this.store.setCursor(pid, before);
+      retry.push(pid);
+      this.clock.setTimeout(() => {
+        const cur = this.llmRetries.get(pid);
+        if (!cur || cur.seq !== seq || cur.nextAt > this.clock.now()) return;
+        this.queue.enqueue(makeWake("message", [pid], `error-retry:${reason}`, [], this.clock.now()));
+      }, delay);
     }
     return { retry, giveUp };
   }
@@ -1004,15 +1063,16 @@ export class App {
     this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
 
     const sendCalls = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError);
-    // 工具返回 details.ok=false 的（被新消息压住 / 适配器失败）不算真发出去
-    const delivered = sendCalls.filter((c) => /^已发送/.test(String(c.result ?? "")));
+    // 工具返回 details.ok=false 的（被新消息压住 / 适配器失败）不算真发出去。
+    // 统一用 details.ok 判定，不再猜返回文案。
+    const delivered = sendCalls.filter((c) => didSend(c));
     const undelivered = sendCalls.length - delivered.length;
 
-    if (!delivered.length && (res.error || undelivered > 0)) {
+    if (!delivered.length && (res.error || res.aborted || undelivered > 0)) {
       // 一条都没真发出去：保留任务池未读，下一次任务 tick 会再触发这条链路
       markPendingTick(this.store, t0);
       finish("error:task-relay", {
-        error: res.error ?? "send-not-delivered",
+        error: res.error ?? (res.aborted ? `aborted:${res.abortReason ?? "aborted"}` : "send-not-delivered"),
         held: undelivered,
         tasks: tasks.map((t) => ({ id: t.id, status: t.status })),
         llmCalls: res.llmCalls,
@@ -1049,6 +1109,7 @@ export class App {
       await this.handleWakeInner(w);
     } catch (e) {
       // 真崩了（模板缺变量、适配器炸了、意料之外的 throw）：用户那边只看到「她不回我」
+      this.engine.restorePendingHandoff();
       this.log.error(`唤醒异常：${(e as Error).stack ?? e}`);
       await this.notifySys("crash", this.errorText((e as Error).message)).catch(() => {});
     } finally {
@@ -1075,6 +1136,10 @@ export class App {
     };
 
     if (this.store.isPaused()) return finish("skipped:paused");
+    // 401/403/额度这类错误重试没有意义：冷却期内直接跳过，不反复撞同一面墙
+    if (this.llmBlockedUntil > t0) {
+      return finish("skipped:llm-blocked", { until: new Date(this.llmBlockedUntil).toISOString(), error: this.llmBlockedReason });
+    }
     const day = dayKey(t0, cfg.timezone);
     const usage = this.store.getUsage(day);
     // 三条闸：调用次数、折算 token、**钱**。现在以钱为准（dailyCny），
@@ -1109,9 +1174,19 @@ export class App {
 
     // 读池：所有有未读的池（不只是触发的池），一次唤醒合并处理
     const cursorsBefore = new Map(this.store.poolsWithUnread().map((p) => [p, this.store.getCursor(p)]));
-    const unread = this.hub.takeUnread();
+    const taken = this.hub.takeUnread();
+    // 正在退避的池先别读：游标退回去，等重试定时器到点再处理，tick 现在来只会空跑
+    const cooling = new Set([...this.llmRetries].filter(([, r]) => r.nextAt > t0).map(([p]) => p));
+    let unread = taken;
+    if (cooling.size) {
+      unread = taken.filter((m) => !cooling.has(m.pool_id));
+      for (const pid of cooling) {
+        const before = cursorsBefore.get(pid);
+        if (before !== undefined) this.store.setCursor(pid, before);
+      }
+    }
     this.currentUnread = unread;
-    if (!unread.length) return finish("skipped:nothing-new");
+    if (!unread.length) return finish(cooling.size ? "skipped:error-backoff" : "skipped:nothing-new");
 
     const involved = new Set<string>(unread.map((m) => m.pool_id));
     const context = new Map<string, StoredMessage[]>();
@@ -1161,26 +1236,57 @@ export class App {
     const sessionTokens = sessionLimit > 0 ? this.store.tokensSince(this.store.lastHandoffAt()) : 0;
     const forceHandoff = sessionLimit > 0 && sessionTokens >= sessionLimit;
     if (forceHandoff) entry.sessionTokens = sessionTokens;
-    const res = await this.engine.run(fullPrompt, {
-      tokensLeft: tokensLeftOf(cfg, usage.tokens),
-      callsLeft: callsLeftOf(cfg, usage.llm_calls),
-      forceHandoff,
-    }, images);
+    let res: RunResult;
+    try {
+      res = await this.engine.run(fullPrompt, {
+        tokensLeft: tokensLeftOf(cfg, usage.tokens),
+        callsLeft: callsLeftOf(cfg, usage.llm_calls),
+        forceHandoff,
+      }, images);
+    } catch (e) {
+      // engine 连会话都没建起来（模型凭据/配置坏了）：消息不能算读过，交接也要还回去
+      const msg = (e as Error).message;
+      for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
+      this.engine.restorePendingHandoff();
+      await this.notifySys("error", this.errorText(msg), involved);
+      return finish("error", { error: msg, llmCalls: 0, tokens: 0 });
+    }
     this.store.addUsage(day, res.llmCalls, res.tokens, 1, this.usageExtra(res));
 
-    const sent = res.toolCalls.filter((c) => isChatCall(c, "send") && !c.isError).map((c) => c.args);
+    // 被压住 / 适配器失败 / 风格闸拦截都返回 ok:false：不能算「已发送」，
+    // 否则中止或报错时会把消息当已读，用户等半天、池子里也不再唤醒。
+    const sent = res.toolCalls.filter((c) => didSend(c)).map((c) => c.args);
     this.sendsThisTurn = sent.length;
     if (this.silenceReason) entry.silent = this.silenceReason;
     entry.sentCount = sent.length;
+    // 一轮被回滚后不能把消息记成「已处理」：记忆梳理会重复计数，联系人/别名也会被提前写下
+    let rolledBack = false;
     // 一条都没发出去就结束：消息不能算读过，否则用户等半天，池子里却显示已读、也不再有唤醒。
-    // 报错沿用原逻辑（回滚 + 系统提示）；中止只回滚可重试的原因，且每个池最多重试一次。
+    // 报错分两类：鉴权/额度不重试（冷却 + 提示），网络/5xx 按 0/1/5 分钟退避重试；中止每池最多一次。
     if (res.error && !sent.length) {
-      for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
-      // 模型/接口报错也是「程序的事」，别让她背锅
-      await this.notifySys("error", this.errorText(res.error));
+      const cls = classifyLlmError(res.error);
+      entry.errorClass = cls;
+      if (cls === "retryable") {
+        const { retry, giveUp } = this.planErrorRetry(unread, res.error, cursorsBefore);
+        rolledBack = retry.length > 0;
+        if (retry.length) entry.errorRetry = retry;
+        if (giveUp.length) entry.errorGiveUp = giveUp;
+        // 第一次出错就先告诉用户「这句我记着」；后面的退避重试不再重复打扰（dedupe 兜底）
+        await this.notifySys("error", this.errorText(res.error), involved);
+        if (!retry.length && !giveUp.length) for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
+      } else {
+        // fatal / unknown 都不重试：先回滚，冷却期内唤醒直接跳过；等凭据/额度修好再处理这条消息
+        for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
+        rolledBack = true;
+        this.llmBlockedUntil = t0 + LLM_BLOCK_MS;
+        this.llmBlockedReason = res.error.slice(0, 200);
+        for (const pid of involved) this.llmRetries.delete(pid);
+        await this.notifySys("error", this.errorText(res.error), involved);
+      }
     } else if (res.aborted && !sent.length) {
       const reason = res.abortReason ?? "aborted";
       const { retry, giveUp } = this.planAbortRetry(unread, reason, cursorsBefore);
+      rolledBack = retry.length > 0;
       if (retry.length) {
         entry.abortRetry = retry;
         this.queue.enqueue(makeWake("message", retry, `abort-retry:${reason}`, [], this.clock.now()));
@@ -1189,14 +1295,20 @@ export class App {
         entry.abortGiveUp = giveUp;
         await this.notifyAbort(giveUp, reason);
       }
-    } else if (sent.length) {
-      for (const pid of involved) this.abortRetries.delete(pid);
+    } else {
+      // 这一轮至少干净结束了（发没发另说）：清掉重试账本，别让旧批次一直压着新消息
+      for (const pid of involved) {
+        this.abortRetries.delete(pid);
+        this.llmRetries.delete(pid);
+      }
     }
     // 后台只做记忆梳理；技能和业务关系不在这里触发
-    this.noteInboundMessages(unread);
-    void this.maybeMemoryReview(unread).catch((e) => this.log.warn(`记忆梳理异常：${(e as Error).message}`));
+    if (!rolledBack) {
+      this.noteInboundMessages(unread);
+      void this.maybeMemoryReview(unread).catch((e) => this.log.warn(`记忆梳理异常：${(e as Error).message}`));
+    }
     finish(res.error ? "error" : res.aborted ? `aborted:${res.abortReason}` : "ok", {
-      tools: res.toolCalls.map((c) => ({ name: c.name, args: c.args, result: c.result, isError: c.isError })),
+      tools: res.toolCalls.map((c) => ({ name: c.name, args: c.args, result: c.result, isError: c.isError, ok: c.ok })),
       sent, assistantText: res.assistantText, llmCalls: res.llmCalls, tokens: res.tokens,
       // 折算前的原始 token 和 pi 报的美元成本：用来判断缓存到底命中没有
       rawTokens: res.rawTokens, cost: res.cost ? Number(res.cost.toFixed(6)) : undefined,
