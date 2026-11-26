@@ -54,7 +54,7 @@ import {
   effectiveModelSettings, normalizeChoice, saveModelSettings, MAX_MODEL_CHOICES, type ModelSettings,
 } from "./ops/model-settings.ts";
 import { listSkills } from "./ops/skills.ts";
-import { listExecutors } from "./ops/executors.ts";
+import { configureExecutorCache, listExecutorsAsync, refreshExecutors } from "./ops/executors.ts";
 import { DEFAULT_EXECUTOR, EXECUTORS, isExecutor } from "./core/executor.ts";
 import { effectiveExecutorPreference, saveExecutorPreference } from "./ops/executor-preference.ts";
 import { ensureBusinessSeeded, loadBusinessMap, relationEdges, replaceBusinessMap } from "./ops/business-map.ts";
@@ -266,10 +266,24 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
   // 网页直聊池先建出来，管理台的会话列表和主聊天设置才能在第一条消息之前看到它
   try { const ws = effectiveWebChat(d.cfg); if (ws.enabled) ensureWebPool(d.store, ws); } catch { /* 配置不完整不挡 API */ }
   const webAuth = new WebAuth(d.store, d.cfg);
+  // 启动即读回上次探测结果并后台刷新，别让第一个开页面的请求等 spawn
+  configureExecutorCache(path.join(d.cfg.runtimeDir, "executors.json"));
+  void refreshExecutors();
   const port = d.cfg.api?.port ?? DEFAULT_PORT;
   const host = d.cfg.api?.host ?? "0.0.0.0";
   /** 给任务子进程的回环地址；listen 后才知道真实端口 */
   let apiBase = "";
+
+  /** 读接口的短 TTL 缓存：同一页面并发/轮询请求只算一次；写请求会整体清空。 */
+  const responseCache = new Map<string, { at: number; body: string }>();
+  const CACHE_TTL: [RegExp, number][] = [
+    [/^\/v1\/outputs\/tree$/, 3_000],
+    [/^\/v1\/tasks\/stats$/, 30_000],
+    [/^\/v1\/usage$/, 5_000],
+    [/^\/v1\/approvals$/, 1_000],
+  ];
+  const cacheTtlFor = (pathname: string): number =>
+    CACHE_TTL.find(([re]) => re.test(pathname))?.[1] ?? 0;
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -279,8 +293,17 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
 
     const send = (code: number, obj: unknown) => {
       if (res.writableEnded) return;
-      res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify(obj));
+      const payload = JSON.stringify(obj);
+      const ttl = method === "GET" && code === 200 ? cacheTtlFor(url.pathname) : 0;
+      if (ttl) {
+        if (responseCache.size > 300) responseCache.clear();
+        responseCache.set(`${url.pathname}${url.search}`, { at: Date.now(), body: payload });
+      }
+      res.writeHead(code, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": Buffer.byteLength(payload),
+      });
+      res.end(payload);
     };
     const reply = (code: number, data: unknown) => send(code, { ok: true, data });
     const fail = (code: number, error: string) => send(code, { ok: false, error });
@@ -360,6 +383,22 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
     }
 
     if (!apiAuth && !webSession) return fail(401, "token 不对");
+
+    // 登录之后的读缓存：命中直接回 body，不再走下面的查询
+    if (method === "GET") {
+      const ttl = cacheTtlFor(url.pathname);
+      const hit = ttl ? responseCache.get(`${url.pathname}${url.search}`) : undefined;
+      if (hit && Date.now() - hit.at < ttl) {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": Buffer.byteLength(hit.body),
+          "x-cache": "hit",
+        });
+        return res.end(hit.body);
+      }
+    } else {
+      responseCache.clear();
+    }
 
     try {
       if (parts[0] !== "v1") throw new HttpError(404, "只支持 /v1/*");
@@ -1311,7 +1350,7 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           throw new HttpError(404, "用法：GET /v1/skills");
         }
         case "executors": {
-          if (parts.length === 2 && method === "GET") return reply(200, listExecutors());
+          if (parts.length === 2 && method === "GET") return reply(200, await listExecutorsAsync());
           throw new HttpError(404, "用法：GET /v1/executors");
         }
         case "executor-preference": {
