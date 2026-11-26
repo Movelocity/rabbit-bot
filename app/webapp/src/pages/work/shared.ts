@@ -70,43 +70,4 @@ export function progressPct(summary: TaskSummary): number {
   return summary.total ? Math.round((summary.done / summary.total) * 100) : 0;
 }
 
-/** 工作台左侧范围：全部任务 / 产出 / 项目总览 / 单个项目 / 单个任务 */
-export type WorkScope =
-  | { kind: "tasks" }
-  | { kind: "outputs"; path?: string }
-  | { kind: "projects" }
-  | { kind: "project"; slug: string }
-  | { kind: "task"; id: number; from?: WorkScope };
 
-export function parseScope(raw: string | null): WorkScope {
-  if (raw === "outputs") return { kind: "outputs" };
-  if (raw === "projects") return { kind: "projects" };
-  if (raw && raw.startsWith("project:") && raw.length > 8) return { kind: "project", slug: raw.slice(8) };
-  if (raw && raw.startsWith("task:")) {
-    const id = Number(raw.slice(5));
-    if (Number.isInteger(id) && id > 0) return { kind: "task", id };
-  }
-  return { kind: "tasks" };
-}
-
-export function scopeKey(scope: WorkScope): string {
-  if (scope.kind === "project") return `project:${scope.slug}`;
-  if (scope.kind === "task") return `task:${scope.id}`;
-  return scope.kind;
-}
-
-/** 范围标题，用于返回按钮等 */
-export function scopeLabel(scope: WorkScope, projectTitle?: string): string {
-  switch (scope.kind) {
-    case "outputs":
-      return "产出文件";
-    case "projects":
-      return "项目总览";
-    case "project":
-      return projectTitle || scope.slug;
-    case "task":
-      return `任务 #${scope.id}`;
-    default:
-      return "全部任务";
-  }
-}

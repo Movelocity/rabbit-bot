@@ -10,7 +10,8 @@ import {
   verifyToken,
 } from "./lib/api.ts";
 import { friendlyError } from "./lib/format.ts";
-import { useUrlState, type Tab } from "./lib/use-url-state.ts";
+import { RouteProvider, useRoute } from "./lib/use-route.tsx";
+import type { Route, Tab } from "./lib/router.ts";
 import { cx } from "./lib/cx.ts";
 import { Button } from "./components/ui.tsx";
 import { SchedulerTickStatus } from "./components/SchedulerTickStatus.tsx";
@@ -38,27 +39,35 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "manage", label: "管理" },
 ];
 
-const TAB_HINTS: Record<string, string> = {
-  overview: "调度 / 任务 / 额度一屏看完 · 每 10 秒刷新",
-  work: "任务 · 产出 · 项目 · 按 / 搜索任务 · 审批以飞书为主",
-  approvals: "读取记录 · 审批 · 白名单目录",
-  memories: "条目可改正文 / 删除；图谱只读 · 对象 / 关系 / 动作",
-};
-
-const MANAGE_HINTS: Record<string, string> = {
-  usage: "",
-  "task-stats": "已完成任务 · 耗时 / token / 费用",
-  "llm-logs": "按会话查看实际请求 / 响应 · 默认只加载最近一段",
-  models: "多模型备用 · 手动切换 · 下一轮生效",
-  users: "别名优先于通讯录名字 · 任务 CLI 用户已隐藏",
-  persona: "人设与提示词 · 保存后下一轮生效",
-  schedules: "cron 重复 / N 分钟后一次 · 到点写入日程池",
-  settings: "唤醒间隔 · 日额度 · 上下文交接 · 保存后下一轮生效",
-  skills: "只读 · 技能只做发现",
-  "work-memory": "只读 · 跨会话共享的 memory.md",
-};
-
 export default function App() {
+  return (
+    <RouteProvider>
+      <AppShell />
+    </RouteProvider>
+  );
+}
+
+function tabRoute(tab: Tab, current: Route): Route {
+  switch (tab) {
+    case "overview":
+      return { tab: "overview" };
+    case "chat":
+      return { tab: "chat" };
+    case "work":
+      return { tab: "work", view: "tasks" };
+    case "approvals":
+      return { tab: "approvals", view: "pending" };
+    case "memories":
+      return { tab: "memories", view: "entries" };
+    case "manage":
+      return {
+        tab: "manage",
+        view: current.tab === "manage" ? current.view : "usage",
+      };
+  }
+}
+
+function AppShell() {
   const [storedToken] = useState(() => readStoredToken());
   const [token, setToken] = useState(storedToken);
   const [auth, setAuth] = useState<AuthState>(storedToken ? "checking" : "login");
@@ -66,8 +75,8 @@ export default function App() {
   const [health, setHealth] = useState<Health>("checking");
   const [currentPool, setCurrentPool] = useState<string | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
-  const [taskFocus, setTaskFocus] = useState<number | null>(null);
-  const { tab, manageView, setTab, setManageView } = useUrlState();
+  const { route, navigate } = useRoute();
+  const tab = route.tab;
 
   useEffect(() => {
     if (!storedToken) return;
@@ -139,8 +148,9 @@ export default function App() {
     return <LoginPage key={loginError} initialError={loginError} onAuthed={handleAuthed} />;
   }
 
-  const hint =
-    tab === "manage" ? MANAGE_HINTS[manageView] : TAB_HINTS[tab] ?? "";
+  const openTask = (id: number) => {
+    navigate({ tab: "work", view: "tasks", task: id });
+  };
 
   return (
     <ApiProvider token={token} onUnauthorized={handleUnauthorized}>
@@ -182,7 +192,7 @@ export default function App() {
                   : "border-transparent hover:text-text",
               )}
               aria-current={tab === item ? "page" : undefined}
-              onClick={() => setTab(item)}
+              onClick={() => navigate(tabRoute(item, route))}
             >
               {label}
             </button>
@@ -217,61 +227,28 @@ export default function App() {
         </nav>
 
         <main className="min-h-0 flex-1">
-          {tab === "overview" && (
-            <OverviewPage
-              reloadSignal={reloadSignal}
-              onOpenTask={(id) => {
-                setTaskFocus(id);
-                setTab("work");
-              }}
-              onOpenTasks={() => setTab("work")}
-              onOpenApprovals={() => setTab("approvals")}
-              onOpenLogs={() => setManageView("llm-logs")}
-            />
-          )}
+          {tab === "overview" && <OverviewPage reloadSignal={reloadSignal} />}
           {tab === "chat" && (
             <ChatPage
               currentPool={currentPool}
               onCurrentPoolChange={setCurrentPool}
               reloadSignal={reloadSignal}
-              onOpenTask={(id) => {
-                setTaskFocus(id);
-                setTab("work");
-              }}
+              onOpenTask={openTask}
             />
           )}
-          {tab === "work" && (
-            <WorkPage
-              reloadSignal={reloadSignal}
-              focusTaskId={taskFocus}
-              onFocusHandled={() => setTaskFocus(null)}
-            />
-          )}
+          {tab === "work" && <WorkPage reloadSignal={reloadSignal} />}
           {tab === "approvals" && (
-            <ApprovalsPage
-              reloadSignal={reloadSignal}
-              onOpenTask={(id) => {
-                setTaskFocus(id);
-                setTab("work");
-              }}
-            />
+            <ApprovalsPage reloadSignal={reloadSignal} onOpenTask={openTask} />
           )}
           {tab === "memories" && <MemoryPage reloadSignal={reloadSignal} />}
           {tab === "manage" && (
             <ManagePage
-              view={manageView}
-              onViewChange={setManageView}
+              view={route.tab === "manage" ? route.view : "usage"}
+              onViewChange={(view) => navigate({ tab: "manage", view })}
               reloadSignal={reloadSignal}
             />
           )}
         </main>
-
-        <footer
-          className="flex-none border-t border-border bg-surface px-4 py-1.5 text-right text-[11.5px] text-muted"
-          hidden={!hint}
-        >
-          {hint}
-        </footer>
       </div>
     </ApiProvider>
   );

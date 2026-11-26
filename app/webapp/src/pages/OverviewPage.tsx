@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
+import { useRoute } from "../lib/use-route.tsx";
 import { cx } from "../lib/cx.ts";
 import {
   badgeVariant,
@@ -129,22 +130,12 @@ interface AlertItem {
   meta?: string;
 }
 
-export function OverviewPage({
-  reloadSignal,
-  onOpenTask,
-  onOpenTasks,
-  onOpenApprovals,
-  onOpenLogs,
-}: {
-  reloadSignal: number;
-  onOpenTask: (taskId: number) => void;
-  onOpenTasks: () => void;
-  onOpenApprovals: () => void;
-  onOpenLogs: () => void;
-}) {
+export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
+  const { navigate } = useRoute();
   const [data, setData] = useState<OverviewData | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [decidingId, setDecidingId] = useState<number | null>(null);
 
   const load = useCallback(
     async (silent = false) => {
@@ -179,6 +170,22 @@ export function OverviewPage({
   }, [reloadSignal, load]);
 
   usePolling(() => load(true), 10_000);
+
+  const decide = async (id: number, decision: "approved" | "rejected") => {
+    setDecidingId(id);
+    try {
+      await request(`/v1/approvals/${id}/decide`, {
+        method: "POST",
+        body: { decision, by: "web" },
+      });
+      setStatus({ text: `#${id} 已${decision === "approved" ? "批准" : "拒绝"}` });
+      await load(true);
+    } catch (e) {
+      setStatus({ text: `裁决失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setDecidingId(null);
+    }
+  };
 
   const now = Date.now();
   const todayStart = useMemo(() => {
@@ -373,7 +380,11 @@ export function OverviewPage({
               aside={
                 <>
                   <span className="text-faint">{activeTasks.length} 个</span>
-                  <Button size="sm" variant="ghost" onClick={onOpenTasks}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => navigate({ tab: "work", view: "tasks" })}
+                  >
                     全部任务 →
                   </Button>
                 </>
@@ -401,7 +412,7 @@ export function OverviewPage({
                         <tr
                           key={task.id}
                           className="cursor-pointer border-t border-border transition-colors hover:bg-surface2"
-                          onClick={() => onOpenTask(task.id)}
+                          onClick={() => navigate({ tab: "work", view: "tasks", task: task.id })}
                         >
                           <td className="px-3.5 py-2 font-mono text-[11.5px] text-faint">
                             {task.id}
@@ -441,18 +452,44 @@ export function OverviewPage({
                 <div className="divide-y divide-border">
                   {pendingApprovals.slice(0, 5).map((approval) => (
                     <div key={approval.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
-                      <Chip tone="amber">{approval.action}</Chip>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[12.5px]" title={approval.detail}>
-                          {approval.detail || approval.why}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-faint">
-                          任务 #{approval.task_id} · {remainText(approval.expires_at, now)}
-                        </div>
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-start gap-2.5 text-left outline-none transition hover:text-accent-ink focus-visible:ring-2 focus-visible:ring-accent/35"
+                        onClick={() =>
+                          navigate({ tab: "approvals", view: "pending", id: approval.id })
+                        }
+                      >
+                        <Chip tone="amber">{approval.action}</Chip>
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className="block truncate text-[12.5px]"
+                            title={approval.detail}
+                          >
+                            {approval.detail || approval.why}
+                          </span>
+                          <span className="mt-0.5 block text-[11px] text-faint">
+                            任务 #{approval.task_id} · {remainText(approval.expires_at, now)}
+                          </span>
+                        </span>
+                      </button>
+                      <div className="flex flex-none items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={decidingId === approval.id}
+                          onClick={() => void decide(approval.id, "approved")}
+                        >
+                          批准
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          disabled={decidingId === approval.id}
+                          onClick={() => void decide(approval.id, "rejected")}
+                        >
+                          拒绝
+                        </Button>
                       </div>
-                      <Button size="sm" variant="ghost" onClick={onOpenApprovals}>
-                        处理
-                      </Button>
                     </div>
                   ))}
                 </div>
@@ -529,7 +566,11 @@ export function OverviewPage({
               aside={
                 <>
                   <span className="text-faint">{alerts.length ? `${alerts.length} 条` : ""}</span>
-                  <Button size="sm" variant="ghost" onClick={onOpenLogs}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => navigate({ tab: "manage", view: "llm-logs" })}
+                  >
                     模型日志 →
                   </Button>
                 </>

@@ -323,7 +323,7 @@ export function PageHead({
   sub,
   actions,
 }: {
-  eyebrow: ReactNode;
+  eyebrow?: ReactNode;
   title: ReactNode;
   sub?: ReactNode;
   actions?: ReactNode;
@@ -331,9 +331,11 @@ export function PageHead({
   return (
     <div className="mb-4 flex flex-wrap items-end gap-4">
       <div className="min-w-0">
-        <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-faint">
-          {eyebrow}
-        </div>
+        {eyebrow ? (
+          <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-faint">
+            {eyebrow}
+          </div>
+        ) : null}
         <h1 className="rb-display m-0 mt-1 text-[25px] leading-[1.15]">{title}</h1>
         {sub ? (
           <p className="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-muted">{sub}</p>

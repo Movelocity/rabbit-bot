@@ -1,5 +1,5 @@
-import { cx } from "../lib/cx.ts";
-import { MANAGE_VIEWS, type ManageView } from "../lib/use-url-state.ts";
+import type { ManageView } from "../lib/router.ts";
+import { SideNav, SideNavGroup, SideNavItem } from "../components/SideNav.tsx";
 import { UsersView } from "./manage/UsersView.tsx";
 import { PersonaView } from "./manage/PersonaView.tsx";
 import { ExecutorsView } from "./manage/ExecutorsView.tsx";
@@ -40,6 +40,15 @@ const HINTS: Record<ManageView, string> = {
   "work-memory": "只读：跨会话共享的 memory.md；写入仍走 Agent 的 working_memory 工具。",
 };
 
+const MANAGE_GROUPS: { label: string; views: ManageView[] }[] = [
+  { label: "观测", views: ["usage", "task-stats", "llm-logs"] },
+  {
+    label: "配置",
+    views: ["models", "persona", "settings", "schedules", "executors", "users"],
+  },
+  { label: "只读", views: ["skills", "work-memory"] },
+];
+
 export function ManagePage({
   view,
   onViewChange,
@@ -50,27 +59,24 @@ export function ManagePage({
   reloadSignal: number;
 }) {
   return (
-    <div className="grid h-full min-h-0 grid-cols-[190px_minmax(0,1fr)] max-[820px]:grid-cols-1 max-[820px]:grid-rows-[auto_minmax(0,1fr)]">
-      <aside className="rb-thin-scroll flex min-h-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface p-2.5 max-[820px]:flex-row max-[820px]:overflow-x-auto max-[820px]:overflow-y-hidden max-[820px]:border-b max-[820px]:border-r-0 max-[820px]:px-3 max-[820px]:py-2">
-        {MANAGE_VIEWS.map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={cx(
-              "w-full rounded-[8px] px-2.5 py-2 text-left text-[12.5px] text-muted transition hover:bg-surface2 hover:text-text max-[820px]:w-auto max-[820px]:whitespace-nowrap",
-              view === item && "bg-accent-soft font-bold text-accent-ink",
-            )}
-            aria-current={view === item ? "page" : undefined}
-            onClick={() => onViewChange(item)}
-          >
-            {LABELS[item]}
-          </button>
+    <div className="flex h-full min-h-0 max-[820px]:flex-col">
+      <SideNav ariaLabel="管理范围">
+        {MANAGE_GROUPS.map((group) => (
+          <SideNavGroup key={group.label} label={group.label}>
+            {group.views.map((item) => (
+              <SideNavItem
+                key={item}
+                active={view === item}
+                onClick={() => onViewChange(item)}
+                label={LABELS[item]}
+              />
+            ))}
+          </SideNavGroup>
         ))}
-      </aside>
-      <div className="rb-thin-scroll min-h-0 overflow-y-auto px-[clamp(14px,3vw,34px)] pb-12 pt-5 max-[820px]:px-3.5 max-[820px]:pb-10 max-[820px]:pt-3">
+      </SideNav>
+      <div className="rb-thin-scroll min-h-0 min-w-0 flex-1 overflow-y-auto px-[clamp(14px,3vw,34px)] pb-12 pt-5 max-[820px]:px-3.5 max-[820px]:pb-10 max-[820px]:pt-3">
         <div className="mb-3.5">
-          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">Manage</div>
-          <h1 className="rb-display m-0 mt-0.5 text-[22px] leading-tight">{LABELS[view]}</h1>
+          <h1 className="rb-display m-0 text-[22px] leading-tight">{LABELS[view]}</h1>
           <p className="mt-1 max-w-[62ch] text-[11.5px] leading-relaxed text-muted">
             {HINTS[view]}
           </p>

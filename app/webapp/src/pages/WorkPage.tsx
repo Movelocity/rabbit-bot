@@ -3,106 +3,24 @@ import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
 import { cx } from "../lib/cx.ts";
 import { friendlyError } from "../lib/format.ts";
+import { useRoute } from "../lib/use-route.tsx";
 import type { ExecutorInfo, OutputNode, Project, TaskView } from "../lib/types.ts";
 import { Empty, StatusText } from "../components/ui.tsx";
+import { SideNav, SideNavGroup, SideNavItem } from "../components/SideNav.tsx";
 import { TaskBoard } from "./work/TaskBoard.tsx";
 import { TaskDetail } from "./work/TaskDetail.tsx";
 import { OutputsBrowser } from "./work/OutputsBrowser.tsx";
-import { ProjectHeader, ProjectsOverview } from "./work/ProjectPanel.tsx";
+import { ProjectHeader } from "./work/ProjectPanel.tsx";
 import { countFiles, flattenFiles, taskIdOfOutput } from "./work/FilePreview.tsx";
 import {
-  parseScope,
+  PROJECT_GROUPS,
   projectGroup,
-  scopeKey,
-  scopeLabel,
   summarizeTasks,
+  type ProjectGroupKey,
   type TaskSummary,
-  type WorkScope,
 } from "./work/shared.ts";
 
 const EMPTY_SUMMARY: TaskSummary = { total: 0, running: 0, pending: 0, blocked: 0, done: 0 };
-
-/** 旧链接 ?tab=outputs / ?tab=projects 落到对应范围 */
-function scopeFromUrl(): WorkScope {
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get("scope");
-  const tab = params.get("tab");
-  let scope: WorkScope;
-  if (raw) {
-    scope = parseScope(raw);
-  } else if (tab === "outputs") {
-    scope = { kind: "outputs" };
-  } else if (tab === "projects" || tab === "plans") {
-    scope = { kind: "projects" };
-  } else {
-    scope = { kind: "tasks" };
-  }
-  if (scope.kind === "outputs") {
-    const path = params.get("path");
-    if (path) scope.path = path;
-  }
-  if (scope.kind === "task") {
-    const from = params.get("from");
-    if (from) scope.from = parseScope(from);
-  }
-  return scope;
-}
-
-function writeScope(scope: WorkScope, replace = false) {
-  const params = new URLSearchParams(window.location.search);
-  params.set("tab", "work");
-  params.set("scope", scopeKey(scope));
-  if (scope.kind === "outputs" && scope.path) params.set("path", scope.path);
-  else params.delete("path");
-  if (scope.kind === "task" && scope.from) params.set("from", scopeKey(scope.from));
-  else params.delete("from");
-  const url = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
-  const now = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  if (url === now) return;
-  if (replace) window.history.replaceState({ tab: "work" }, "", url);
-  else window.history.pushState({ tab: "work" }, "", url);
-}
-
-function NavItem({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-  alert,
-  title,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  label: ReactNode;
-  count?: ReactNode;
-  alert?: number;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-      className={cx(
-        "flex w-full min-w-0 items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] outline-none transition",
-        "focus-visible:ring-2 focus-visible:ring-accent/35 max-[820px]:w-auto max-[820px]:flex-none",
-        active ? "bg-accent-soft font-semibold text-accent-ink" : "text-muted hover:bg-surface2 hover:text-text",
-      )}
-    >
-      <span className="flex size-4 flex-none items-center justify-center">{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {alert ? (
-        <span className="flex-none rounded-full bg-amber px-1.5 text-[10px] font-bold leading-[16px] text-white" title="待审批">
-          {alert}
-        </span>
-      ) : null}
-      {count !== undefined ? <span className="flex-none text-[10.5px] tabular-nums text-faint">{count}</span> : null}
-    </button>
-  );
-}
 
 const ICON_CLS = "size-3.5";
 
@@ -123,17 +41,6 @@ function OutputsIcon() {
   );
 }
 
-function ProjectsIcon() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={ICON_CLS}>
-      <rect x="2" y="2" width="5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="9" y="2" width="5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="2" y="9" width="5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="9" y="9" width="5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
-
 function ProjectDot({ summary }: { summary: TaskSummary }) {
   const cls = summary.blocked
     ? "bg-rose"
@@ -147,17 +54,15 @@ function ProjectDot({ summary }: { summary: TaskSummary }) {
   return <span className={cx("size-2 rounded-full", cls)} />;
 }
 
-export function WorkPage({
-  reloadSignal,
-  focusTaskId,
-  onFocusHandled,
-}: {
-  reloadSignal: number;
-  focusTaskId?: number | null;
-  onFocusHandled?: () => void;
-}) {
+export function WorkPage({ reloadSignal }: { reloadSignal: number }) {
   const request = useApi();
-  const [scope, setScopeState] = useState<WorkScope>(scopeFromUrl);
+  const { route, navigate, back } = useRoute();
+  const work = route.tab === "work" ? route : null;
+  const view = work?.view ?? "tasks";
+  const taskId = work?.task;
+  const projectSlug = work?.view === "project" ? work.slug : undefined;
+  const outputPath = work?.view === "outputs" ? work.path ?? null : null;
+
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tree, setTree] = useState<OutputNode[]>([]);
@@ -165,19 +70,7 @@ export function WorkPage({
   const [loaded, setLoaded] = useState(false);
   const [treeLoading, setTreeLoading] = useState(true);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
-
-  const setScope = useCallback((next: WorkScope, replace = false) => {
-    setScopeState(next);
-    writeScope(next, replace);
-  }, []);
-
-  useEffect(() => {
-    writeScope(scope, true);
-    const onPop = () => setScopeState(scopeFromUrl());
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-    // 只在挂载时规范一次 URL
-  }, []);
+  const [doneOpen, setDoneOpen] = useState(false);
 
   const loadTasks = useCallback(
     async (silent: boolean) => {
@@ -235,12 +128,6 @@ export function WorkPage({
   usePolling(() => loadTasks(true), 3000);
   usePolling(() => loadTree(), 20000);
 
-  useEffect(() => {
-    if (focusTaskId === null || focusTaskId === undefined) return;
-    setScope({ kind: "task", id: focusTaskId, from: { kind: "tasks" } });
-    onFocusHandled?.();
-  }, [focusTaskId, onFocusHandled, setScope]);
-
   // ---------- 派生数据：任务 ↔ 项目 ↔ 产出 ----------
   const tasksById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const projectsBySlug = useMemo(() => new Map(projects.map((p) => [p.slug, p])), [projects]);
@@ -279,14 +166,6 @@ export function WorkPage({
     return map;
   }, [tasksByProject]);
 
-  const outputsByProject = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const [slug, list] of tasksByProject) {
-      map.set(slug, list.reduce((n, t) => n + (outputCounts.get(t.id) ?? 0), 0));
-    }
-    return map;
-  }, [tasksByProject, outputCounts]);
-
   const sortedProjects = useMemo(() => {
     const rank = { active: 0, planned: 1, done: 2 } as const;
     return [...projects].sort((a, b) => {
@@ -296,39 +175,55 @@ export function WorkPage({
     });
   }, [projects, summaries]);
 
+  const groupedProjects = useMemo(() => {
+    const out: Record<ProjectGroupKey, Project[]> = { active: [], planned: [], done: [] };
+    for (const project of sortedProjects) {
+      out[projectGroup(project, summaries.get(project.slug) ?? EMPTY_SUMMARY)].push(project);
+    }
+    return out;
+  }, [sortedProjects, summaries]);
+
   const pendingAll = tasks.filter((t) => t.status === "pending_approval").length;
   const totalFiles = useMemo(() => countFiles(tree), [tree]);
 
-  const openTask = (id: number, from: WorkScope = scope) => setScope({ kind: "task", id, from });
+  const openTask = (id: number) => {
+    if (view === "project" && work?.slug) {
+      navigate({ tab: "work", view: "project", slug: work.slug, task: id });
+    } else {
+      navigate({ tab: "work", view: "tasks", task: id });
+    }
+  };
 
   /** 任务产出目录里的第一个文件，用于「在产出目录中查看」 */
-  const firstFileInDir = (taskId: number): string | undefined => {
-    const dir = outputDirs.get(taskId);
+  const firstFileInDir = (id: number): string | undefined => {
+    const dir = outputDirs.get(id);
     return dir ? flattenFiles(dir.children ?? [])[0]?.path : undefined;
   };
 
   // ---------- 主区内容 ----------
   let main: ReactNode;
-  if (scope.kind === "outputs") {
+  if (view === "outputs") {
     main = (
       <OutputsBrowser
         tree={tree}
         treeLoading={treeLoading}
         tasks={tasksById}
-        path={scope.path ?? null}
-        onSelectPath={(path) => setScope({ kind: "outputs", path }, true)}
+        path={outputPath}
+        onSelectPath={(path) =>
+          navigate({ tab: "work", view: "outputs", path }, { replace: true })
+        }
         onOpenTask={(id) => openTask(id)}
         reloadSignal={reloadSignal}
       />
     );
   } else {
     let body: ReactNode;
-    if (scope.kind === "task") {
-      const task = tasksById.get(scope.id);
+    if (taskId !== undefined) {
+      const task = tasksById.get(taskId);
       body = !task ? (
         loaded ? (
           <div className="mx-auto w-full max-w-[980px]">
-            <Empty>找不到任务 #{scope.id}，可能已被移除。</Empty>
+            <Empty>找不到任务 #{taskId}，可能已被移除。</Empty>
           </div>
         ) : (
           <p className="text-[13px] text-muted">加载中…</p>
@@ -339,34 +234,36 @@ export function WorkPage({
           task={task}
           outputs={outputDirs.get(task.id) ?? null}
           projects={projectsBySlug}
-          backLabel={scopeLabel(scope.from ?? { kind: "tasks" }, scope.from?.kind === "project" ? projectsBySlug.get(scope.from.slug)?.title : undefined)}
-          onBack={() => setScope(scope.from ?? { kind: "tasks" })}
+          backLabel={
+            view === "project" && projectSlug
+              ? projectsBySlug.get(projectSlug)?.title || projectSlug
+              : "全部任务"
+          }
+          onBack={() =>
+            back(
+              view === "project" && projectSlug
+                ? { tab: "work", view: "project", slug: projectSlug }
+                : { tab: "work", view: "tasks" },
+            )
+          }
           onChanged={() => loadTasks(true)}
-          onOpenProject={(slug) => setScope({ kind: "project", slug })}
-          onOpenOutput={(path) => setScope({ kind: "outputs", path })}
+          onOpenProject={(slug) => navigate({ tab: "work", view: "project", slug })}
+          onOpenOutput={(path) => navigate({ tab: "work", view: "outputs", path })}
           onOpenOutputDir={() => {
             const first = firstFileInDir(task.id);
-            setScope(first ? { kind: "outputs", path: first } : { kind: "outputs" });
+            navigate(
+              first
+                ? { tab: "work", view: "outputs", path: first }
+                : { tab: "work", view: "outputs" },
+            );
           }}
         />
       );
-    } else if (scope.kind === "projects") {
-      body = (
-        <>
-          <WorkHead eyebrow="Projects" title="项目" sub="按推进状态分组；点卡片进入项目，任务和产出都在里面。" />
-          <ProjectsOverview
-            projects={projects}
-            summaries={summaries}
-            outputsByProject={outputsByProject}
-            onOpen={(slug) => setScope({ kind: "project", slug }, true)}
-          />
-        </>
-      );
-    } else if (scope.kind === "project") {
-      const project = projectsBySlug.get(scope.slug);
+    } else if (view === "project" && projectSlug) {
+      const project = projectsBySlug.get(projectSlug);
       body = !project ? (
         loaded ? (
-          <Empty>找不到项目「{scope.slug}」，可能已被移除。</Empty>
+          <Empty>找不到项目「{projectSlug}」，可能已被移除。</Empty>
         ) : (
           <p className="text-[13px] text-muted">加载中…</p>
         )
@@ -375,7 +272,9 @@ export function WorkPage({
           <ProjectHeader
             project={project}
             summary={summaries.get(project.slug) ?? EMPTY_SUMMARY}
-            outputs={outputsByProject.get(project.slug) ?? 0}
+            outputs={tasksByProject
+              .get(project.slug)
+              ?.reduce((n, t) => n + (outputCounts.get(t.id) ?? 0), 0) ?? 0}
             onSaved={(updated) => setProjects((prev) => prev.map((p) => (p.slug === updated.slug ? updated : p)))}
           />
           <h2 className="rb-display mb-2.5 mt-0 text-[16px]">关联任务</h2>
@@ -387,7 +286,7 @@ export function WorkPage({
             activeTaskId={null}
             showProjects={false}
             emptyHint={`还没有任务关联到这个项目。创建任务时带上 objects=["project:${project.slug}"] 即可在这里聚合。`}
-            onOpenTask={(id) => openTask(id, scope)}
+            onOpenTask={(id) => openTask(id)}
           />
         </Fragment>
       );
@@ -395,7 +294,6 @@ export function WorkPage({
       body = (
         <>
           <WorkHead
-            eyebrow="Task Pool"
             title="全部任务"
             sub="按状态扫任务；点卡片进入任务详情，审批不离开工作台。"
           />
@@ -406,7 +304,7 @@ export function WorkPage({
             executors={executors}
             activeTaskId={null}
             emptyHint={loaded ? "没有任务。" : "加载中…"}
-            onOpenTask={(id) => openTask(id, scope)}
+            onOpenTask={(id) => openTask(id)}
           />
         </>
       );
@@ -421,66 +319,72 @@ export function WorkPage({
 
   return (
     <div className="flex h-full min-h-0 max-[820px]:flex-col">
-      <nav
-        aria-label="工作台范围"
-        className="rb-thin-scroll flex w-[228px] flex-none flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface px-2 py-3 max-[820px]:w-full max-[820px]:flex-row max-[820px]:overflow-x-auto max-[820px]:border-b max-[820px]:border-r-0 max-[820px]:py-2"
-      >
-        <NavItem
-          active={scope.kind === "tasks" || scope.kind === "task"}
-          onClick={() => setScope({ kind: "tasks" }, true)}
+      <SideNav ariaLabel="工作台范围">
+        <SideNavItem
+          active={view === "tasks"}
+          onClick={() => navigate({ tab: "work", view: "tasks" }, { replace: true })}
           icon={<TasksIcon />}
           label="全部任务"
           alert={pendingAll}
           count={tasks.length}
         />
-        <NavItem
-          active={scope.kind === "outputs"}
-          onClick={() => setScope({ kind: "outputs" }, true)}
+        <SideNavItem
+          active={view === "outputs"}
+          onClick={() => navigate({ tab: "work", view: "outputs" }, { replace: true })}
           icon={<OutputsIcon />}
           label="产出文件"
           count={totalFiles}
         />
-        <NavItem
-          active={scope.kind === "projects"}
-          onClick={() => setScope({ kind: "projects" }, true)}
-          icon={<ProjectsIcon />}
-          label="项目总览"
-          count={projects.length}
-        />
 
-        <div className="mb-1 mt-3 px-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-faint max-[820px]:hidden">
-          项目
-        </div>
-        <span className="mx-1 hidden w-px flex-none self-stretch bg-border max-[820px]:block" aria-hidden="true" />
-        {sortedProjects.map((p) => {
-          const summary = summaries.get(p.slug) ?? EMPTY_SUMMARY;
+        {PROJECT_GROUPS.map((group) => {
+          const list = groupedProjects[group.key];
+          if (!list.length) return null;
+          const collapsible = group.key === "done";
           return (
-            <NavItem
-              key={p.slug}
-              active={scope.kind === "project" && scope.slug === p.slug}
-              onClick={() => setScope({ kind: "project", slug: p.slug }, true)}
-              icon={<ProjectDot summary={summary} />}
-              label={p.title}
-              title={`${p.title}（${p.slug}）`}
-              alert={summary.pending}
-              count={summary.total || undefined}
-            />
+            <SideNavGroup
+              key={group.key}
+              label={group.label}
+              count={list.length}
+              collapsible={collapsible}
+              collapsed={collapsible && !doneOpen}
+              onToggle={() => setDoneOpen((open) => !open)}
+            >
+              {list.map((project) => {
+                const summary = summaries.get(project.slug) ?? EMPTY_SUMMARY;
+                return (
+                  <SideNavItem
+                    key={project.slug}
+                    active={view === "project" && projectSlug === project.slug}
+                    onClick={() =>
+                      navigate(
+                        { tab: "work", view: "project", slug: project.slug },
+                        { replace: true },
+                      )
+                    }
+                    icon={<ProjectDot summary={summary} />}
+                    label={project.title}
+                    title={`${project.title}（${project.slug}）`}
+                    alert={summary.pending}
+                    count={summary.total || undefined}
+                  />
+                );
+              })}
+            </SideNavGroup>
           );
         })}
         {loaded && !projects.length ? (
           <p className="px-2.5 text-[11px] text-faint max-[820px]:hidden">还没有项目</p>
         ) : null}
-      </nav>
+      </SideNav>
 
       <main className="min-h-0 min-w-0 flex-1 bg-bg">{main}</main>
     </div>
   );
 }
 
-function WorkHead({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string }) {
+function WorkHead({ title, sub }: { title: string; sub: string }) {
   return (
     <div className="mb-3.5">
-      <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-faint">{eyebrow}</div>
       <h1 className="rb-display m-0 mt-1 text-[23px] leading-[1.15]">{title}</h1>
       <p className="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-muted">{sub}</p>
     </div>

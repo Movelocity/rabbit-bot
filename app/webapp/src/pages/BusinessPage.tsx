@@ -1216,10 +1216,7 @@ export function BusinessPage({
           <div className="flex-none px-3 pb-2 pt-3">{viewSwitch}</div>
         ) : (
           <div className="flex-none px-3.5 pb-1.5 pt-3.5">
-            <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
-              Business Map
-            </div>
-            <div className="rb-display mt-0.5 text-[17px] font-bold">知识</div>
+            <div className="rb-display text-[17px] font-bold">知识</div>
             <div className="mt-1 text-[11.5px] text-muted">
               只读{lintCount !== null ? ` · lint ${lintCount} 项` : ""}
             </div>

@@ -31,6 +31,10 @@ npm run start:dev     # 用 tsx 直接跑后端
 - **不要用 `127.0.0.1`**：登录态存在 localStorage（`rabbit-bot.api-token`）并按 origin 隔离，换 host 会变成未登录。
 - **不要用 `/ui/`**：该路径会返回 401；静态页面只走根路径 `/`。
 
+## 前端信息架构
+
+- 新增或调整前端页面前，先更新 `docs/SITEMAP-webapp.md`，遵守其中的导航规则（最多两层导航、二级只用 SideNav / Segmented、URL 只由 `lib/router.ts` 写）。
+
 ## 改动后的构建要求
 
 - **前端（`app/webapp/src/`）改完必须重新构建**：`npm run web:build`，把产物写到 `app/web/`。只跑 typecheck 不会更新线上页面。

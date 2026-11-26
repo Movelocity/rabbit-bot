@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApi } from "../lib/api-context.tsx";
 import { usePolling } from "../lib/use-polling.ts";
+import { useRoute } from "../lib/use-route.tsx";
 import { cx } from "../lib/cx.ts";
 import { badgeVariant, formatTs, friendlyError } from "../lib/format.ts";
 import type { Approval, ApprovalStatus } from "../lib/types.ts";
@@ -13,23 +14,9 @@ import {
   Segmented,
   StatusText,
 } from "../components/ui.tsx";
+import { Drawer } from "../components/Drawer.tsx";
 import { HostReadLog } from "./approvals/HostReadLog.tsx";
 import { HostReadRules } from "./approvals/HostReadRules.tsx";
-
-type View = "log" | "approvals" | "rules";
-const VIEWS: View[] = ["log", "approvals", "rules"];
-
-function initialView(): View {
-  const v = new URLSearchParams(window.location.search).get("scope");
-  return VIEWS.includes(v as View) ? (v as View) : "log";
-}
-
-/** 子视图记进 URL，刷新/分享链接能回到同一处 */
-function syncViewToUrl(view: View) {
-  const params = new URLSearchParams(window.location.search);
-  params.set("scope", view);
-  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}${window.location.hash}`);
-}
 
 type StatusFilter = "" | ApprovalStatus;
 
@@ -49,16 +36,17 @@ export function ApprovalsPage({
   onOpenTask?: (taskId: number) => void;
 }) {
   const request = useApi();
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
+  const { route, navigate } = useRoute();
+  const view = route.tab === "approvals" ? route.view : "pending";
+  const routeId = route.tab === "approvals" ? route.id : undefined;
+
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
   const [rows, setRows] = useState<Approval[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
-  const [view, setViewState] = useState<View>(initialView);
   const [deciding, setDeciding] = useState(false);
-  const setView = (v: View) => {
-    setViewState(v);
-    syncViewToUrl(v);
-  };
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [rulesReload, setRulesReload] = useState(0);
+  const filterInitialized = useRef(false);
 
   const load = useCallback(
     async (silent = false) => {
@@ -67,6 +55,10 @@ export function ApprovalsPage({
         const data = await request<Approval[]>("/v1/approvals");
         setRows(data);
         setStatus({ text: data.length ? "" : "没有权限申请。" });
+        if (!filterInitialized.current) {
+          filterInitialized.current = true;
+          setStatusFilter(data.some((row) => row.status === "pending") ? "pending" : "");
+        }
       } catch (e) {
         setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
       }
@@ -124,28 +116,66 @@ export function ApprovalsPage({
     [rows, statusFilter],
   );
 
+  // 深链进来时只调整一次筛选，之后尊重用户手动选的筛选
+  const revealedId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (routeId === undefined || revealedId.current === routeId) return;
+    const target = rows.find((row) => row.id === routeId);
+    if (!target) return;
+    revealedId.current = routeId;
+    if (statusFilter && target.status !== statusFilter) setStatusFilter("");
+  }, [routeId, rows, statusFilter]);
+
   const selected =
-    sortedRows.find((row) => row.id === selectedId) ?? sortedRows[0] ?? null;
+    sortedRows.find((row) => row.id === routeId) ?? sortedRows[0] ?? null;
 
   return (
     <Page>
-      <div className="mb-3.5">
+      <div className="mb-3.5 flex flex-wrap items-center gap-2">
         <Segmented
           value={view}
-          onChange={setView}
+          onChange={(next) => navigate({ tab: "approvals", view: next })}
           label="权限视图"
           options={[
-            { value: "log", label: "读取记录" },
-            { value: "approvals", label: counts.pending ? `审批（${counts.pending} 待处理）` : "审批" },
-            { value: "rules", label: "白名单与规则" },
+            {
+              value: "pending",
+              label: counts.pending ? `审批（${counts.pending} 待处理）` : "审批",
+            },
+            { value: "reads", label: "读取记录" },
           ]}
         />
+        {view === "reads" ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={() => setDrawerOpen(true)}
+          >
+            白名单与规则
+          </Button>
+        ) : null}
       </div>
 
-      {view === "log" && <HostReadLog onChanged={() => void load(true)} />}
-      {view === "rules" && <HostReadRules reloadSignal={reloadSignal} />}
+      {view === "reads" && (
+        <>
+          <HostReadLog
+            onChanged={() => {
+              void load(true);
+              if (drawerOpen) setRulesReload((n) => n + 1);
+            }}
+          />
+          {drawerOpen ? (
+            <Drawer title="白名单与规则" onClose={() => setDrawerOpen(false)}>
+              <HostReadRules reloadSignal={reloadSignal + rulesReload} />
+            </Drawer>
+          ) : null}
+        </>
+      )}
 
-      {view === "approvals" && (<>
+      {view === "pending" && (<>
+      <p className="mb-2 mt-0 text-[11.5px] text-muted">
+        审批请在飞书里完成，也可以在这里直接批准或拒绝。
+      </p>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="inline-flex flex-wrap rounded-[8px] border border-border bg-surface2 p-0.5">
           {STATUS_TABS.map((tab) => (
@@ -186,7 +216,12 @@ export function ApprovalsPage({
                       ? "border-accent/48 bg-accent-soft"
                       : "border-border bg-surface hover:border-line-strong",
                   )}
-                  onClick={() => setSelectedId(row.id)}
+                  onClick={() =>
+                    navigate(
+                      { tab: "approvals", view: "pending", id: row.id },
+                      { replace: true },
+                    )
+                  }
                 >
                   <span
                     className={cx(

@@ -214,7 +214,6 @@ export function MemoriesPage({
         <div className="mb-3.5 flex flex-wrap items-center gap-2">{header}</div>
       ) : (
         <PageHead
-          eyebrow="Memories"
           title="记忆"
           sub="Web 只改正文和删除；新增、过期、跨会话梳理仍走 IM。来源可回溯到具体消息。"
           actions={<Chip>{rows.length} / {total} 条</Chip>}
