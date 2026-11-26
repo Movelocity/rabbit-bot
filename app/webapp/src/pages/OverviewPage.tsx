@@ -5,7 +5,6 @@ import { useRoute } from "../lib/use-route.tsx";
 import { cx } from "../lib/cx.ts";
 import {
   badgeVariant,
-  duration,
   formatTs,
   friendlyError,
   num,
@@ -39,13 +38,10 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "已取消",
 };
 
-const ACTIVE_STATUSES = ["running", "blocked", "pending_approval", "pending"];
-
-const STATUS_PRIORITY: Record<string, number> = {
-  running: 0,
-  blocked: 1,
-  pending_approval: 2,
-  pending: 3,
+const DECISION_LABEL: Record<string, string> = {
+  approved: "已通过",
+  rejected: "已拒绝",
+  timeout: "已超时",
 };
 
 interface OverviewData {
@@ -63,6 +59,25 @@ function pad(n: number): string {
 
 function dayLabel(date: Date): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** 列表里只留月日时分，秒和年份不占宽度。 */
+function shortTime(ms: number | null | undefined, local?: string | null): string {
+  if (local && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(local)) return local.slice(5, 16);
+  if (!ms) return "—";
+  const d = new Date(Number(ms));
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 审批详情常是长绝对路径：去掉家目录、压掉中间，保留头尾便于辨认。 */
+function abbreviate(value: string, max = 56): string {
+  const text = String(value ?? "")
+    .replace(/^\/Users\/[^/]+/, "~")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) * 0.35);
+  return `${text.slice(0, head)}…${text.slice(-(max - 1 - head))}`;
 }
 
 function fmtTokens(value: number): string {
@@ -83,12 +98,7 @@ function remainText(expiresAt: number, now: number): string {
   return minutes <= 1 ? "不到 1 分钟后过期" : `${minutes} 分钟后过期`;
 }
 
-function activeElapsed(task: TaskView, now: number): string {
-  if (task.status !== "running" && task.status !== "blocked") return "—";
-  const start = task.runner_started_at ?? task.start_at;
-  if (!start) return "—";
-  return duration(Math.max(0, now - start));
-}
+
 
 function Panel({
   title,
@@ -135,7 +145,6 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
   const { navigate } = useRoute();
   const [data, setData] = useState<OverviewData | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
-  const [decidingId, setDecidingId] = useState<number | null>(null);
 
   const load = useCallback(
     async (silent = false) => {
@@ -171,22 +180,6 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
 
   usePolling(() => load(true), 10_000);
 
-  const decide = async (id: number, decision: "approved" | "rejected") => {
-    setDecidingId(id);
-    try {
-      await request(`/v1/approvals/${id}/decide`, {
-        method: "POST",
-        body: { decision, by: "web" },
-      });
-      setStatus({ text: `#${id} 已${decision === "approved" ? "批准" : "拒绝"}` });
-      await load(true);
-    } catch (e) {
-      setStatus({ text: `裁决失败：${friendlyError(e)}`, error: true });
-    } finally {
-      setDecidingId(null);
-    }
-  };
-
   const now = Date.now();
   const todayStart = useMemo(() => {
     const d = new Date();
@@ -195,16 +188,15 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
   }, []);
 
   const tasks = data?.tasks ?? [];
-  const activeTasks = useMemo(
+  const recentTasks = useMemo(
     () =>
-      tasks
-        .filter((t) => ACTIVE_STATUSES.includes(t.status))
+      [...tasks]
         .sort((a, b) => {
-          const pa = STATUS_PRIORITY[a.status] ?? 9;
-          const pb = STATUS_PRIORITY[b.status] ?? 9;
-          if (pa !== pb) return pa - pb;
-          return b.updated_at - a.updated_at;
-        }),
+          const ra = a.status === "running" ? 0 : 1;
+          const rb = b.status === "running" ? 0 : 1;
+          return ra - rb || b.updated_at - a.updated_at;
+        })
+        .slice(0, 5),
     [tasks],
   );
 
@@ -229,6 +221,15 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
       (data?.approvals ?? [])
         .filter((a) => a.status === "pending")
         .sort((a, b) => a.expires_at - b.expires_at),
+    [data],
+  );
+
+  const recentDecisions = useMemo(
+    () =>
+      (data?.approvals ?? [])
+        .filter((a) => a.status !== "pending")
+        .sort((a, b) => (b.decided_at ?? b.created_at) - (a.decided_at ?? a.created_at))
+        .slice(0, 5),
     [data],
   );
 
@@ -376,10 +377,10 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
 
           <div className="mb-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
             <Panel
-              title="进行中的任务"
+              title="最近任务"
               aside={
                 <>
-                  <span className="text-faint">{activeTasks.length} 个</span>
+                  <span className="text-faint">{recentTasks.length} 条</span>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -390,50 +391,56 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
                 </>
               }
             >
-              {activeTasks.length === 0 ? (
+              {recentTasks.length === 0 ? (
                 <div className="px-3.5 py-8 text-center text-[12.5px] text-faint">
-                  没有进行中的任务。
+                  还没有任务。
                 </div>
               ) : (
                 <div className="rb-thin-scroll overflow-x-auto">
                   <table className="w-full border-collapse text-[12.5px]">
                     <thead>
                       <tr className="text-left text-[11px] text-faint">
-                        <th className="px-3.5 py-2 font-medium">#</th>
                         <th className="px-3.5 py-2 font-medium">任务</th>
                         <th className="px-3.5 py-2 font-medium">状态</th>
-                        <th className="px-3.5 py-2 font-medium">执行器</th>
-                        <th className="px-3.5 py-2 font-medium">阶段</th>
-                        <th className="px-3.5 py-2 text-right font-medium">用时</th>
+                        <th className="px-3.5 py-2 text-right font-medium">更新</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {activeTasks.slice(0, 8).map((task) => (
-                        <tr
-                          key={task.id}
-                          className="cursor-pointer border-t border-border transition-colors hover:bg-surface2"
-                          onClick={() => navigate({ tab: "work", view: "tasks", task: task.id })}
-                        >
-                          <td className="px-3.5 py-2 font-mono text-[11.5px] text-faint">
-                            {task.id}
-                          </td>
-                          <td className="max-w-[260px] truncate px-3.5 py-2 font-medium">
-                            {task.name || task.goal}
-                          </td>
-                          <td className="px-3.5 py-2">
-                            <Badge variant={badgeVariant(task.status)}>
-                              {STATUS_LABEL[task.status] ?? task.status}
-                            </Badge>
-                          </td>
-                          <td className="px-3.5 py-2 text-muted">{task.executor || "opencode"}</td>
-                          <td className="max-w-[220px] truncate px-3.5 py-2 text-muted">
-                            {task.stage || "—"}
-                          </td>
-                          <td className="px-3.5 py-2 text-right font-mono text-[11.5px] text-muted">
-                            {activeElapsed(task, now)}
-                          </td>
-                        </tr>
-                      ))}
+                      {recentTasks.map((task) => {
+                        const showMeta = task.status === "running" || task.status === "blocked";
+                        return (
+                          <tr
+                            key={task.id}
+                            className="cursor-pointer border-t border-border transition-colors hover:bg-surface2"
+                            onClick={() => navigate({ tab: "work", view: "tasks", task: task.id })}
+                          >
+                            <td className="max-w-[420px] px-3.5 py-2">
+                              <div className="flex min-w-0 items-baseline gap-1.5">
+                                <span className="flex-none font-mono text-[10.5px] text-faint">
+                                  #{task.id}
+                                </span>
+                                <span className="truncate font-medium">
+                                  {task.name || task.goal}
+                                </span>
+                              </div>
+                              {showMeta ? (
+                                <div className="mt-0.5 truncate text-[10.5px] text-faint">
+                                  {task.executor || "opencode"}
+                                  {task.stage ? ` · ${task.stage}` : ""}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="whitespace-nowrap px-3.5 py-2">
+                              <Badge variant={badgeVariant(task.status)}>
+                                {STATUS_LABEL[task.status] ?? task.status}
+                              </Badge>
+                            </td>
+                            <td className="whitespace-nowrap px-3.5 py-2 text-right font-mono text-[11px] text-muted">
+                              {shortTime(task.updated_at, task.updated_at_local)}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -441,57 +448,59 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
             </Panel>
 
             <Panel
-              title="需要你处理"
-              aside={<span className="text-faint">{pendingApprovals.length} 项</span>}
+              title="最近处理"
+              aside={
+                <>
+                  <span className="text-faint">{recentDecisions.length} 条</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => navigate({ tab: "approvals", view: "pending" })}
+                  >
+                    审批台 →
+                  </Button>
+                </>
+              }
             >
-              {pendingApprovals.length === 0 ? (
+              {recentDecisions.length === 0 ? (
                 <div className="px-3.5 py-8 text-center text-[12.5px] text-faint">
-                  都处理完了。
+                  还没有处理记录。
                 </div>
               ) : (
                 <div className="divide-y divide-border">
-                  {pendingApprovals.slice(0, 5).map((approval) => (
-                    <div key={approval.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
+                  {recentDecisions.map((approval) => {
+                    const tone =
+                      approval.status === "approved"
+                        ? { dot: "bg-ok", text: "text-ok" }
+                        : approval.status === "timeout"
+                          ? { dot: "bg-amber", text: "text-amber" }
+                          : { dot: "bg-rose", text: "text-rose" };
+                    const detail = approval.detail || approval.why;
+                    return (
                       <button
+                        key={approval.id}
                         type="button"
-                        className="flex min-w-0 flex-1 items-start gap-2.5 text-left outline-none transition hover:text-accent-ink focus-visible:ring-2 focus-visible:ring-accent/35"
+                        className="flex w-full min-w-0 items-center gap-2.5 px-3.5 py-2 text-left outline-none transition hover:bg-surface2 focus-visible:bg-surface2"
+                        title={`任务 #${approval.task_id} · ${approval.action} · ${detail}`}
                         onClick={() =>
                           navigate({ tab: "approvals", view: "pending", id: approval.id })
                         }
                       >
-                        <Chip tone="amber">{approval.action}</Chip>
-                        <span className="min-w-0 flex-1">
-                          <span
-                            className="block truncate text-[12.5px]"
-                            title={approval.detail}
-                          >
-                            {approval.detail || approval.why}
-                          </span>
-                          <span className="mt-0.5 block text-[11px] text-faint">
-                            任务 #{approval.task_id} · {remainText(approval.expires_at, now)}
+                        <span className="flex w-[48px] flex-none items-center gap-1 text-[11px]">
+                          <span className={cx("size-1.5 rounded-full", tone.dot)} />
+                          <span className={tone.text}>
+                            {DECISION_LABEL[approval.status] ?? approval.status}
                           </span>
                         </span>
+                        <span className="min-w-0 flex-1 truncate text-[12px]">
+                          {abbreviate(detail)}
+                        </span>
+                        <span className="flex-none font-mono text-[10.5px] tabular-nums text-faint">
+                          {shortTime(approval.decided_at, approval.decided_at_local)}
+                        </span>
                       </button>
-                      <div className="flex flex-none items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={decidingId === approval.id}
-                          onClick={() => void decide(approval.id, "approved")}
-                        >
-                          批准
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={decidingId === approval.id}
-                          onClick={() => void decide(approval.id, "rejected")}
-                        >
-                          拒绝
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </Panel>
