@@ -6,83 +6,38 @@ import { nextStepOf } from "../../lib/plan.ts";
 import type { Project } from "../../lib/types.ts";
 import { Button, Chip, Segmented, StatusText, Textarea } from "../../components/ui.tsx";
 import { MarkdownBlock } from "./FilePreview.tsx";
-import { isMissingDoc, progressPct, type TaskSummary } from "./shared.ts";
+import { isMissingDoc } from "./shared.ts";
 
-export function ProgressRing({
-  summary,
-  missing,
-  size = 46,
-}: {
-  summary: TaskSummary;
-  missing: boolean;
-  size?: number;
-}) {
-  const pct = progressPct(summary);
-  const color = summary.blocked ? "var(--rb-amber)" : missing ? "var(--rb-rose)" : "var(--rb-accent)";
+/** 项目页顶部：只放身份和下一步，说明书收到右侧栏。 */
+export function ProjectHeader({ project, outputs }: { project: Project; outputs: number }) {
+  const missing = isMissingDoc(project);
+  const next = nextStepOf(project.plan);
   return (
-    <div
-      className="grid flex-none place-items-center rounded-full"
-      style={{ width: size, height: size, background: `conic-gradient(${color} ${pct}%, var(--rb-surface-3) 0)` }}
-      title={`${summary.done}/${summary.total} 个任务已结束`}
-    >
-      <span
-        className={cx(
-          "grid place-items-center rounded-full bg-surface text-[9.5px] font-bold tabular-nums",
-          summary.blocked ? "text-amber" : missing ? "text-bad" : "text-accent-ink",
-        )}
-        style={{ width: size - 12, height: size - 12 }}
-      >
-        {pct}%
-      </span>
+    <div className="mb-5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {project.status ? <Chip>{project.status}</Chip> : null}
+        {missing ? <Chip tone="amber">缺说明书</Chip> : null}
+        {outputs ? <Chip>产出 {outputs}</Chip> : null}
+      </div>
+      <h1 className="rb-display mb-0 mt-1.5 text-[23px] leading-tight wrap-anywhere">{project.title}</h1>
+      <p className="mb-0 mt-1 max-w-[620px] text-[12px] leading-relaxed text-muted">
+        项目长期存在，可能按里程碑推进；任务是当前切片的索引，任务全部结束也不代表项目结束。
+      </p>
+      <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border pt-2.5">
+        <span className="flex-none text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">下一步</span>
+        <span className={cx("min-w-0 flex-1 text-[12px] leading-relaxed", next ? "text-text" : "text-faint")}>
+          {next || "plan.md 还没有内容。"}
+        </span>
+      </div>
     </div>
-  );
-}
-
-/** 任务状态分布条：一眼看出项目里各状态占比 */
-export function StatusBar({ summary }: { summary: TaskSummary }) {
-  if (!summary.total) return <div className="h-1.5 rounded-full bg-surface3" />;
-  const seg = (n: number, cls: string, label: string) =>
-    n ? <span className={cls} style={{ flexGrow: n }} title={`${label} ${n}`} /> : null;
-  return (
-    <div className="flex h-1.5 gap-px overflow-hidden rounded-full bg-surface3">
-      {seg(summary.done, "bg-ok", "已结束")}
-      {seg(summary.running, "bg-accent", "进行中")}
-      {seg(summary.pending, "bg-amber", "待审批")}
-      {seg(summary.blocked, "bg-rose", "阻塞")}
-    </div>
-  );
-}
-
-function SummaryChips({ summary }: { summary: TaskSummary }) {
-  if (!summary.total) return <Chip>暂无任务</Chip>;
-  return (
-    <>
-      {summary.running ? <Chip tone="accent">进行中 {summary.running}</Chip> : null}
-      {summary.pending ? <Chip tone="amber">待审批 {summary.pending}</Chip> : null}
-      {summary.blocked ? <Chip tone="rose">阻塞 {summary.blocked}</Chip> : null}
-      {summary.done ? <Chip tone="ok">结束 {summary.done}</Chip> : null}
-    </>
   );
 }
 
 type DocTab = "plan" | "context";
 
-/** 项目视图顶部：概要 + 可折叠的 plan / context 文档（可编辑） */
-export function ProjectHeader({
-  project,
-  summary,
-  outputs,
-  onSaved,
-}: {
-  project: Project;
-  summary: TaskSummary;
-  outputs: number;
-  onSaved: (project: Project) => void;
-}) {
+/** 项目说明书：右侧窄栏，默认只露一段，展开后可滚动看全文。 */
+export function ProjectDocs({ project, onSaved }: { project: Project; onSaved: (project: Project) => void }) {
   const request = useApi();
-  const missing = isMissingDoc(project);
-  const next = nextStepOf(project.plan);
-  const [docOpen, setDocOpen] = useState(() => summary.total === 0);
   const [tab, setTab] = useState<DocTab>("plan");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -124,117 +79,83 @@ export function ProjectHeader({
   };
 
   return (
-    <section className="mb-4 rounded-[14px] border border-border bg-surface shadow-[var(--rb-shadow)]">
-      <div className="flex flex-wrap items-start gap-4 p-4">
-        <ProgressRing summary={summary} missing={missing} size={54} />
-        <div className="min-w-0 flex-1">
-          <h1 className="rb-display m-0 text-[22px] leading-tight wrap-anywhere">{project.title}</h1>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {project.status ? <Chip>{project.status}</Chip> : null}
-            <SummaryChips summary={summary} />
-            {outputs ? <Chip>产出 {outputs}</Chip> : null}
-            {missing ? <Chip tone="amber">缺文档</Chip> : null}
-          </div>
-          <div className="mt-2.5 max-w-[640px]">
-            <StatusBar summary={summary} />
-          </div>
+    <aside className="min-w-0 xl:sticky xl:top-4 xl:h-[calc(100dvh-10rem)]">
+      <div className="flex h-full flex-col rounded-[10px] border border-border bg-surface p-3">
+        <div className="flex-none">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="m-0 text-[13px] font-semibold">项目说明书</h2>
+          <Segmented
+            value={tab}
+            onChange={selectTab}
+            label="项目文件"
+            options={[
+              { value: "plan", label: "计划" },
+              { value: "context", label: "上下文" },
+            ]}
+          />
         </div>
-        <div className="max-w-[360px] flex-1 basis-[240px] border-l-2 border-accent/45 pl-3">
-          <div className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-faint">下一步</div>
-          <p className={cx("m-0 mt-0.5 line-clamp-3 text-[12px] leading-relaxed", next ? "text-text" : "text-faint")}>
-            {next || "plan.md 还没有内容。"}
-          </p>
-        </div>
-      </div>
-
-      <div className="border-t border-border">
-        <button
-          type="button"
-          aria-expanded={docOpen}
-          className="flex w-full items-center gap-2 px-4 py-2 text-left text-[12px] text-muted transition hover:text-text"
-          onClick={() => setDocOpen((v) => !v)}
-        >
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-            className={cx("size-3 transition-transform", docOpen && "rotate-90")}
+        <div className="mt-1.5 flex items-center gap-1">
+          <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-faint" title={file}>
+            {file}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => void copy()}>
+            {copied ? "已复制" : "复制路径"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              if (editing) setEditing(false);
+              else {
+                setDraft(text);
+                setEditing(true);
+                setError("");
+              }
+            }}
           >
-            <path d="m6 4 4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          项目文档
-          <span className="text-faint">plan.md · context.md</span>
-          <span className="ml-auto text-[11px] text-faint">{docOpen ? "收起" : "展开"}</span>
-        </button>
-        {docOpen ? (
-          <div className="px-4 pb-4">
-            <div className="mb-2.5 flex flex-wrap items-center gap-2">
-              <Segmented
-                value={tab}
-                onChange={selectTab}
-                label="项目文件"
-                options={[
-                  { value: "plan", label: "计划" },
-                  { value: "context", label: "上下文" },
-                ]}
-              />
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={file}>
-                {file}
-              </span>
-              <Button variant="ghost" size="sm" onClick={() => void copy()}>
-                {copied ? "已复制" : "复制路径"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  if (editing) setEditing(false);
-                  else {
-                    setDraft(text);
-                    setEditing(true);
-                    setError("");
-                  }
-                }}
-              >
-                {editing ? "取消编辑" : "编辑"}
-              </Button>
-            </div>
-            {error ? <StatusText text={error} error /> : null}
-            {editing ? (
-              <>
-                <Textarea
-                  rows={18}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-                      e.preventDefault();
-                      void save();
-                    }
-                  }}
-                  className="font-mono text-[12px] leading-relaxed"
-                />
-                <div className="mt-2.5 flex items-center justify-end gap-2">
-                  <span className="text-[11px] text-faint">⌘/Ctrl + S 保存</span>
-                  <Button variant="primary" size="sm" onClick={() => void save()} disabled={busy}>
-                    {busy ? "保存中…" : `保存 ${tab === "plan" ? "plan.md" : "context.md"}`}
-                  </Button>
-                </div>
-              </>
-            ) : text.trim() ? (
-              <div className="rb-thin-scroll max-h-[420px] overflow-y-auto">
-                <MarkdownBlock
-                  text={text}
-                  className="rb-markdown rounded-[12px] border border-border bg-bg px-4 py-3.5 text-[13px]"
-                />
-              </div>
-            ) : (
-              <p className="text-[13px] text-muted">这个文件还没有内容。</p>
-            )}
+            {editing ? "取消编辑" : "编辑"}
+          </Button>
+        </div>
+        </div>
+
+        {error ? (
+          <div className="flex-none">
+            <StatusText text={error} error />
           </div>
         ) : null}
+        {editing ? (
+          <>
+            <Textarea
+              rows={12}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+                  e.preventDefault();
+                  void save();
+                }
+              }}
+              className="mt-2 min-h-0 flex-1 font-mono text-[12px] leading-relaxed"
+            />
+            <div className="mt-2 flex flex-none items-center justify-end gap-2">
+              <span className="text-[10.5px] text-faint">⌘/Ctrl + S</span>
+              <Button variant="primary" size="sm" onClick={() => void save()} disabled={busy}>
+                {busy ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </>
+        ) : text.trim() ? (
+          <div className="rb-thin-scroll mt-2 min-h-0 flex-1 overflow-y-auto max-h-[50dvh] xl:max-h-none">
+            <MarkdownBlock
+              text={text}
+              className="rb-markdown rounded-[8px] border border-border bg-bg px-3 py-2.5 text-[12.5px]"
+            />
+          </div>
+        ) : (
+          <p className="mb-0 mt-2 flex-none text-[12.5px] text-muted">这个文件还没有内容。</p>
+        )}
       </div>
-    </section>
+    </aside>
   );
 }

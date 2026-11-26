@@ -49,25 +49,4 @@ export function isMissingDoc(project: Project): boolean {
   return !project.plan.trim() || !project.context.trim();
 }
 
-export type ProjectGroupKey = "active" | "planned" | "done";
-
-export const PROJECT_GROUPS: { key: ProjectGroupKey; label: string; tone: "accent" | "default" | "ok" }[] = [
-  { key: "active", label: "推进中", tone: "accent" },
-  { key: "planned", label: "计划中", tone: "default" },
-  { key: "done", label: "已完成", tone: "ok" },
-];
-
-export function projectGroup(project: Project, summary: TaskSummary): ProjectGroupKey {
-  const status = project.status.trim();
-  if (/完成|已上线|已结项|\bdone\b|\bclosed\b/i.test(status)) return "done";
-  if (summary.running + summary.pending + summary.blocked > 0) return "active";
-  if (/推进|进行中|执行中|卡住|阻塞|等审批|待审|\bactive\b|\brunning\b/i.test(status)) return "active";
-  if (summary.total > 0 && summary.done === summary.total) return "done";
-  return "planned";
-}
-
-export function progressPct(summary: TaskSummary): number {
-  return summary.total ? Math.round((summary.done / summary.total) * 100) : 0;
-}
-
 

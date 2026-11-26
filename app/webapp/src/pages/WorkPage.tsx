@@ -10,15 +10,10 @@ import { SideNav, SideNavGroup, SideNavItem } from "../components/SideNav.tsx";
 import { TaskBoard } from "./work/TaskBoard.tsx";
 import { TaskDetail } from "./work/TaskDetail.tsx";
 import { OutputsBrowser } from "./work/OutputsBrowser.tsx";
-import { ProjectHeader } from "./work/ProjectPanel.tsx";
+import { ProjectDocs, ProjectHeader } from "./work/ProjectPanel.tsx";
+import { ProjectTasks } from "./work/ProjectTasks.tsx";
 import { countFiles, flattenFiles, taskIdOfOutput } from "./work/FilePreview.tsx";
-import {
-  PROJECT_GROUPS,
-  projectGroup,
-  summarizeTasks,
-  type ProjectGroupKey,
-  type TaskSummary,
-} from "./work/shared.ts";
+import { summarizeTasks, type TaskSummary } from "./work/shared.ts";
 
 const EMPTY_SUMMARY: TaskSummary = { total: 0, running: 0, pending: 0, blocked: 0, done: 0 };
 
@@ -41,6 +36,7 @@ function OutputsIcon() {
   );
 }
 
+/** 只提示项目里当前有无待处理任务，不用绿色/百分比暗示项目完成。 */
 function ProjectDot({ summary }: { summary: TaskSummary }) {
   const cls = summary.blocked
     ? "bg-rose"
@@ -48,9 +44,7 @@ function ProjectDot({ summary }: { summary: TaskSummary }) {
       ? "bg-amber"
       : summary.running
         ? "bg-accent"
-        : summary.total && summary.done === summary.total
-          ? "bg-ok"
-          : "bg-line-strong";
+        : "bg-line-strong";
   return <span className={cx("size-2 rounded-full", cls)} />;
 }
 
@@ -70,7 +64,6 @@ export function WorkPage({ reloadSignal }: { reloadSignal: number }) {
   const [loaded, setLoaded] = useState(false);
   const [treeLoading, setTreeLoading] = useState(true);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
-  const [doneOpen, setDoneOpen] = useState(false);
 
   const loadTasks = useCallback(
     async (silent: boolean) => {
@@ -166,22 +159,13 @@ export function WorkPage({ reloadSignal }: { reloadSignal: number }) {
     return map;
   }, [tasksByProject]);
 
-  const sortedProjects = useMemo(() => {
-    const rank = { active: 0, planned: 1, done: 2 } as const;
-    return [...projects].sort((a, b) => {
-      const ga = rank[projectGroup(a, summaries.get(a.slug) ?? EMPTY_SUMMARY)];
-      const gb = rank[projectGroup(b, summaries.get(b.slug) ?? EMPTY_SUMMARY)];
-      return ga - gb || (b.updated_at ?? 0) - (a.updated_at ?? 0) || a.slug.localeCompare(b.slug);
-    });
-  }, [projects, summaries]);
-
-  const groupedProjects = useMemo(() => {
-    const out: Record<ProjectGroupKey, Project[]> = { active: [], planned: [], done: [] };
-    for (const project of sortedProjects) {
-      out[projectGroup(project, summaries.get(project.slug) ?? EMPTY_SUMMARY)].push(project);
-    }
-    return out;
-  }, [sortedProjects, summaries]);
+  const sortedProjects = useMemo(
+    () =>
+      [...projects].sort(
+        (a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0) || a.slug.localeCompare(b.slug),
+      ),
+    [projects],
+  );
 
   const pendingAll = tasks.filter((t) => t.status === "pending_approval").length;
   const totalFiles = useMemo(() => countFiles(tree), [tree]);
@@ -269,25 +253,26 @@ export function WorkPage({ reloadSignal }: { reloadSignal: number }) {
         )
       ) : (
         <Fragment key={project.slug}>
-          <ProjectHeader
-            project={project}
-            summary={summaries.get(project.slug) ?? EMPTY_SUMMARY}
-            outputs={tasksByProject
-              .get(project.slug)
-              ?.reduce((n, t) => n + (outputCounts.get(t.id) ?? 0), 0) ?? 0}
-            onSaved={(updated) => setProjects((prev) => prev.map((p) => (p.slug === updated.slug ? updated : p)))}
-          />
-          <h2 className="rb-display mb-2.5 mt-0 text-[16px]">关联任务</h2>
-          <TaskBoard
-            tasks={tasksByProject.get(project.slug) ?? []}
-            projects={projectsBySlug}
-            outputCounts={outputCounts}
-            executors={executors}
-            activeTaskId={null}
-            showProjects={false}
-            emptyHint={`还没有任务关联到这个项目。创建任务时带上 objects=["project:${project.slug}"] 即可在这里聚合。`}
-            onOpenTask={(id) => openTask(id)}
-          />
+          <div className="mx-auto grid w-full max-w-[1180px] items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="min-w-0">
+              <ProjectHeader
+                project={project}
+                outputs={tasksByProject
+                  .get(project.slug)
+                  ?.reduce((n, t) => n + (outputCounts.get(t.id) ?? 0), 0) ?? 0}
+              />
+              <ProjectTasks
+                tasks={tasksByProject.get(project.slug) ?? []}
+                outputCounts={outputCounts}
+                emptyHint="还没有任务关联到这个项目。"
+                onOpenTask={(id) => openTask(id)}
+              />
+            </div>
+            <ProjectDocs
+              project={project}
+              onSaved={(updated) => setProjects((prev) => prev.map((p) => (p.slug === updated.slug ? updated : p)))}
+            />
+          </div>
         </Fragment>
       );
     } else {
@@ -336,42 +321,30 @@ export function WorkPage({ reloadSignal }: { reloadSignal: number }) {
           count={totalFiles}
         />
 
-        {PROJECT_GROUPS.map((group) => {
-          const list = groupedProjects[group.key];
-          if (!list.length) return null;
-          const collapsible = group.key === "done";
-          return (
-            <SideNavGroup
-              key={group.key}
-              label={group.label}
-              count={list.length}
-              collapsible={collapsible}
-              collapsed={collapsible && !doneOpen}
-              onToggle={() => setDoneOpen((open) => !open)}
-            >
-              {list.map((project) => {
-                const summary = summaries.get(project.slug) ?? EMPTY_SUMMARY;
-                return (
-                  <SideNavItem
-                    key={project.slug}
-                    active={view === "project" && projectSlug === project.slug}
-                    onClick={() =>
-                      navigate(
-                        { tab: "work", view: "project", slug: project.slug },
-                        { replace: true },
-                      )
-                    }
-                    icon={<ProjectDot summary={summary} />}
-                    label={project.title}
-                    title={`${project.title}（${project.slug}）`}
-                    alert={summary.pending}
-                    count={summary.total || undefined}
-                  />
-                );
-              })}
-            </SideNavGroup>
-          );
-        })}
+        {sortedProjects.length ? (
+          <SideNavGroup label="项目" count={sortedProjects.length}>
+            {sortedProjects.map((project) => {
+              const summary = summaries.get(project.slug) ?? EMPTY_SUMMARY;
+              return (
+                <SideNavItem
+                  key={project.slug}
+                  active={view === "project" && projectSlug === project.slug}
+                  onClick={() =>
+                    navigate(
+                      { tab: "work", view: "project", slug: project.slug },
+                      { replace: true },
+                    )
+                  }
+                  icon={<ProjectDot summary={summary} />}
+                  label={project.title}
+                  title={`${project.title}（${project.slug}）`}
+                  alert={summary.pending}
+                  count={summary.total || undefined}
+                />
+              );
+            })}
+          </SideNavGroup>
+        ) : null}
         {loaded && !projects.length ? (
           <p className="px-2.5 text-[11px] text-faint max-[820px]:hidden">还没有项目</p>
         ) : null}
