@@ -24,6 +24,9 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
   { value: "html", label: "html" },
 ];
 
+/** 顶层目录每页数量（task-<id> 文件夹） */
+const PAGE_SIZE = 12;
+
 function filterTree(
   nodes: OutputNode[],
   query: string,
@@ -47,6 +50,10 @@ function filterTree(
   return out;
 }
 
+function topSegment(path: string): string {
+  return path.split("/")[0] ?? path;
+}
+
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -64,17 +71,17 @@ export function OutputsBrowser({
   tree,
   treeLoading,
   tasks,
-  focusPath,
-  onFocusHandled,
+  path,
+  onSelectPath,
   onOpenTask,
   reloadSignal,
 }: {
   tree: OutputNode[];
   treeLoading: boolean;
   tasks: Map<number, TaskView>;
-  /** 外部要求定位到某个文件（如任务抽屉里「在产出中打开」） */
-  focusPath: string | null;
-  onFocusHandled: () => void;
+  /** 当前预览文件（来自 URL，可深链） */
+  path: string | null;
+  onSelectPath: (path: string) => void;
   onOpenTask: (id: number) => void;
   reloadSignal: number;
 }) {
@@ -83,7 +90,7 @@ export function OutputsBrowser({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [selected, setSelected] = useState("");
+  const [page, setPage] = useState(0);
   const [file, setFile] = useState<OutputFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
@@ -105,19 +112,19 @@ export function OutputsBrowser({
   );
 
   const loadFile = useCallback(
-    async (path: string) => {
+    async (target: string) => {
       const seq = ++fileRequest.current;
       setFileLoading(true);
       setFile(null);
       replaceImageUrl("");
       try {
-        const data = await request<OutputFile>(`/v1/outputs/file?path=${encodeURIComponent(path)}`);
+        const data = await request<OutputFile>(`/v1/outputs/file?path=${encodeURIComponent(target)}`);
         if (seq !== fileRequest.current) return;
         setFile(data);
         setStatus({ text: "" });
         if (IMAGE_EXTS.has(data.ext)) {
           try {
-            const blob = await requestBlob(`/v1/outputs/raw?path=${encodeURIComponent(path)}`);
+            const blob = await requestBlob(`/v1/outputs/raw?path=${encodeURIComponent(target)}`);
             if (seq !== fileRequest.current) return;
             replaceImageUrl(URL.createObjectURL(blob));
           } catch (e) {
@@ -135,42 +142,27 @@ export function OutputsBrowser({
     [replaceImageUrl, request, requestBlob],
   );
 
-  const expandParents = (path: string) => {
+  // 选中文件完全由 URL 驱动：展开父目录 + 加载内容
+  useEffect(() => {
+    if (!path) {
+      setFile(null);
+      setStatus({ text: "" });
+      return;
+    }
     setExpanded((prev) => {
       const next = new Set(prev);
       const parts = path.split("/");
       for (let i = 1; i < parts.length; i++) next.add(parts.slice(0, i).join("/"));
       return next;
     });
-  };
+    void loadFile(path);
+  }, [path, loadFile]);
 
-  const selectFile = useCallback(
-    (path: string) => {
-      setSelected(path);
-      expandParents(path);
-      void loadFile(path);
-    },
-    [loadFile],
-  );
-
+  // 树刷新后重新读当前文件
   useEffect(() => {
-    if (reloadSignal === 0 || !selected) return;
-    void loadFile(selected);
+    if (reloadSignal === 0 || !path) return;
+    void loadFile(path);
   }, [reloadSignal]);
-
-  useEffect(() => {
-    if (!focusPath) return;
-    setFilter("");
-    setTypeFilter("all");
-    selectFile(focusPath);
-    onFocusHandled();
-  }, [focusPath, selectFile, onFocusHandled]);
-
-  useEffect(() => {
-    if (selected || focusPath || !tree.length) return;
-    const first = firstFile(tree);
-    if (first) selectFile(first.path);
-  }, [tree, selected, focusPath, selectFile]);
 
   const dirLabel = useCallback(
     (node: OutputNode) => {
@@ -186,22 +178,46 @@ export function OutputsBrowser({
   const files = useMemo(() => countFiles(tree), [tree]);
   const filtering = !!query || typeFilter !== "all";
 
-  const toggleDir = (path: string) => {
+  useEffect(() => {
+    setPage(0);
+  }, [query, typeFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+
+  // 当前文件所在目录在哪一页，翻到那一页
+  useEffect(() => {
+    if (!path) return;
+    const top = topSegment(path);
+    const idx = visible.findIndex((n) => n.path === top || topSegment(n.path) === top);
+    if (idx >= 0) setPage(Math.floor(idx / PAGE_SIZE));
+  }, [path, visible]);
+
+  // 没有任何选中时，默认打开第一个文件
+  useEffect(() => {
+    if (path || !tree.length) return;
+    const first = firstFile(tree);
+    if (first) onSelectPath(first.path);
+  }, [tree, path, onSelectPath]);
+
+  const pageNodes = visible.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  const toggleDir = (target: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(target)) next.delete(target);
+      else next.add(target);
       return next;
     });
   };
 
   const copyPath = async () => {
-    if (!selected) return;
+    if (!path) return;
     try {
-      await navigator.clipboard?.writeText(selected);
-      setStatus({ text: `已复制路径：${selected}` });
+      await navigator.clipboard?.writeText(path);
+      setStatus({ text: `已复制路径：${path}` });
     } catch {
-      setStatus({ text: `复制失败，路径：${selected}`, error: true });
+      setStatus({ text: `复制失败，路径：${path}`, error: true });
     }
   };
 
@@ -219,10 +235,10 @@ export function OutputsBrowser({
             title={task ? `${node.path} · ${task.name || task.goal}` : node.path}
             className={cx(
               "flex w-full min-w-0 items-center gap-1.5 rounded-[7px] py-1.5 pr-2 text-left text-[12px] transition",
-              node.path === selected ? "bg-accent-soft font-semibold text-accent-ink" : "text-text hover:bg-surface2",
+              node.path === path ? "bg-accent-soft font-semibold text-accent-ink" : "text-text hover:bg-surface2",
             )}
             style={{ paddingLeft: 6 + depth * 13 }}
-            onClick={() => (isDir ? toggleDir(node.path) : selectFile(node.path))}
+            onClick={() => (isDir ? toggleDir(node.path) : onSelectPath(node.path))}
           >
             {isDir ? <Chevron open={open} /> : <span className="w-3 flex-none" />}
             {isDir ? (
@@ -254,8 +270,8 @@ export function OutputsBrowser({
       );
     });
 
-  const segments = selected.split("/");
-  const selectedTaskId = selected ? taskIdOfOutput(selected) : null;
+  const segments = path ? path.split("/") : [];
+  const selectedTaskId = path ? taskIdOfOutput(path) : null;
   const selectedTask = selectedTaskId !== null ? tasks.get(selectedTaskId) : undefined;
 
   return (
@@ -285,15 +301,39 @@ export function OutputsBrowser({
           ) : !visible.length ? (
             <Empty>{filtering ? "没有匹配的文件。" : "这里还没有产出。"}</Empty>
           ) : (
-            <ul className="m-0 grid list-none gap-0.5 p-0">{renderNodes(visible, 0)}</ul>
+            <ul className="m-0 grid list-none gap-0.5 p-0">{renderNodes(pageNodes, 0)}</ul>
           )}
         </div>
+
+        {pageCount > 1 ? (
+          <div className="flex flex-none items-center gap-1.5 border-t border-border px-2.5 py-2 text-[11px] text-muted">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={safePage <= 0}
+              onClick={() => setPage(Math.max(0, safePage - 1))}
+            >
+              上一页
+            </Button>
+            <span className="flex-1 text-center tabular-nums">
+              {safePage + 1} / {pageCount}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+            >
+              下一页
+            </Button>
+          </div>
+        ) : null}
       </aside>
 
       <section className="rb-thin-scroll min-w-0 flex-1 overflow-y-auto bg-bg px-[clamp(14px,3vw,32px)] pb-12 pt-4">
         <div className="mx-auto w-full max-w-[880px]">
           <StatusText text={status.text} error={status.error} />
-          {!selected ? (
+          {!path ? (
             <Empty>选择左侧文件预览。支持 Markdown、CSV / TSV、HTML、图片和纯文本。</Empty>
           ) : (
             <>
@@ -307,7 +347,7 @@ export function OutputsBrowser({
                       </span>
                     ))}
                   </div>
-                  <h2 className="rb-display m-0 text-[19px] wrap-anywhere">{segments[segments.length - 1] || selected}</h2>
+                  <h2 className="rb-display m-0 text-[19px] wrap-anywhere">{segments[segments.length - 1] || path}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted">
                     {file ? (
                       <>
@@ -322,7 +362,7 @@ export function OutputsBrowser({
                   <Button variant="ghost" size="sm" onClick={() => void copyPath()}>
                     复制路径
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => void loadFile(selected)}>
+                  <Button variant="ghost" size="sm" onClick={() => void loadFile(path)}>
                     重新加载
                   </Button>
                 </div>
@@ -354,7 +394,7 @@ export function OutputsBrowser({
                 <p className="text-[13px] text-muted">加载中…</p>
               ) : file ? (
                 <FilePreview file={file} imageUrl={imageUrl} />
-              ) : (
+              ) : status.error ? null : (
                 <Empty>文件读取失败。</Empty>
               )}
             </>

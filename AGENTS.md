@@ -25,6 +25,12 @@ npm run web:build     # 前端构建，产物写入 app/web/
 npm run start:dev     # 用 tsx 直接跑后端
 ```
 
+## 本地浏览器测试
+
+- 管理台入口是 `http://localhost:3738/`（根路径，参数直接挂后面，例如 `http://localhost:3738/?tab=work&scope=tasks`）。
+- **不要用 `127.0.0.1`**：登录态存在 localStorage（`rabbit-bot.api-token`）并按 origin 隔离，换 host 会变成未登录。
+- **不要用 `/ui/`**：该路径会返回 401；静态页面只走根路径 `/`。
+
 ## 改动后的构建要求
 
 - **前端（`app/webapp/src/`）改完必须重新构建**：`npm run web:build`，把产物写到 `app/web/`。只跑 typecheck 不会更新线上页面。

@@ -104,7 +104,11 @@ export function useUrlState() {
       params.set("tab", tab);
       if (tab === "manage") params.set("view", manageView);
       else params.delete("view");
-      if (tab !== "work") params.delete("scope");
+      if (tab !== "work") {
+        params.delete("scope");
+        params.delete("path");
+        params.delete("from");
+      }
       const search = params.toString();
       const url = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
       const now = `${window.location.pathname}${window.location.search}${window.location.hash}`;

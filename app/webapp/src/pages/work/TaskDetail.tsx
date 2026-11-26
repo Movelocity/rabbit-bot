@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useApi, useApiBlob } from "../../lib/api-context.tsx";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useApi } from "../../lib/api-context.tsx";
 import { cx } from "../../lib/cx.ts";
 import { badgeVariant, duration, formatTs, friendlyError } from "../../lib/format.ts";
-import type { OutputFile, OutputNode, Project, TaskSnapshot, TaskView } from "../../lib/types.ts";
-import { Badge, Button, Field, Input, Segmented, StatusText, Textarea } from "../../components/ui.tsx";
-import { Drawer } from "../../components/Drawer.tsx";
+import type { OutputNode, Project, TaskSnapshot, TaskView } from "../../lib/types.ts";
+import { Badge, Button, Empty, Field, Input, Segmented, StatusText, Textarea } from "../../components/ui.tsx";
 import { Modal } from "../../components/Modal.tsx";
 import { DetailRows, type DetailRow } from "../../components/DetailRows.tsx";
-import { FilePreview, IMAGE_EXTS, extOf, flattenFiles, formatBytes } from "./FilePreview.tsx";
+import { extOf, flattenFiles, formatBytes } from "./FilePreview.tsx";
 import { STATUS_LABEL } from "./shared.ts";
 
-type DrawerTab = "detail" | "events" | "outputs";
+type DetailTab = "detail" | "events" | "outputs";
 
 function executorConfirmText(executor: string): string {
   if (executor === "mimo") return "mimo";
@@ -182,49 +181,8 @@ function TaskApprovalForm({
   );
 }
 
-/** 任务产出：直接在抽屉里列文件 + 预览，不用跳页 */
-function TaskOutputs({
-  files,
-  onOpenInBrowser,
-}: {
-  files: OutputNode[];
-  onOpenInBrowser: (path: string) => void;
-}) {
-  const request = useApi();
-  const requestBlob = useApiBlob();
-  const [selected, setSelected] = useState("");
-  const [file, setFile] = useState<OutputFile | null>(null);
-  const [imageUrl, setImageUrl] = useState("");
-  const [error, setError] = useState("");
-  const seq = useRef(0);
-
-  useEffect(() => () => {
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-  }, [imageUrl]);
-
-  const open = useCallback(
-    async (path: string) => {
-      const n = ++seq.current;
-      setSelected(path);
-      setFile(null);
-      setImageUrl("");
-      setError("");
-      try {
-        const data = await request<OutputFile>(`/v1/outputs/file?path=${encodeURIComponent(path)}`);
-        if (n !== seq.current) return;
-        setFile(data);
-        if (IMAGE_EXTS.has(data.ext)) {
-          const blob = await requestBlob(`/v1/outputs/raw?path=${encodeURIComponent(path)}`);
-          if (n !== seq.current) return;
-          setImageUrl(URL.createObjectURL(blob));
-        }
-      } catch (e) {
-        if (n === seq.current) setError(`预览失败：${friendlyError(e)}`);
-      }
-    },
-    [request, requestBlob],
-  );
-
+/** 任务产出：文件列表 + 深链到产出视图 */
+function TaskOutputs({ files, onOpenOutput }: { files: OutputNode[]; onOpenOutput: (path: string) => void }) {
   if (!files.length) {
     return (
       <p className="text-[13px] leading-relaxed text-muted">
@@ -232,38 +190,17 @@ function TaskOutputs({
       </p>
     );
   }
-
-  if (selected) {
-    return (
-      <div>
-        <div className="mb-2.5 flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setSelected("")}>
-            ← 文件列表
-          </Button>
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={selected}>
-            {selected}
-          </span>
-          <Button variant="ghost" size="sm" onClick={() => onOpenInBrowser(selected)}>
-            在产出中打开
-          </Button>
-        </div>
-        {error ? <StatusText text={error} error /> : file ? <FilePreview file={file} imageUrl={imageUrl} /> : (
-          <p className="text-[13px] text-muted">加载中…</p>
-        )}
-      </div>
-    );
-  }
-
   return (
     <ul className="m-0 grid list-none gap-1.5 p-0">
       {files.map((f) => {
-        const rel = f.path.split("/").slice(1).join("/");
+        const rel = f.path.split("/").slice(1).join("/") || f.name;
         return (
           <li key={f.path}>
             <button
               type="button"
+              title={`在产出中打开 ${f.path}`}
               className="flex w-full items-center gap-2.5 rounded-[10px] border border-border bg-surface px-2.5 py-2 text-left transition hover:border-accent/45 hover:bg-accent-soft/30"
-              onClick={() => void open(f.path)}
+              onClick={() => onOpenOutput(f.path)}
             >
               <span className="w-[34px] flex-none rounded-[4px] border border-border bg-surface2 py-px text-center font-mono text-[9px] font-bold uppercase text-muted">
                 {(extOf(f.name) || "file").slice(0, 4)}
@@ -272,6 +209,7 @@ function TaskOutputs({
                 {rel}
               </span>
               <span className="flex-none text-[10.5px] tabular-nums text-faint">{formatBytes(f.bytes)}</span>
+              <span className="flex-none text-[11px] text-accent-ink">打开 →</span>
             </button>
           </li>
         );
@@ -280,28 +218,30 @@ function TaskOutputs({
   );
 }
 
-export function TaskDrawer({
+export function TaskDetail({
   task,
   outputs,
   projects,
-  initialTab = "detail",
-  onClose,
+  backLabel,
+  onBack,
   onChanged,
   onOpenProject,
   onOpenOutput,
+  onOpenOutputDir,
 }: {
   task: TaskView;
   /** outputs/task-<id> 子树 */
   outputs: OutputNode | null;
   projects: Map<string, Project>;
-  initialTab?: DrawerTab;
-  onClose: () => void;
+  backLabel: string;
+  onBack: () => void;
   onChanged: () => Promise<void> | void;
   onOpenProject: (slug: string) => void;
   onOpenOutput: (path: string) => void;
+  onOpenOutputDir: () => void;
 }) {
   const request = useApi();
-  const [tab, setTab] = useState<DrawerTab>(initialTab);
+  const [tab, setTab] = useState<DetailTab>("detail");
   const [snap, setSnap] = useState<TaskSnapshot | null>(null);
   const [snapError, setSnapError] = useState("");
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
@@ -325,50 +265,54 @@ export function TaskDrawer({
   const elapsed = task.start_at ? duration(Number(task.end_at ?? Date.now()) - Number(task.start_at)) : "";
 
   return (
-    <Drawer
-      title={
-        <span className="inline-flex flex-wrap items-baseline gap-2">
-          <span className="font-mono text-[13px] font-normal text-faint">#{task.id}</span>
-          {task.name || "任务详情"}
-        </span>
-      }
-      onClose={onClose}
-    >
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant={badgeVariant(task.status)}>{STATUS_LABEL[task.status] || task.status}</Badge>
-        {task.stage ? (
-          <span className="rounded-[5px] border border-border bg-surface2 px-1.5 py-px font-mono text-[10.5px] text-muted">
-            {task.stage}
-          </span>
-        ) : null}
-        <span className="text-[11px] text-faint">{task.executor || "opencode"}</span>
-        {elapsed ? <span className="text-[11px] text-faint">· 用时 {elapsed}</span> : null}
-      </div>
+    <div className="mx-auto w-full max-w-[980px]">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-3 inline-flex items-center gap-1 rounded-[7px] px-1.5 py-1 text-[12px] text-muted outline-none transition hover:bg-surface2 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/35"
+      >
+        ← {backLabel}
+      </button>
 
-      {task.projects?.length ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          <span>项目</span>
-          {task.projects.map((slug) => (
-            <button
-              key={slug}
-              type="button"
-              className="rounded-full border border-accent/35 bg-accent-soft px-2 py-0.5 text-[11px] text-accent-ink transition hover:border-accent"
-              onClick={() => onOpenProject(slug)}
-            >
-              {projects.get(slug)?.title || slug} →
-            </button>
-          ))}
+      <header className="border-b border-border pb-3.5">
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+          <span className="font-mono text-[13px] text-faint">#{task.id}</span>
+          <h1 className="rb-display m-0 text-[23px] leading-[1.2]">{task.name || task.goal || "任务详情"}</h1>
         </div>
-      ) : null}
-
-      {task.goal ? (
-        <p className="mb-0 mt-3 rounded-[10px] border border-border bg-surface2 px-3 py-2.5 text-[12.5px] leading-relaxed">
-          {task.goal}
-        </p>
-      ) : null}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
+          <Badge variant={badgeVariant(task.status)}>{STATUS_LABEL[task.status] || task.status}</Badge>
+          {task.stage ? (
+            <span className="rounded-[5px] border border-border bg-surface2 px-1.5 py-px font-mono text-[10.5px] text-muted">
+              {task.stage}
+            </span>
+          ) : null}
+          <span>{task.executor || "opencode"}</span>
+          {elapsed ? <span>· 用时 {elapsed}</span> : null}
+          {task.projects?.length ? (
+            <>
+              <span>· 项目</span>
+              {task.projects.map((slug) => (
+                <button
+                  key={slug}
+                  type="button"
+                  className="rounded-full border border-accent/35 bg-accent-soft px-2 py-0.5 text-[11px] text-accent-ink transition hover:border-accent"
+                  onClick={() => onOpenProject(slug)}
+                >
+                  {projects.get(slug)?.title || slug} →
+                </button>
+              ))}
+            </>
+          ) : null}
+        </div>
+        {task.goal ? (
+          <p className="mb-0 mt-3 rounded-[10px] border border-border bg-surface2 px-3 py-2.5 text-[12.5px] leading-relaxed">
+            {task.goal}
+          </p>
+        ) : null}
+      </header>
 
       {task.status === "pending_approval" ? (
-        <div className="mt-3">
+        <div className="mt-3.5">
           <TaskApprovalForm
             key={task.id}
             task={task}
@@ -381,17 +325,22 @@ export function TaskDrawer({
       ) : null}
       <StatusText text={status.text} error={status.error} />
 
-      <div className="mb-3 mt-1">
+      <div className="mb-3 mt-3.5 flex flex-wrap items-center gap-2">
         <Segmented
           value={tab}
           onChange={setTab}
-          label="任务抽屉视图"
+          label="任务视图"
           options={[
             { value: "detail", label: "详情" },
             { value: "events", label: `事件 ${events.length || ""}`.trim() },
             { value: "outputs", label: `产出 ${files.length || ""}`.trim() },
           ]}
         />
+        {tab === "outputs" && files.length ? (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={onOpenOutputDir}>
+            在产出目录中查看 →
+          </Button>
+        ) : null}
       </div>
 
       {tab === "detail" ? (
@@ -402,7 +351,7 @@ export function TaskDrawer({
         ) : !snap ? (
           <p className="text-[13px] text-muted">正在加载任务快照…</p>
         ) : !events.length ? (
-          <p className="text-[13px] text-muted">还没收到任务事件。</p>
+          <Empty>还没收到任务事件。</Empty>
         ) : (
           <ol className="m-0 grid list-none gap-0 p-0">
             {events.map((ev) => (
@@ -423,8 +372,8 @@ export function TaskDrawer({
           </ol>
         )
       ) : (
-        <TaskOutputs key={task.id} files={files} onOpenInBrowser={onOpenOutput} />
+        <TaskOutputs key={task.id} files={files} onOpenOutput={onOpenOutput} />
       )}
-    </Drawer>
+    </div>
   );
 }
