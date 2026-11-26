@@ -409,7 +409,22 @@ export interface AdapterGap {
   to: number;
   missed: number;
   checked_at: number;
+  chats?: number;
   error?: string;
+}
+
+export interface AdapterEvent {
+  at: number;
+  kind: "connected" | "disconnected" | "reconnected" | "error" | "gap";
+  message: string;
+}
+
+export interface AdapterInboundCounters {
+  received: number;
+  duplicates: number;
+  processed: number;
+  conversion_errors: number;
+  enqueue_errors: number;
 }
 
 export interface AdapterStatus {
@@ -419,12 +434,52 @@ export interface AdapterStatus {
   connected_at: number | null;
   disconnected_at: number | null;
   last_error?: string;
+  last_error_at?: number;
+  last_event_at?: number | null;
+  last_inbound_at?: number | null;
+  reconnects?: number;
+  counters?: AdapterInboundCounters;
+  events?: AdapterEvent[];
   last_gap: AdapterGap | null;
+  gap_history?: AdapterGap[];
 }
 
 export interface AdapterStatusResponse {
   now: number;
   adapters: AdapterStatus[];
+}
+
+export interface HubInboundStats {
+  attempts: number;
+  stored: number;
+  duplicates: number;
+  self: number;
+  approval_handled: number;
+  last_stored_at: number | null;
+}
+
+export interface FeishuConnectionInfo {
+  platform: "feishu";
+  /** 配置里的自动连接开关；关掉后仍可在本页手动连接 */
+  enabled: boolean;
+  configured: boolean;
+  credential_source: "runtime" | "env" | "none";
+  app_id_masked: string | null;
+  domain: "feishu" | "lark";
+  updated_at: string | null;
+  connection: AdapterStatus | null;
+  inbound: HubInboundStats;
+}
+
+export interface FeishuGapCheckResponse {
+  now: number;
+  gap: AdapterGap;
+  view: FeishuConnectionInfo;
+}
+
+export interface BotsResponse {
+  now: number;
+  bots: FeishuConnectionInfo[];
 }
 
 export type ScheduleKind = "cron" | "delay";export type ScheduleStatus = "active" | "cancelled" | "done";

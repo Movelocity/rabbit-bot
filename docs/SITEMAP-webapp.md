@@ -24,7 +24,7 @@
 | 工作台 | `work` | `tasks` 全部任务 · `outputs` 产出文件 · `project` 单个项目（侧栏按 推进中/计划中/已完成 分组列出） | SideNav | `task=<id>` 任务详情（叠加在当前 view 上）；`slug=` 项目；`path=` 产出文件 |
 | 权限 | `approvals` | `pending` 审批（默认） · `reads` 读取记录（白名单与规则在抽屉里） | Segmented | `id=<approvalId>` 选中审批 |
 | 记忆 | `memories` | `entries` 条目（默认） · `graph` 图谱 | Segmented | — |
-| 管理 | `manage` | 观测：`usage` `task-stats` `llm-logs`；配置：`models` `persona` `settings` `schedules` `executors` `users`；只读：`skills` `work-memory` | SideNav（分组） | — |
+| 管理 | `manage` | 观测：`usage` `task-stats` `llm-logs`；配置：`bots` 机器人列表（默认列表，点条目看详情） `models` `persona` `settings` `schedules` `executors` `users`；只读：`skills` `work-memory` | SideNav（分组） | `bot=<platform>` 机器人详情（叠加在 `bots` 列表上） |
 
 ## URL 示例
 
@@ -36,6 +36,8 @@
 /?tab=approvals&view=pending&id=7
 /?tab=memories&view=graph
 /?tab=manage&view=llm-logs
+/?tab=manage&view=bots            # 机器人列表
+/?tab=manage&view=bots&bot=feishu # 飞书详情：连接健康、入站全链路、漏收核对、凭据管理
 ```
 
 旧链接（`tab=tasks|outputs|projects|plans|business|users…`、`scope=…`、`from=…`）由 `parseRoute` 兼容，挂载时 replace 成新格式。

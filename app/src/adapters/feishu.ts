@@ -9,7 +9,7 @@
  * Markdown：出站文本包含 markdown 标记（如 ** 加粗）时发富文本 post 的 md 标签，由飞书渲染。
  */
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { IMAdapter, RecallResult, RichPart, SendResult, AdapterStatus, AdapterGap } from "./types.ts";
+import type { IMAdapter, RecallResult, RichPart, SendResult, AdapterStatus, AdapterGap, AdapterEvent, AdapterInboundCounters } from "./types.ts";
 import { inboundEmojiText, type EmojiTable } from "../core/emoji.ts";
 import type { InboundMessage, MediaType, Attachment, RemoteAttachment } from "../types.ts";
 import type { Logger } from "../core/logger.ts";
@@ -194,8 +194,19 @@ export class FeishuAdapter implements IMAdapter {
   private stateSince = Date.now();
   private connectedAt: number | null = null;
   private lastError: string | undefined;
+  private lastErrorAt: number | undefined;
   private lastGap: AdapterGap | null = null;
   private gapChecking = false;
+  /** 入站全链路计数：收到 → 去重 → 转换 → 交给 hub */
+  private counters: AdapterInboundCounters = { received: 0, duplicates: 0, processed: 0, conversion_errors: 0, enqueue_errors: 0 };
+  private lastEventAt: number | null = null;
+  private lastInboundAt: number | null = null;
+  private reconnects = 0;
+  /** 最近发生过的连接 / 错误 / 漏收事件，管理台时间线用（只存状态，不存消息内容） */
+  private events: AdapterEvent[] = [];
+  private gapHistory: AdapterGap[] = [];
+  private static readonly EVENT_LIMIT = 40;
+  private static readonly GAP_LIMIT = 20;
 
   constructor(private opts: FeishuOptions, private log: Logger) {
     const domain = opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -203,6 +214,8 @@ export class FeishuAdapter implements IMAdapter {
   }
 
   async start(sink: (m: InboundMessage) => void) {
+    // 管理台可能连续点连接：已经在跑就不重复建连接
+    if (this.ws || this.state === "connecting" || this.state === "connected") return;
     this.setState("connecting");
     try {
       const info: any = await this.client.request({ method: "GET", url: "/open-apis/bot/v3/info" });
@@ -213,15 +226,20 @@ export class FeishuAdapter implements IMAdapter {
     this.sink = sink;
     const handlers: Record<string, (data: any) => Promise<void>> = {
       "im.message.receive_v1": async (data) => {
+        this.noteReceived();
         const id: string = data?.message?.message_id ?? "";
         if (this.markSeen(id)) return;
-        this.enqueue(async () => sink(await this.toInbound(data)), "处理消息失败");
+        this.enqueue(() => this.handleInbound(data, sink), "处理消息失败");
       },
     };
     if (this.opts.reactions) handlers["im.message.reaction.created_v1"] = async (data) => {
+      this.noteReceived();
       const id = `reaction:${data?.message_id}:${data?.user_id?.open_id ?? ""}:${data?.reaction_type?.emoji_type ?? ""}:${data?.action_time ?? ""}`;
       if (this.markSeen(id)) return;
-      this.enqueue(async () => { const m = await this.reactionToInbound(data); if (m) sink(m); }, "处理表情回复失败");
+      this.enqueue(async () => {
+        const m = await this.reactionToInbound(data);
+        if (m) this.handoff(m, sink);
+      }, "处理表情回复失败");
     };
     const dispatcher = new lark.EventDispatcher({}).register(handlers as any);
     const domain = this.opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -231,11 +249,14 @@ export class FeishuAdapter implements IMAdapter {
         this.connectedAt = Date.now();
         this.disconnectedAt = null;
         this.setState("connected");
+        this.record("connected", "长连接已建立");
         this.log.info("feishu: 长连接已建立");
       },
       onReconnecting: () => {
+        const first = !this.disconnectedAt;
         this.disconnectedAt ??= Date.now();
         this.setState("reconnecting");
+        if (first) this.record("disconnected", "长连接断开，正在重连");
         this.log.warn("feishu: 长连接重连中（不影响定时唤醒与发送，发送走 HTTP）");
       },
       onReconnected: () => {
@@ -244,35 +265,92 @@ export class FeishuAdapter implements IMAdapter {
         const s = from ? Math.round((to - from) / 1000) : 0;
         this.disconnectedAt = null;
         this.connectedAt = to;
+        this.reconnects++;
         this.setState("connected");
+        this.record("reconnected", `长连接恢复（断开约 ${s}s）`);
         this.log.info(`feishu: 长连接已恢复（断开约 ${s}s；平台只重投最近约 5 分钟的事件，更早的靠断开窗口核对）`);
         // 事件重投窗口有限：断开久了更早的消息不会再来，主动按会话扫一遍才知道漏了多少
         if (from && to - from > 2000) void this.checkGap(from, to);
       },
       onError: (e) => {
-        this.lastError = (e as Error)?.message ?? String(e);
+        const message = (e as Error)?.message ?? String(e);
+        this.lastError = message;
+        this.lastErrorAt = Date.now();
+        // 同一个错误短时间会刷屏：时间线里 15 秒内只留一条
+        const tail = this.events[this.events.length - 1];
+        if (!(tail && tail.kind === "error" && tail.message === message && Date.now() - tail.at < 15_000))
+          this.record("error", message);
         this.log.error("feishu: 长连接失败", e);
       },
     });
-    await this.ws.start({ eventDispatcher: dispatcher });
+    try {
+      await this.ws.start({ eventDispatcher: dispatcher });
+    } catch (e) {
+      this.ws = null;
+      this.lastError = (e as Error)?.message ?? String(e);
+      this.lastErrorAt = Date.now();
+      this.setState("stopped");
+      this.record("error", `启动长连接失败：${this.lastError}`);
+      throw e;
+    }
+  }
+
+  private noteReceived() {
+    this.counters.received++;
+    this.lastEventAt = Date.now();
+  }
+
+  /** 已经转成 InboundMessage，交给 hub；进程内计数和最后入池时间一起更新。 */
+  private handoff(m: InboundMessage, sink: (m: InboundMessage) => void) {
+    sink(m);
+    this.counters.processed++;
+    this.lastInboundAt = Date.now();
+  }
+
+  private async handleInbound(data: any, sink: (m: InboundMessage) => void) {
+    let m: InboundMessage;
+    try {
+      m = await this.toInbound(data);
+    } catch (e) {
+      this.counters.conversion_errors++;
+      throw e;
+    }
+    this.handoff(m, sink);
+  }
+
+  private record(kind: AdapterEvent["kind"], message: string) {
+    this.events.push({ at: Date.now(), kind, message });
+    if (this.events.length > FeishuAdapter.EVENT_LIMIT)
+      this.events.splice(0, this.events.length - FeishuAdapter.EVENT_LIMIT);
   }
 
   /** 返回 true 表示重复（已见过） */
   private markSeen(id: string): boolean {
     if (!id) return false;
-    if (this.seen.has(id)) { this.log.info(`feishu: 重复投递已忽略 ${id}`); return true; }
+    if (this.seen.has(id)) {
+      this.counters.duplicates++;
+      this.log.info(`feishu: 重复投递已忽略 ${id}`);
+      return true;
+    }
     this.seen.add(id);
     if (this.seen.size > 5000) for (const k of [...this.seen].slice(0, 1000)) this.seen.delete(k);
     return false;
   }
   private enqueue(fn: () => Promise<void>, what: string) {
-    this.chain = this.chain.then(fn).catch((e) => this.log.error(`feishu: ${what}`, e));
+    this.chain = this.chain.then(fn).catch((e) => {
+      this.counters.enqueue_errors++;
+      this.log.error(`feishu: ${what}`, e);
+    });
   }
   /** 测试用：直接投递一个原始事件 */
   async _deliver(event: "im.message.receive_v1", data: any) {
+    this.noteReceived();
     const id: string = data?.message?.message_id ?? "";
     if (this.markSeen(id)) return;
-    this.enqueue(async () => this.sink?.(await this.toInbound(data)), "处理消息失败");
+    this.enqueue(() => {
+      const sink = this.sink;
+      return sink ? this.handleInbound(data, sink) : Promise.resolve();
+    }, "处理消息失败");
     await this.chain;
   }
 
@@ -290,20 +368,36 @@ export class FeishuAdapter implements IMAdapter {
       connected_at: this.connectedAt,
       disconnected_at: this.disconnectedAt,
       ...(this.lastError ? { last_error: this.lastError } : {}),
+      ...(this.lastErrorAt ? { last_error_at: this.lastErrorAt } : {}),
+      last_event_at: this.lastEventAt,
+      last_inbound_at: this.lastInboundAt,
+      reconnects: this.reconnects,
+      counters: { ...this.counters },
+      events: [...this.events],
       last_gap: this.lastGap,
+      gap_history: [...this.gapHistory],
     };
   }
 
+  /** 管理台手动核对：默认最近 30 分钟，返回这次核对结果。 */
+  async checkGapNow(minutes = 30): Promise<AdapterGap> {
+    const mins = Math.min(Math.max(Math.round(minutes) || 30, 1), 7 * 24 * 60);
+    const to = Date.now();
+    return this.checkGap(to - mins * 60_000, to);
+  }
+
   /** 断开窗口内平台有、本地没有的消息条数：用消息列表接口核对，只统计，不回填（回填会打乱 seq 顺序）。 */
-  private async checkGap(from: number, to: number) {
-    if (this.gapChecking) return;
+  private async checkGap(from: number, to: number): Promise<AdapterGap> {
+    if (this.gapChecking) return this.lastGap ?? { from, to, missed: 0, checked_at: Date.now(), error: "已有核对在进行" };
     this.gapChecking = true;
     let missed = 0;
+    let chatsChecked = 0;
     let error: string | undefined;
     try {
       const chats = new Map<string, { id: string; kind: "private" | "group"; title: string }>();
       for (const c of this.opts.knownChats?.() ?? []) chats.set(c.id, c);
       for (const [id, kind] of this.chatKinds) if (!chats.has(id)) chats.set(id, { id, kind, title: this.chatTitles.get(id) ?? "" });
+      chatsChecked = chats.size;
       for (const chat of chats.values()) {
         let pageToken = "";
         let pages = 0;
@@ -331,14 +425,26 @@ export class FeishuAdapter implements IMAdapter {
       error = (e as Error).message;
     } finally {
       this.gapChecking = false;
-      this.lastGap = { from, to, missed, checked_at: Date.now(), ...(error ? { error } : {}) };
-      const mins = Math.max(1, Math.round((to - from) / 60_000));
-      if (missed > 0) this.log.warn(`feishu: 断开 ${mins} 分钟内核对到 ${missed} 条消息本地没有（平台不会重投，已丢）`);
-      else this.log.info(`feishu: 断开 ${mins} 分钟核对完成：没有漏收${error ? `（部分会话核对失败：${error}）` : ""}`);
     }
+    const gap: AdapterGap = { from, to, missed, checked_at: Date.now(), chats: chatsChecked, ...(error ? { error } : {}) };
+    this.lastGap = gap;
+    this.gapHistory.push(gap);
+    if (this.gapHistory.length > FeishuAdapter.GAP_LIMIT)
+      this.gapHistory.splice(0, this.gapHistory.length - FeishuAdapter.GAP_LIMIT);
+    this.record("gap", error ? `漏收核对未完成：${error}` : missed > 0 ? `核对到 ${missed} 条未入池` : "漏收核对完成：没有漏收");
+    const mins = Math.max(1, Math.round((to - from) / 60_000));
+    if (missed > 0) this.log.warn(`feishu: ${mins} 分钟窗口内核对到 ${missed} 条消息本地没有（平台不会重投，已丢）`);
+    else this.log.info(`feishu: ${mins} 分钟窗口核对完成：没有漏收${error ? `（部分会话核对失败：${error}）` : ""}`);
+    return gap;
   }
 
-  async stop() { try { (this.ws as any)?.close?.(); } catch { /* ignore */ } this.ws = null; this.setState("stopped"); }
+  async stop() {
+    const wasRunning = this.state !== "stopped";
+    try { (this.ws as any)?.close?.(); } catch { /* ignore */ }
+    this.ws = null;
+    this.setState("stopped");
+    if (wasRunning) this.record("disconnected", "已断开长连接");
+  }
 
   private async toInbound(data: any): Promise<InboundMessage> {
     const msg = data.message;

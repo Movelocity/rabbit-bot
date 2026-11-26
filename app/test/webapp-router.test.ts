@@ -41,6 +41,20 @@ test("默认视图与非法降级", () => {
     tab: "manage",
     view: "llm-logs",
   });
+  assert.deepEqual(parseRoute("?tab=manage&view=bots"), {
+    tab: "manage",
+    view: "bots",
+  });
+  assert.deepEqual(parseRoute("?tab=manage&view=bots&bot=feishu"), {
+    tab: "manage",
+    view: "bots",
+    bot: "feishu",
+  });
+  assert.deepEqual(parseRoute("?tab=manage&view=feishu"), {
+    tab: "manage",
+    view: "bots",
+    bot: "feishu",
+  });
   assert.deepEqual(parseRoute("?tab=manage&view=nope"), {
     tab: "manage",
     view: "usage",
@@ -239,6 +253,10 @@ test("参数顺序固定", () => {
   );
   assert.equal(formatRoute({ tab: "memories", view: "graph" }), "?tab=memories&view=graph");
   assert.equal(formatRoute({ tab: "manage", view: "llm-logs" }), "?tab=manage&view=llm-logs");
+  assert.equal(
+    formatRoute({ tab: "manage", view: "bots", bot: "feishu" }),
+    "?tab=manage&view=bots&bot=feishu",
+  );
 });
 
 test("sameRoute 比较语义值", () => {

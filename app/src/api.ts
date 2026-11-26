@@ -85,6 +85,11 @@ import {
   applySendReviewSettings, effectiveSendReviewSettings, mainPoolId, saveSendReviewSettings, validateSendReviewSettings,
 } from "./ops/send-review-settings.ts";
 import { resolveSendReviewConfig, sendReviewReady } from "./core/send-review.ts";
+import {
+  clearFeishuCredentials, createFeishuAdapter, effectiveFeishuCredentials, feishuCredentialView,
+  saveFeishuCredentials, verifyFeishuCredentials,
+} from "./ops/feishu-connection.ts";
+import { FeishuAdapter } from "./adapters/feishu.ts";
 import type { Scheduler } from "./core/scheduler.ts";
 
 const MAX_BODY = 2 * 1024 * 1024;
@@ -266,6 +271,20 @@ function auditTaskApi(
     ok,
     result,
   });
+}
+
+/** 飞书对接页的只读视图：凭据只给掩码，连接状态来自适配器，入站计数来自 hub。 */
+function feishuConnectionView(d: ApiDeps) {
+  const adapter = d.hub?.getAdapter("feishu");
+  return {
+    platform: "feishu" as const,
+    enabled: d.cfg.adapters.feishu.enabled,
+    ...feishuCredentialView(d.cfg),
+    connection: adapter?.status?.() ?? null,
+    inbound: d.hub?.inboundStats("feishu") ?? {
+      attempts: 0, stored: 0, duplicates: 0, self: 0, approval_handled: 0, last_stored_at: null,
+    },
+  };
 }
 
 export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
@@ -1160,11 +1179,86 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           throw new HttpError(404, "用法：GET|PUT /v1/scheduler、GET /v1/scheduler/status");
         }
         case "adapters": {
-          // 顶栏的飞书连接状态：连接态 + 断开窗口漏收条数，不返回消息内容
+          // 机器人列表：目前只有飞书，后续 IM 适配器接进来时在这里追加摘要
+          if (parts.length === 2 && method === "GET") {
+            return reply(200, { now: Date.now(), bots: [feishuConnectionView(d)] });
+          }
+          // 顶栏 / 飞书对接页：连接态、漏收与入站计数，不返回消息内容
           if (parts.length === 3 && parts[2] === "status" && method === "GET") {
             return reply(200, { now: Date.now(), adapters: d.hub?.adapterStatus() ?? [] });
           }
-          throw new HttpError(404, "用法：GET /v1/adapters/status");
+          if (parts[2] !== "feishu") throw new HttpError(404, "用法：GET /v1/adapters/status、/v1/adapters/feishu");
+
+          if (parts.length === 3 && method === "GET") return reply(200, feishuConnectionView(d));
+
+          // 删除运行时凭据，回退环境变量；同时断开当前连接，避免继续用旧凭据
+          if (parts.length === 3 && method === "DELETE") {
+            clearFeishuCredentials(d.cfg);
+            await d.hub?.stopAdapter("feishu");
+            return reply(200, feishuConnectionView(d));
+          }
+
+          if (parts.length === 4 && parts[3] === "credentials" && method === "PUT") {
+            const text = (v: unknown) => typeof v === "string" ? v.trim() : "";
+            const current = effectiveFeishuCredentials(d.cfg);
+            const keepRuntime = current.source === "runtime";
+            const appId = text(body.app_id) || (keepRuntime ? current.appId : "");
+            const appSecret = text(body.app_secret) || (keepRuntime ? current.appSecret : "");
+            if (!appId) throw new HttpError(400, "App ID 不能为空（环境变量里的凭据不会复制到本机文件）");
+            if (!appSecret) throw new HttpError(400, "App Secret 不能为空（环境变量里的凭据不会复制到本机文件）");
+            const domain = body.domain === undefined ? current.domain : body.domain;
+            if (domain !== "feishu" && domain !== "lark") throw new HttpError(400, "domain 只能是 feishu 或 lark");
+            if (body.verify !== false) {
+              const v = await verifyFeishuCredentials(appId, appSecret, domain);
+              if (!v.ok) throw new HttpError(400, `凭据验证失败：${v.error ?? "未知错误"}`);
+            }
+            saveFeishuCredentials(d.cfg, { appId, appSecret, domain });
+            const status = d.hub?.getAdapter("feishu")?.status?.();
+            const wasRunning = !!status && status.state !== "stopped";
+            if (d.hub && (wasRunning || d.cfg.adapters.feishu.enabled)) {
+              const next = createFeishuAdapter(d.cfg, { store: d.store, emoji: d.hub.emoji, log: d.log });
+              if (next) {
+                try { await d.hub.replaceAdapter(next, true); }
+                catch (e) { throw new HttpError(502, `凭据已保存，但重新连接失败：${(e as Error).message}`); }
+              }
+            }
+            return reply(200, feishuConnectionView(d));
+          }
+
+          if (parts.length === 4 && parts[3] === "connect" && method === "POST") {
+            if (!d.hub) throw new HttpError(400, "当前进程没有聊天中枢，无法连接");
+            const creds = effectiveFeishuCredentials(d.cfg);
+            if (creds.source === "none") throw new HttpError(400, "还没有可用的飞书凭据，请先填写并保存");
+            const adapter = createFeishuAdapter(d.cfg, { store: d.store, emoji: d.hub.emoji, log: d.log }, creds);
+            if (!adapter) throw new HttpError(400, "飞书凭据不完整");
+            try { await d.hub.replaceAdapter(adapter, true); }
+            catch (e) { throw new HttpError(502, `连接失败：${(e as Error).message}`); }
+            return reply(200, feishuConnectionView(d));
+          }
+
+          if (parts.length === 4 && parts[3] === "disconnect" && method === "POST") {
+            await d.hub?.stopAdapter("feishu");
+            return reply(200, feishuConnectionView(d));
+          }
+
+          if (parts.length === 4 && parts[3] === "check-gap" && method === "POST") {
+            if (!d.hub) throw new HttpError(400, "当前进程没有聊天中枢，无法核对");
+            const current = d.hub.getAdapter("feishu");
+            let adapter: FeishuAdapter;
+            if (current instanceof FeishuAdapter) adapter = current;
+            else {
+              const creds = effectiveFeishuCredentials(d.cfg);
+              if (creds.source === "none") throw new HttpError(400, "还没有可用的飞书凭据");
+              const created = createFeishuAdapter(d.cfg, { store: d.store, emoji: d.hub.emoji, log: d.log }, creds);
+              if (!created) throw new HttpError(400, "飞书凭据不完整");
+              d.hub.addAdapter(created);
+              adapter = created;
+            }
+            const gap = await adapter.checkGapNow(Number(body.minutes ?? 30));
+            return reply(200, { now: Date.now(), gap, view: feishuConnectionView(d) });
+          }
+
+          throw new HttpError(404, "用法：GET /v1/adapters/feishu、PUT /v1/adapters/feishu/credentials、POST /v1/adapters/feishu/connect|disconnect|check-gap");
         }
         case "watchdog": {
           if (parts.length === 2 && method === "GET") return reply(200, effectiveWatchdogSettings(d.cfg));

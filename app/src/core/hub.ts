@@ -42,6 +42,16 @@ export interface RecallOutcome {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 入站全链路计数：平台事件到 hub 之后，去重 / 审批拦截 / 入库各自多少。 */
+export interface HubInboundStats {
+  attempts: number;
+  stored: number;
+  duplicates: number;
+  self: number;
+  approval_handled: number;
+  last_stored_at: number | null;
+}
+
 /** 撤回用定位串：消息开头 5 个字符；不足 5 个字符时就是全文。 */
 function recallHead(text: string): string {
   const chars = Array.from(text ?? "");
@@ -50,6 +60,7 @@ function recallHead(text: string): string {
 
 export class Hub {
   private adapters = new Map<string, IMAdapter>();
+  private inbound = new Map<string, HubInboundStats>();
   /** 投递节奏的基准：上一条发出的时刻和可见字数（见 core/pacing.ts） */
   private lastSendAt = 0;
   private lastSendLen = 0;
@@ -69,7 +80,25 @@ export class Hub {
   constructor(private store: Store, private cfg: Config, private log: Logger, readonly emoji: EmojiTable) {}
 
   addAdapter(a: IMAdapter) { this.adapters.set(a.platform, a); }
-  /** 给管理台顶栏用：各适配器连接状态；不返回消息内容 */
+  getAdapter(platform: string): IMAdapter | undefined { return this.adapters.get(platform); }
+  /** 管理台连接/断开：只动指定平台，不影响其他适配器 */
+  async startAdapter(platform: string) {
+    const a = this.adapters.get(platform);
+    if (!a) throw new Error(`没有 ${platform} 适配器`);
+    await a.start((m) => this.ingest(m));
+  }
+  async stopAdapter(platform: string) {
+    const a = this.adapters.get(platform);
+    if (a) await a.stop();
+  }
+  /** 换一份适配器（如凭据更新后重建）：先停旧的，再挂新的并启动 */
+  async replaceAdapter(a: IMAdapter, start = true) {
+    const old = this.adapters.get(a.platform);
+    if (old && old !== a) await old.stop();
+    this.adapters.set(a.platform, a);
+    if (start) await a.start((m) => this.ingest(m));
+  }
+  /** 给管理台顶栏 / 飞书对接页用：各适配器连接状态；不返回消息内容 */
   adapterStatus(): AdapterStatus[] {
     const out: AdapterStatus[] = [];
     for (const a of this.adapters.values()) {
@@ -77,21 +106,42 @@ export class Hub {
     }
     return out;
   }
+  /** hub 侧入站计数：与适配器计数互补，能看到平台事件有没有真的落库。 */
+  inboundStats(platform: string): HubInboundStats {
+    return { ...(this.inbound.get(platform) ?? { attempts: 0, stored: 0, duplicates: 0, self: 0, approval_handled: 0, last_stored_at: null }) };
+  }
+  private statsFor(platform: string): HubInboundStats {
+    let st = this.inbound.get(platform);
+    if (!st) {
+      st = { attempts: 0, stored: 0, duplicates: 0, self: 0, approval_handled: 0, last_stored_at: null };
+      this.inbound.set(platform, st);
+    }
+    return st;
+  }
   async startAdapters() {
-    for (const a of this.adapters.values()) await a.start((m) => this.ingest(m));
+    // 单个平台连不上（凭据过期、网络问题）不能拖垮整个服务：管理台还要能起来改配置
+    for (const a of this.adapters.values()) {
+      try { await a.start((m) => this.ingest(m)); }
+      catch (e) { this.log.error(`适配器 ${a.platform} 启动失败（服务继续启动）`, e); }
+    }
   }
   async stopAdapters() { for (const a of this.adapters.values()) await a.stop(); }
 
   /** 入池；返回入库后的消息（重复则 null） */
   ingest(m: InboundMessage): StoredMessage | null {
+    const st = this.statsFor(m.platform);
+    st.attempts++;
     // 只有闸门明确认领的审批裁决才不进池；同一聊天里的正常消息照常入池
-    if (this.approval?.tryHandle(m)) return null;
+    if (this.approval?.tryHandle(m)) { st.approval_handled++; return null; }
     const saved = this.store.insertMessage(m);
     if (!saved) {
+      st.duplicates++;
       if (!m.from_self) this.log.info(`重复消息已忽略（平台重投？）${m.platform}:${m.msg_id}`);
       return null;
     }
-    if (saved.from_self) return saved;
+    if (saved.from_self) { st.self++; return saved; }
+    st.stored++;
+    st.last_stored_at = Date.now();
     const pool = this.store.getPool(saved.pool_id)!;
     // 群聊和私聊是两种节奏：
     //   私聊＝对话，消息进来就该醒（表情回复除外，等 tick 省 token）

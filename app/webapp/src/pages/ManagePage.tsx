@@ -11,11 +11,13 @@ import { SchedulesView } from "./manage/SchedulesView.tsx";
 import { LlmLogsView } from "./manage/LlmLogsView.tsx";
 import { ModelsView } from "./manage/ModelsView.tsx";
 import { WorkingMemoryView } from "./manage/WorkingMemoryView.tsx";
+import { BotsView } from "./manage/BotsView.tsx";
 
 const LABELS: Record<ManageView, string> = {
   usage: "用量统计",
   "task-stats": "任务统计",
   "llm-logs": "模型日志",
+  bots: "机器人管理",
   executors: "本地编程工具",
   models: "对话模型",
   users: "用户别名",
@@ -30,6 +32,7 @@ const HINTS: Record<ManageView, string> = {
   usage: "按模型和调用看 token 与费用；区间由前端筛选。",
   "task-stats": "已完成任务的耗时、token 与费用。",
   "llm-logs": "按会话看实际请求 / 响应；长正文先折叠。",
+  bots: "已接入的 IM 机器人；点条目查看连接健康、入站计数、漏收核对与凭据。",
   models: "配置多个备用模型；手动切换后下一轮唤醒用新模型重建会话。",
   persona: "人设与提示词；保存后下一轮生效。",
   users: "别名优先于通讯录名字；保存后回填。任务 CLI 用户已隐藏。",
@@ -44,18 +47,22 @@ const MANAGE_GROUPS: { label: string; views: ManageView[] }[] = [
   { label: "观测", views: ["usage", "task-stats", "llm-logs"] },
   {
     label: "配置",
-    views: ["models", "persona", "settings", "schedules", "executors", "users"],
+    views: ["bots", "models", "persona", "settings", "schedules", "executors", "users"],
   },
   { label: "只读", views: ["skills", "work-memory"] },
 ];
 
 export function ManagePage({
   view,
+  bot,
   onViewChange,
+  onBotChange,
   reloadSignal,
 }: {
   view: ManageView;
+  bot?: string;
   onViewChange: (view: ManageView) => void;
+  onBotChange: (bot?: string) => void;
   reloadSignal: number;
 }) {
   return (
@@ -84,6 +91,9 @@ export function ManagePage({
         {view === "usage" && <UsageView reloadSignal={reloadSignal} />}
         {view === "task-stats" && <TaskStatsView reloadSignal={reloadSignal} />}
         {view === "llm-logs" && <LlmLogsView reloadSignal={reloadSignal} />}
+        {view === "bots" && (
+          <BotsView bot={bot} onOpen={onBotChange} reloadSignal={reloadSignal} />
+        )}
         {view === "models" && <ModelsView reloadSignal={reloadSignal} />}
         {view === "users" && <UsersView reloadSignal={reloadSignal} />}
         {view === "persona" && <PersonaView reloadSignal={reloadSignal} />}

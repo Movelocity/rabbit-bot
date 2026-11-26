@@ -169,7 +169,7 @@ function AppShell() {
             <div className="max-sm:hidden">
               <SchedulerTickStatus />
             </div>
-            <FeishuStatus />
+            <FeishuStatus onOpen={() => navigate({ tab: "manage", view: "bots", bot: "feishu" })} />
             <ApiStatus health={health} />
           </div>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
@@ -244,7 +244,9 @@ function AppShell() {
           {tab === "manage" && (
             <ManagePage
               view={route.tab === "manage" ? route.view : "usage"}
+              bot={route.tab === "manage" ? route.bot : undefined}
               onViewChange={(view) => navigate({ tab: "manage", view })}
+              onBotChange={(bot) => navigate({ tab: "manage", view: "bots", bot })}
               reloadSignal={reloadSignal}
             />
           )}

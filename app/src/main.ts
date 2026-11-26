@@ -1,9 +1,9 @@
 /** 正式服务入口：飞书长连接 + pi。缺少凭据直接退出，不会空跑。 */
 import "./env-defaults.ts";
-import { loadConfig, missingEnv } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { App } from "./app.ts";
 import { resolveModel } from "./agent/engine.ts";
-import { FeishuAdapter } from "./adapters/feishu.ts";
+import { createFeishuAdapter, effectiveFeishuCredentials } from "./ops/feishu-connection.ts";
 import { MatrixAdapter } from "./adapters/matrix.ts";
 import { MockAdapter } from "./adapters/mock.ts";
 import { WebAdapter } from "./adapters/web.ts";
@@ -57,10 +57,6 @@ async function main() {
   // 主人名单：群聊里他说的话不 @ 也要回（hub 判唤醒、prompt 标 [主人] 都用它）
   setOwnerIds([...(cfg.adapters.matrix.ownerIds ?? [])]);
   if (cfg.llm.provider === "faux") throw new Error("正式服务不能使用 faux 桩模型；请在 config/local.json 设置 llm.provider/model");
-  if (cfg.adapters.feishu.enabled) {
-    const miss = missingEnv(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-    if (miss.length) { log.error(`缺少环境变量：${miss.join(", ")}，退出`); process.exit(2); }
-  }
   let model;
   try { model = await resolveModel(cfg); } catch (e) { log.error(`LLM 配置不可用：${(e as Error).message}`); process.exit(2); }
 
@@ -81,12 +77,18 @@ async function main() {
   // 技能约定：skills/<name>/SKILL.md 进 git，data/ 是运行时。空目录 clone 不下来，启动时补。
   const madeDirs = ensureSkillDataDirs(cfg);
   if (madeDirs.length) log.info(`补了 ${madeDirs.length} 个技能 data 目录`);
-  if (cfg.adapters.feishu.enabled)
-    app.hub.addAdapter(new FeishuAdapter({ appId: process.env.FEISHU_APP_ID!, appSecret: process.env.FEISHU_APP_SECRET!, domain: cfg.adapters.feishu.domain, fetchSenderName: cfg.adapters.feishu.fetchSenderName, reactions: cfg.adapters.feishu.reactions, logRawEmoji: cfg.adapters.feishu.logRawEmoji, emoji: app.emoji, media: { dir: mediaInboxDir(cfg), maxEdge: cfg.media.maxEdge, maxBytes: cfg.media.maxBytes }, filesDir: filesDir(cfg),
-      knownChats: () => app.store.listPools({ includeArchived: true }).filter((p) => p.platform === "feishu")
-        .map((p) => ({ id: p.external_id, kind: p.kind === "private" ? "private" as const : "group" as const, title: p.title })),
-      isStored: (id) => app.store.hasMessage("feishu", id),
-    }, log));
+  if (cfg.adapters.feishu.enabled) {
+    const creds = effectiveFeishuCredentials(cfg);
+    if (creds.source === "none") {
+      log.warn("飞书已启用但没有凭据（环境变量或管理台），跳过自动连接；可在管理台「飞书对接」里填写");
+    } else {
+      const adapter = createFeishuAdapter(cfg, { store: app.store, emoji: app.emoji, log }, creds);
+      if (adapter) {
+        app.hub.addAdapter(adapter);
+        log.info(`飞书将自动连接（凭据来源：${creds.source === "runtime" ? "管理台" : "环境变量"}）`);
+      }
+    }
+  }
   if (cfg.adapters.matrix.enabled && process.env.MATRIX_TOKEN)
     app.hub.addAdapter(
       new MatrixAdapter(

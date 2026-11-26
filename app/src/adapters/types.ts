@@ -10,9 +10,25 @@ export interface RecallResult { ok: boolean; error?: string }
 export type RichPart = { type: "text"; text: string } | { type: "emoji"; id: string; key: string };
 
 /** 断开重连后核对出的漏收窗口：missed 是平台有、本地没有的条数（表情回复不在此列） */
-export interface AdapterGap { from: number; to: number; missed: number; checked_at: number; error?: string }
+export interface AdapterGap { from: number; to: number; missed: number; checked_at: number; chats?: number; error?: string }
 
-/** 适配器连接状态：给管理台顶栏显示，不包含消息内容 */
+/** 连接健康时间线：状态变化、错误、漏收核对，给管理台看最近发生过什么 */
+export interface AdapterEvent {
+  at: number;
+  kind: "connected" | "disconnected" | "reconnected" | "error" | "gap";
+  message: string;
+}
+
+/** 入站全链路计数：收到事件 → 去重 → 转换 → 交给上层入池 */
+export interface AdapterInboundCounters {
+  received: number;
+  duplicates: number;
+  processed: number;
+  conversion_errors: number;
+  enqueue_errors: number;
+}
+
+/** 适配器连接状态：给管理台显示，不包含消息内容 */
 export interface AdapterStatus {
   platform: Platform;
   state: "connecting" | "connected" | "reconnecting" | "stopped";
@@ -21,7 +37,17 @@ export interface AdapterStatus {
   connected_at: number | null;
   disconnected_at: number | null;
   last_error?: string;
+  last_error_at?: number;
+  /** 最近一次收到平台事件的时刻（含重复投递） */
+  last_event_at?: number | null;
+  /** 最近一次成功交给上层入池的时刻 */
+  last_inbound_at?: number | null;
+  /** 进程启动以来重连成功次数 */
+  reconnects?: number;
+  counters?: AdapterInboundCounters;
+  events?: AdapterEvent[];
   last_gap: AdapterGap | null;
+  gap_history?: AdapterGap[];
 }
 
 export interface IMAdapter {

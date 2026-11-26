@@ -10,8 +10,8 @@ const REPLAY_WINDOW_MS = 5 * 60_000;
 /** 核对出的漏收在顶栏挂多久；之后仍然能在悬浮详情里看到 */
 const GAP_SHOW_MS = 30 * 60_000;
 
-/** 页眉里的飞书连接状态：自己按秒走显示断开时长，悬浮看断开 / 核对详情。 */
-export function FeishuStatus() {
+/** 页眉里的飞书连接状态：自己按秒走显示断开时长，悬浮看断开 / 核对详情，点击进对接页。 */
+export function FeishuStatus({ onOpen }: { onOpen?: () => void }) {
   const request = useApi();
   const [status, setStatus] = useState<AdapterStatus | null>(null);
   const [failed, setFailed] = useState(false);
@@ -65,7 +65,13 @@ export function FeishuStatus() {
         : "bg-muted";
 
   return (
-    <div className="group relative flex flex-none items-center gap-1.5 text-[12.5px] text-muted">
+    <button
+      type="button"
+      title="查看飞书连接健康"
+      onClick={onOpen}
+      disabled={!onOpen}
+      className="group relative flex flex-none items-center gap-1.5 rounded-[7px] px-1 py-0.5 text-[12.5px] text-muted outline-none transition enabled:hover:bg-surface2 focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-default"
+    >
       <span className={cx("size-[8px] flex-none rounded-full", dot)} />
       <span className="whitespace-nowrap font-semibold text-text">飞书</span>
       <span className="whitespace-nowrap font-mono text-[12px] font-semibold tabular-nums text-accent-ink">
@@ -134,6 +140,6 @@ export function FeishuStatus() {
           ) : null}
         </dl>
       </div>
-    </div>
+    </button>
   );
 }

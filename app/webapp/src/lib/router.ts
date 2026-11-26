@@ -12,6 +12,7 @@ export const MANAGE_VIEWS = [
   "usage",
   "task-stats",
   "llm-logs",
+  "bots",
   "models",
   "persona",
   "settings",
@@ -33,7 +34,7 @@ export type Route =
   | { tab: "work"; view: WorkView; slug?: string; path?: string; task?: number }
   | { tab: "approvals"; view: ApprovalView; id?: number }
   | { tab: "memories"; view: MemoryView }
-  | { tab: "manage"; view: ManageView };
+  | { tab: "manage"; view: ManageView; bot?: string };
 
 const LEGACY_MANAGE_TABS = new Set<string>([
   "users",
@@ -182,7 +183,14 @@ export function parseRoute(search: string): Route {
   }
 
   if (tab === "manage") {
-    return { tab: "manage", view: isManageView(view) ? view : "usage" };
+    // 旧链接：飞书对接页现在是机器人列表里的详情
+    if (view === "feishu") return { tab: "manage", view: "bots", bot: "feishu" };
+    const manageView = isManageView(view) ? view : "usage";
+    if (manageView === "bots") {
+      const bot = params.get("bot")?.trim();
+      return bot ? { tab: "manage", view: "bots", bot } : { tab: "manage", view: "bots" };
+    }
+    return { tab: "manage", view: manageView };
   }
 
   if (tab === "chat") return { tab: "chat" };
@@ -225,6 +233,7 @@ export function formatRoute(route: Route): string {
       break;
     case "manage":
       params.set("view", route.view);
+      if (route.view === "bots" && route.bot) params.set("bot", route.bot);
       break;
     default:
       break;
@@ -255,7 +264,7 @@ export function sameRoute(a: Route, b: Route): boolean {
     }
     case "manage": {
       const other = b as Extract<Route, { tab: "manage" }>;
-      return a.view === other.view;
+      return a.view === other.view && a.bot === other.bot;
     }
     default:
       return true;
