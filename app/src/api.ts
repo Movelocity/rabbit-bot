@@ -459,6 +459,28 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
           }
           throw new HttpError(404, "用法：GET /v1/pools?archived=1、/v1/pools/:ref/messages、/v1/pools/:ref/search?q=、POST /v1/pools/:ref/archive");
         }
+        case "wakes": {
+          if (parts.length === 2 && method === "GET") {
+            const limit = Math.min(Math.max(qInt(url.searchParams.get("limit")) ?? 20, 1), 200);
+            // wake_log 里塞了工具参数/结果和全文，管理台只需要判断「这一轮有没有出事」，
+            // 返回前裁掉大字段，避免一屏把整个 prompt 和工具输出传回浏览器。
+            const wakes = d.store.recentWakeLogs(limit).map((w: any) => ({
+              ts: w.ts,
+              type: w.type,
+              reasons: w.reasons ?? [],
+              pools: w.pools ?? [],
+              outcome: String(w.outcome ?? ""),
+              ms: Number(w.ms ?? 0),
+              sentCount: Number(w.sentCount ?? 0),
+              read: Array.isArray(w.read)
+                ? w.read.map((r: any) => ({ pool: r.pool, seq: r.seq, from: r.from, text: r.text }))
+                : [],
+              error: w.error,
+            }));
+            return reply(200, wakes);
+          }
+          throw new HttpError(404, "用法：GET /v1/wakes?limit=20");
+        }
         case "llm-logs": {
           if (parts.length === 2 && method === "GET") {
             return reply(200, listLlmSessions(d.cfg, { limit: qInt(url.searchParams.get("limit")) }));

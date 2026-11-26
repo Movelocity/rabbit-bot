@@ -404,6 +404,19 @@ export interface SchedulerStatus {
   active_window_ms: number;
 }
 
+/** 一轮唤醒的结果摘要：管理台用它发现「读了消息却一条没回」的异常。 */
+export interface WakeLogView {
+  ts: string;
+  type: string;
+  reasons: string[];
+  pools: string[];
+  outcome: string;
+  ms: number;
+  sentCount: number;
+  read: { pool: string; seq: number; from: string; text: string }[];
+  error?: string;
+}
+
 export interface AdapterGap {
   from: number;
   to: number;

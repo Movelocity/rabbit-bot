@@ -17,6 +17,7 @@ import type {
   SchedulerStatus,
   TaskView,
   UsageStats,
+  WakeLogView,
 } from "../lib/types.ts";
 import {
   Badge,
@@ -51,6 +52,7 @@ interface OverviewData {
   usage: UsageStats;
   adapters: AdapterStatusResponse;
   scheduler: SchedulerStatus;
+  wakes: WakeLogView[];
 }
 
 function pad(n: number): string {
@@ -152,15 +154,16 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
       const now = Date.now();
       const from = now - 6 * 86400e3;
       try {
-        const [tasks, approvals, limits, usage, adapters, scheduler] = await Promise.all([
+        const [tasks, approvals, limits, usage, adapters, scheduler, wakes] = await Promise.all([
           request<TaskView[]>("/v1/tasks"),
           request<Approval[]>("/v1/approvals"),
           request<LimitStatus>("/v1/limits"),
           request<UsageStats>(`/v1/usage?bucket=day&from=${from}&to=${now}`),
           request<AdapterStatusResponse>("/v1/adapters/status"),
           request<SchedulerStatus>("/v1/scheduler/status"),
+          request<WakeLogView[]>("/v1/wakes?limit=40"),
         ]);
-        setData({ tasks, approvals, limits, usage, adapters, scheduler });
+        setData({ tasks, approvals, limits, usage, adapters, scheduler, wakes });
         setStatus({ text: "" });
       } catch (e) {
         if (!silent) setStatus({ text: `加载失败：${friendlyError(e)}`, error: true });
@@ -322,6 +325,34 @@ export function OverviewPage({ reloadSignal }: { reloadSignal: number }) {
     }
     if (failedToday > 0) {
       out.push({ tone: "rose", label: "任务", text: `${failedToday} 个任务今日失败` });
+    }
+    // 读了消息却一条没回：这是最容易被忽略的故障——进程还活着，池子空转，用户只看到她不说话。
+    // 只看最近 24 小时、最多 2 条；后续同一池有成功唤醒就算已恢复（第一次超时后自动重试成功很常见）。
+    const wakes = data?.wakes ?? [];
+    const silentAborts = wakes
+      .filter((w) => /^(aborted|error)/.test(w.outcome) && w.sentCount === 0)
+      .map((w) => ({ w, at: Date.parse(w.ts) }))
+      .filter((x) => Number.isFinite(x.at) && now - x.at <= 24 * 3600e3)
+      .filter(({ w, at }) =>
+        !wakes.some((later) => {
+          const laterAt = Date.parse(later.ts);
+          return laterAt > at
+            && (later.outcome === "ok" || later.sentCount > 0)
+            && later.pools.some((p) => w.pools.includes(p));
+        }),
+      )
+      .slice(0, 2);
+    for (const { w, at } of silentAborts) {
+      const first = w.read[0];
+      const reason = w.outcome === "error"
+        ? (w.error ? String(w.error).split("\n")[0].slice(0, 80) : "模型调用出错")
+        : w.outcome.replace(/^aborted:/, "");
+      out.push({
+        tone: w.outcome === "aborted:turn-timeout" ? "amber" : "rose",
+        label: "未回复",
+        text: `${first?.from ?? "会话"}的消息没有回复（${reason}）`,
+        meta: `${shortTime(at)}${first?.text ? ` · ${abbreviate(first.text, 40)}` : ""}`,
+      });
     }
     for (const row of quotaRows) {
       if (row.limit > 0 && row.used >= row.limit) {

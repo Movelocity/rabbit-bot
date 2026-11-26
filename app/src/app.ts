@@ -147,6 +147,14 @@ function callsLeftOf(cfg: Config, used: number): number {
   return cap < 0 ? Number.POSITIVE_INFINITY : cap - used;
 }
 
+/**
+ * 中止后自动重试的次数上限：只给「换个新会话重来一次可能就好」的中止用。
+ * 不设上限的话，同一条消息会在超时→回滚→再超时里无限烧 token。
+ */
+const ABORT_RETRY_LIMIT = 1;
+/** 可重试的中止原因。审批被拒/超时、额度到顶、死循环都不重试，重来一遍只会得到同样结果。 */
+const RETRYABLE_ABORT = new Set(["turn-timeout", "aborted"]);
+
 export class App {
   readonly store: Store;
   readonly hub: Hub;
@@ -172,6 +180,8 @@ export class App {
   private silenceReason: string | null = null;
   /** 本轮 send 成功次数 */
   private sendsThisTurn = 0;
+  /** 中止回滚重试的记账：pool → 最近一次回滚到的 seq 和已重试次数；成功发出后清掉 */
+  private abortRetries = new Map<string, { seq: number; count: number }>();
   /** 后台记忆梳理：计数状态、是否在跑、临时上下文和专用工具集 */
   private memoryReviewState: MemoryReviewState = { turns: 0, lastReviewAt: 0, lastOutcome: "" };
   private reviewBusy = false;
@@ -845,6 +855,61 @@ export class App {
     this.log.info(`系统消息（${kind}）→ ${sent.length} 个池（不进上下文）：${text}`);
   }
 
+  /**
+   * 中止且一条消息都没发出时，决定哪些池回滚重试。
+   * 只重试可能换个新会话就好的原因；每个池同一批消息最多一次，超过就保留已读交给
+   * notifyAbort 提示，避免同一条消息反复超时把额度烧穿。
+   */
+  private planAbortRetry(
+    unread: StoredMessage[], reason: string, cursorsBefore: Map<string, number>,
+  ): { retry: string[]; giveUp: string[] } {
+    const retry: string[] = [];
+    const giveUp: string[] = [];
+    const pools = new Set(unread.map((m) => m.pool_id));
+    if (!RETRYABLE_ABORT.has(reason)) {
+      for (const pid of pools) giveUp.push(pid);
+      return { retry, giveUp };
+    }
+    for (const pid of pools) {
+      const seq = unread.reduce((max, m) => (m.pool_id === pid ? Math.max(max, m.seq) : max), 0);
+      const last = this.abortRetries.get(pid);
+      if (last && last.seq === seq && last.count >= ABORT_RETRY_LIMIT) {
+        giveUp.push(pid);
+        continue;
+      }
+      this.abortRetries.set(pid, { seq, count: last?.seq === seq ? last.count + 1 : 1 });
+      const before = cursorsBefore.get(pid);
+      if (before !== undefined) this.store.setCursor(pid, before);
+      retry.push(pid);
+    }
+    return { retry, giveUp };
+  }
+
+  /** 中止后不再自动重试：给受影响的私聊池发一条系统消息（不进上下文），并按 kind 去重。 */
+  private async notifyAbort(pools: string[], reason: string): Promise<void> {
+    const n = this.o.cfg.limits.errorNotice;
+    if (!n?.enabled) return;
+    const kinds = n.poolKinds ?? ["private"];
+    const targets = pools.filter((id) => kinds.includes(this.store.getPool(id)?.kind ?? ""));
+    if (!targets.length) return;
+    const key = `sysNotice.abort.${reason}`;
+    const now = this.clock.now();
+    if (now - Number(this.store.getKv(key) ?? 0) < (n.dedupeMinutes ?? 60) * 60_000) return;
+    const text = this.errorText(`本轮处理被中止（${reason}），消息还在，再发一句「继续」就行`);
+    const sent: string[] = [];
+    for (const pool of targets) {
+      try {
+        const r = await this.hub.send(pool, text, { internal: true });
+        if (r.ok) sent.push(pool);
+      } catch (e) {
+        this.log.warn(`中止提示发送失败 ${pool}：${(e as Error).message}`);
+      }
+    }
+    if (!sent.length) return;
+    this.store.setKv(key, String(now));
+    this.log.info(`系统消息（abort:${reason}）→ ${sent.length} 个池（不进上下文）：${text}`);
+  }
+
   /** 把 {reason} 填进配置文案里；错误信息太长就截断，别把整段堆栈发给人 */
   private errorText(reason: string): string {
     const text = this.o.cfg.limits.errorNotice?.text ?? "〔系统〕我这边出了点问题（{reason}）。";
@@ -1107,11 +1172,25 @@ export class App {
     this.sendsThisTurn = sent.length;
     if (this.silenceReason) entry.silent = this.silenceReason;
     entry.sentCount = sent.length;
-    // LLM 出错且什么都没发：回滚游标，下次 tick 重试
+    // 一条都没发出去就结束：消息不能算读过，否则用户等半天，池子里却显示已读、也不再有唤醒。
+    // 报错沿用原逻辑（回滚 + 系统提示）；中止只回滚可重试的原因，且每个池最多重试一次。
     if (res.error && !sent.length) {
       for (const [p, seq] of cursorsBefore) this.store.setCursor(p, seq);
       // 模型/接口报错也是「程序的事」，别让她背锅
       await this.notifySys("error", this.errorText(res.error));
+    } else if (res.aborted && !sent.length) {
+      const reason = res.abortReason ?? "aborted";
+      const { retry, giveUp } = this.planAbortRetry(unread, reason, cursorsBefore);
+      if (retry.length) {
+        entry.abortRetry = retry;
+        this.queue.enqueue(makeWake("message", retry, `abort-retry:${reason}`, [], this.clock.now()));
+      }
+      if (giveUp.length) {
+        entry.abortGiveUp = giveUp;
+        await this.notifyAbort(giveUp, reason);
+      }
+    } else if (sent.length) {
+      for (const pid of involved) this.abortRetries.delete(pid);
     }
     // 后台只做记忆梳理；技能和业务关系不在这里触发
     this.noteInboundMessages(unread);

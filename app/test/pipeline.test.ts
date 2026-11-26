@@ -500,3 +500,48 @@ test("errorNotice.poolKinds 显式配上 group 时群里也发", async () => {
   assert.deepEqual([...chats].sort(), ["dm-alice", "grp"]);
   await t.done();
 });
+
+test("中止且一条没发：回滚游标并自动重试一次，再失败就保留已读并发系统提示", async () => {
+  const t = await setup();
+  let calls = 0;
+  (t.app.engine as any).run = async () => {
+    calls++;
+    return { assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: true, abortReason: "turn-timeout" };
+  };
+  t.dm("你好");
+  await t.settle(30_000);
+  assert.equal(calls, 2, "第一次中止后应自动重试一次");
+  assert.equal(t.wakes.length, 2);
+  assert.equal(t.wakes[0].outcome, "aborted:turn-timeout");
+  assert.deepEqual(t.wakes[0].abortRetry, ["mock:dm-alice"]);
+  assert.equal(t.wakes[1].outcome, "aborted:turn-timeout");
+  assert.equal(t.wakes[1].abortRetry, undefined);
+  assert.deepEqual(t.wakes[1].abortGiveUp, ["mock:dm-alice"]);
+  assert.deepEqual(t.app.store.poolsWithUnread(), [], "重试预算用完就不能再留着未读空转");
+  assert.ok(
+    t.mock.sent.some((s) => s.chat === "dm-alice" && s.content.includes("turn-timeout")),
+    "第二次还中止时应告诉用户这一轮没回完",
+  );
+  await t.done();
+});
+
+test("中止后自动重试成功：消息不丢，只回一次", async () => {
+  const t = await setup();
+  let calls = 0;
+  (t.app.engine as any).run = async () => {
+    calls++;
+    if (calls === 1) {
+      return { assistantText: "", toolCalls: [], llmCalls: 1, tokens: 0, aborted: true, abortReason: "turn-timeout" };
+    }
+    return {
+      assistantText: "", llmCalls: 1, tokens: 0, aborted: false,
+      toolCalls: [{ name: "chat", args: { action: "send", pool: "mock:dm-alice", content: "收到" }, result: "ok", isError: false }],
+    };
+  };
+  t.dm("你好");
+  await t.settle(30_000);
+  assert.equal(calls, 2);
+  assert.equal(t.wakes[1].sentCount, 1);
+  assert.deepEqual(t.app.store.poolsWithUnread(), []);
+  await t.done();
+});

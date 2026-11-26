@@ -81,6 +81,24 @@ test("健康检查不需要 token", async () => {
   assert.equal(r.body.data.status, "ok");
 });
 
+test("GET /v1/wakes 返回裁剪后的唤醒摘要（不带工具输出和全文）", async () => {
+  store.addWakeLog({
+    ts: "2026-11-26T09:00:00.000Z", type: "message", reasons: ["私聊新消息"],
+    pools: ["feishu:c1"], outcome: "aborted:turn-timeout", ms: 300000, sentCount: 0,
+    read: [{ pool: "feishu:c1", seq: 1, from: "小王", text: "明天一起吃火锅" }],
+    tools: [{ name: "read_file", args: { path: "/secret" }, result: "secret" }],
+    assistantText: "不该回给浏览器的全文",
+  });
+  const r = await call("/v1/wakes?limit=5");
+  assert.equal(r.status, 200);
+  const row = r.body.data.find((x: any) => x.outcome === "aborted:turn-timeout");
+  assert.ok(row, "应返回刚写入的唤醒");
+  assert.equal(row.sentCount, 0);
+  assert.deepEqual(row.read[0], { pool: "feishu:c1", seq: 1, from: "小王", text: "明天一起吃火锅" });
+  assert.equal(row.tools, undefined);
+  assert.equal(row.assistantText, undefined);
+});
+
 test("静态只读看板不需要 token：/ 和 /ui/* 都返回正确类型", async () => {
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
