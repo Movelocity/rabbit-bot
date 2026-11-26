@@ -7,13 +7,29 @@ import type { Approval, ApprovalStatus } from "../lib/types.ts";
 import {
   Badge,
   Button,
-  Chip,
   Empty,
   Notice,
   Page,
-  PageHead,
+  Segmented,
   StatusText,
 } from "../components/ui.tsx";
+import { HostReadLog } from "./approvals/HostReadLog.tsx";
+import { HostReadRules } from "./approvals/HostReadRules.tsx";
+
+type View = "log" | "approvals" | "rules";
+const VIEWS: View[] = ["log", "approvals", "rules"];
+
+function initialView(): View {
+  const v = new URLSearchParams(window.location.search).get("scope");
+  return VIEWS.includes(v as View) ? (v as View) : "log";
+}
+
+/** 子视图记进 URL，刷新/分享链接能回到同一处 */
+function syncViewToUrl(view: View) {
+  const params = new URLSearchParams(window.location.search);
+  params.set("scope", view);
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}${window.location.hash}`);
+}
 
 type StatusFilter = "" | ApprovalStatus;
 
@@ -37,6 +53,12 @@ export function ApprovalsPage({
   const [rows, setRows] = useState<Approval[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: "" });
+  const [view, setViewState] = useState<View>(initialView);
+  const [deciding, setDeciding] = useState(false);
+  const setView = (v: View) => {
+    setViewState(v);
+    syncViewToUrl(v);
+  };
 
   const load = useCallback(
     async (silent = false) => {
@@ -62,6 +84,19 @@ export function ApprovalsPage({
   }, [reloadSignal, load]);
 
   usePolling(() => load(true), 3000);
+
+  const decide = async (id: number, decision: "approved" | "rejected") => {
+    setDeciding(true);
+    try {
+      await request(`/v1/approvals/${id}/decide`, { method: "POST", body: { decision, by: "web" } });
+      setStatus({ text: `#${id} 已${decision === "approved" ? "批准" : "拒绝"}` });
+      await load(true);
+    } catch (e) {
+      setStatus({ text: `裁决失败：${friendlyError(e)}`, error: true });
+    } finally {
+      setDeciding(false);
+    }
+  };
 
   const counts = useMemo(() => {
     const next: Record<StatusFilter, number> = {
@@ -94,13 +129,23 @@ export function ApprovalsPage({
 
   return (
     <Page>
-      <PageHead
-        eyebrow="Approvals"
-        title="权限"
-        sub="Web 只读：这里看谁在等、何时过期、为什么申请；批准和驳回仍在飞书完成。"
-        actions={<Chip tone="clay">{counts.pending} 条待处理</Chip>}
-      />
+      <div className="mb-3.5">
+        <Segmented
+          value={view}
+          onChange={setView}
+          label="权限视图"
+          options={[
+            { value: "log", label: "读取记录" },
+            { value: "approvals", label: counts.pending ? `审批（${counts.pending} 待处理）` : "审批" },
+            { value: "rules", label: "白名单与规则" },
+          ]}
+        />
+      </div>
 
+      {view === "log" && <HostReadLog onChanged={() => void load(true)} />}
+      {view === "rules" && <HostReadRules reloadSignal={reloadSignal} />}
+
+      {view === "approvals" && (<>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="inline-flex flex-wrap rounded-[8px] border border-border bg-surface2 p-0.5">
           {STATUS_TABS.map((tab) => (
@@ -160,7 +205,7 @@ export function ApprovalsPage({
                       <Badge variant={badgeVariant(row.status)}>{row.status}</Badge>
                     </span>
                     <span className="mt-1 flex flex-wrap gap-x-2.5 gap-y-1 text-[10.5px] text-muted">
-                      <span>task #{row.task_id}</span>
+                      <span>{row.task_id ? `task #${row.task_id}` : "本机闸门"}</span>
                       <span>{row.worker_id || "—"}</span>
                       <span>创建 {row.created_at_local || formatTs(row.created_at)}</span>
                       <span>过期 {row.expires_at_local || formatTs(row.expires_at)}</span>
@@ -181,7 +226,7 @@ export function ApprovalsPage({
               <Badge variant={badgeVariant(selected.status)}>{selected.status}</Badge>
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-muted">
-              <span>task #{selected.task_id}</span>
+              <span>{selected.task_id ? `task #${selected.task_id}` : "本机闸门"}</span>
               <span>{selected.worker_id || "—"}</span>
               <span>
                 过期 {selected.expires_at_local || formatTs(selected.expires_at)}
@@ -216,7 +261,7 @@ export function ApprovalsPage({
                 <b className="text-text">过期</b> ·{" "}
                 {selected.expires_at_local || formatTs(selected.expires_at)}
                 <br />
-                {selected.status === "timeout" ? "已超时。" : "到期前需在飞书处理。"}
+                {selected.status === "timeout" ? "已超时，按拒绝处理。" : "到期不裁决按拒绝处理。"}
               </li>
               <li className="relative pb-3 pl-4 text-[11.5px] text-muted before:absolute before:left-0.5 before:top-1.5 before:size-[7px] before:rounded-full before:bg-line-strong after:absolute after:bottom-0 after:left-[5px] after:top-4 after:w-px after:bg-border last:after:hidden">
                 {selected.decided_at ? (
@@ -230,13 +275,25 @@ export function ApprovalsPage({
                   <>
                     <b className="text-text">待裁决</b>
                     <br />
-                    请在飞书审批房处理。
+                    在下方或审批房裁决。
                   </>
                 )}
               </li>
             </ol>
 
-            <Notice className="mt-3">只读 · 审批请在飞书里完成；Web 不提供批准/驳回。</Notice>
+            {selected.status === "pending" ? (
+              <div className="mt-3 flex gap-2">
+                <Button variant="primary" size="sm" className="flex-1" disabled={deciding} onClick={() => void decide(selected.id, "approved")}>
+                  批准
+                </Button>
+                <Button variant="danger" size="sm" className="flex-1" disabled={deciding} onClick={() => void decide(selected.id, "rejected")}>
+                  拒绝
+                </Button>
+              </div>
+            ) : null}
+            {selected.worker_id === "host" ? (
+              <Notice className="mt-3">本机闸门的审批：批准只放行这一次。想以后不再问，去「白名单与规则」加目录（密钥类文件除外）。</Notice>
+            ) : null}
             {onOpenTask && selected.task_id > 0 ? (
               <Button
                 variant="ghost"
@@ -250,6 +307,7 @@ export function ApprovalsPage({
           </aside>
         ) : null}
       </div>
+      </>)}
     </Page>
   );
 }

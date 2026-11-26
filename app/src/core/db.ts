@@ -208,6 +208,17 @@ CREATE TABLE IF NOT EXISTS approvals (
   expires_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+CREATE TABLE IF NOT EXISTS host_read_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          INTEGER NOT NULL,
+  path        TEXT NOT NULL,
+  outcome     TEXT NOT NULL,
+  rule        TEXT NOT NULL DEFAULT '',
+  why         TEXT NOT NULL DEFAULT '',
+  approval_id INTEGER,
+  by          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_host_read_log_ts ON host_read_log(ts);
 `;
 
 function rowToPool(r: any): Pool & { last_msg_at?: number } {

@@ -41,7 +41,7 @@ const TAB_ITEMS: { tab: Tab; label: string }[] = [
 const TAB_HINTS: Record<string, string> = {
   overview: "调度 / 任务 / 额度一屏看完 · 每 10 秒刷新",
   work: "任务 · 产出 · 项目 · 按 / 搜索任务 · 审批以飞书为主",
-  approvals: "只读 · 审批请在飞书里完成",
+  approvals: "读取记录 · 审批 · 白名单目录",
   memories: "条目可改正文 / 删除；图谱只读 · 对象 / 关系 / 动作",
 };
 

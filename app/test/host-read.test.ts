@@ -7,6 +7,9 @@ import path from "node:path";
 import { createTools } from "../src/agent/tools.ts";
 import { Store } from "../src/core/db.ts";
 import { loadConfig } from "../src/config.ts";
+import {
+  addHostReadRoot, checkHostRead, hostReadSettings, listHostReadLog, removeHostReadRoot, setUnknownPolicy,
+} from "../src/core/host-read.ts";
 
 function setup(opts: { decision?: "approved" | "rejected"; allowHostRoot?: boolean; configuredVolume?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb-host-read-"));
@@ -69,45 +72,112 @@ test("host 白名单内的文件直接读，不申请", async () => {
   } finally { cleanup(s); }
 });
 
-test("host 白名单外：批准后读，并记进白名单；第二次不再申请", async () => {
-  const s = setup({ decision: "approved" });
+test("host 白名单外的代码/文档直接读，记一条 auto", async () => {
+  const s = setup();
   try {
-    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
+    fs.writeFileSync(path.join(s.hostDir, "a.ts"), "export const a = 1;");
+    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "a.ts") });
     assert.equal(r.details.ok, true);
-    assert.equal(text(r), "host ok");
-    assert.equal(s.asked.length, 1);
-    const again: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
-    assert.equal(again.details.ok, true);
-    assert.equal(s.asked.length, 1, "批准过一次后应进白名单");
+    assert.equal(s.asked.length, 0, "代码文件不该申请");
+    const log = listHostReadLog(s.store);
+    assert.equal(log[0].outcome, "auto");
+    assert.equal(log[0].rule, "ext");
   } finally { cleanup(s); }
 });
 
-test("host 白名单外：被拒就不读", async () => {
+test("未登记类型：批准只放行这一次，下次还问", async () => {
+  const s = setup({ decision: "approved" });
+  try {
+    const f = path.join(s.hostDir, "data.bin");
+    fs.writeFileSync(f, "plain text");
+    const r: any = await s.read.execute("id", { scope: "host", path: f });
+    assert.equal(r.details.ok, true);
+    assert.equal(text(r), "plain text");
+    assert.equal(s.asked.length, 1);
+    await s.read.execute("id", { scope: "host", path: f });
+    assert.equal(s.asked.length, 2, "批准不进白名单");
+    assert.equal(listHostReadLog(s.store, { outcome: "approved" }).length, 2);
+  } finally { cleanup(s); }
+});
+
+test("host 申请被拒就不读", async () => {
   const s = setup({ decision: "rejected" });
   try {
-    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
+    fs.writeFileSync(path.join(s.hostDir, ".env"), "TOKEN=x");
+    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, ".env") });
     assert.equal(r.details.ok, false);
     assert.match(text(r), /没批/);
+    assert.doesNotMatch(text(r), /TOKEN=x/);
+    assert.equal(listHostReadLog(s.store)[0].outcome, "rejected");
   } finally { cleanup(s); }
 });
 
-test("scope=sandbox 下绝对路径只做根内换算，不偷偷切 host", async () => {
-  const s = setup({ decision: "approved" });
+test("白名单目录里的 .env 照样要审批；.env.example 直接读", async () => {
+  const s = setup({ allowHostRoot: true, decision: "rejected" });
   try {
-    const inSandbox: any = await s.read.execute("id", { path: path.join(s.runtime, "sandbox.txt") });
-    assert.equal(inSandbox.details.ok, true);
-    assert.equal(text(inSandbox), "sandbox ok");
-    assert.equal(s.asked.length, 0, "沙盒内绝对路径不该申请");
+    fs.writeFileSync(path.join(s.hostDir, ".env"), "TOKEN=x");
+    fs.writeFileSync(path.join(s.hostDir, ".env.example"), "TOKEN=");
+    const secret: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, ".env") });
+    assert.equal(secret.details.ok, false);
+    assert.equal(s.asked.length, 1);
+    const tpl: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, ".env.example") });
+    assert.equal(tpl.details.ok, true);
+    assert.equal(s.asked.length, 1, "模板不该申请");
+  } finally { cleanup(s); }
+});
 
-    const onHost: any = await s.read.execute("id", { path: path.join(s.hostDir, "host.txt") });
-    assert.equal(onHost.details.ok, false);
-    assert.match(text(onHost), /scope="host"/);
-    assert.equal(s.asked.length, 0, "没显式 scope=host 不该触发审批");
+test("白名单目录里的软链指向密钥：按真实路径判，要审批", async () => {
+  const s = setup({ allowHostRoot: true, decision: "rejected" });
+  try {
+    const outside = path.join(s.dir, "keys");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "server.pem"), "-----BEGIN PRIVATE KEY-----");
+    fs.symlinkSync(path.join(outside, "server.pem"), path.join(s.hostDir, "notes.md"));
+    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "notes.md") });
+    assert.equal(r.details.ok, false);
+    assert.equal(s.asked.length, 1);
+  } finally { cleanup(s); }
+});
 
-    const explicit: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "host.txt") });
-    assert.equal(explicit.details.ok, true);
-    assert.equal(text(explicit), "host ok");
-    assert.equal(s.asked.length, 1, "显式 host 才走审批");
+test("白名单目录里的未登记类型直接读", async () => {
+  const s = setup({ allowHostRoot: true });
+  try {
+    fs.writeFileSync(path.join(s.hostDir, "data.bin"), "x");
+    const r: any = await s.read.execute("id", { scope: "host", path: path.join(s.hostDir, "data.bin") });
+    assert.equal(r.details.ok, true);
+    assert.equal(s.asked.length, 0);
+    assert.equal(listHostReadLog(s.store)[0].rule, "dir");
+  } finally { cleanup(s); }
+});
+
+test("旧白名单（字符串数组）迁移：只留存在的目录，单文件和坏条目丢掉", () => {
+  const s = setup();
+  try {
+    const file = path.join(s.dir, "data", "run", "host-read-allow.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify([s.hostDir, path.join(s.hostDir, "host.txt"), "/nope/x *"]));
+    const cfg = loadConfig({ runtimeDir: s.runtime, dataDir: path.join(s.dir, "data"), exec: { dir: s.runtime, shell: { mode: "docker" } } });
+    const st = hostReadSettings(cfg);
+    const web = st.roots.filter((r) => r.source === "web");
+    assert.deepEqual(web.map((r) => r.path), [fs.realpathSync(s.hostDir)]);
+    assert.equal(st.unknown, "ask");
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).version, 2, "迁移后写回新格式");
+  } finally { cleanup(s); }
+});
+
+test("管理台加/删白名单目录；不收文件和家目录", () => {
+  const s = setup();
+  try {
+    const cfg = loadConfig({ runtimeDir: s.runtime, dataDir: path.join(s.dir, "data"), exec: { dir: s.runtime, shell: { mode: "docker" } } });
+    assert.throws(() => addHostReadRoot(cfg, path.join(s.hostDir, "host.txt")), /不是已存在的目录/);
+    assert.throws(() => addHostReadRoot(cfg, os.homedir()), /家目录/);
+    assert.throws(() => addHostReadRoot(cfg, "relative/dir"), /绝对路径/);
+    addHostReadRoot(cfg, s.hostDir, "测试");
+    assert.equal(checkHostRead(cfg, path.join(s.hostDir, "data.bin")).rule, "dir");
+    assert.equal(removeHostReadRoot(cfg, s.hostDir), true);
+    assert.equal(checkHostRead(cfg, path.join(s.hostDir, "data.bin")).verdict, "ask");
+    setUnknownPolicy(cfg, "allow");
+    assert.equal(checkHostRead(cfg, path.join(s.hostDir, "data.bin")).verdict, "allow");
   } finally { cleanup(s); }
 });
 

@@ -149,6 +149,8 @@ export interface Config {
     maxFileBytes: number;
     maxTotalBytes: number;
     maxReadChars: number;
+    /** read_file scope=host 的类型规则；白名单目录在管理台维护（run/host-read-allow.json） */
+    hostRead?: { /** 额外自动放行的扩展名（不带点） */ autoExts?: string[] };
     shell: {
       enabled: boolean;
       /** docker = 隔离容器（默认）；host = 直接跑在宿主机上，无隔离，仅本地开发用 */

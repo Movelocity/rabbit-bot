@@ -25,7 +25,6 @@ import {
   Kpi,
   KpiGrid,
   Page,
-  PageHead,
   StatusText,
 } from "../components/ui.tsx";
 
@@ -328,13 +327,6 @@ export function OverviewPage({
 
   return (
     <Page>
-      <PageHead
-        eyebrow="Overview"
-        title="概览"
-        sub="调度、任务与额度一屏看完；点任务进详情，审批仍在飞书处理。"
-        actions={<Chip tone="accent">每 10 秒刷新</Chip>}
-      />
-
       {!data ? (
         <StatusText text={status.text || "加载中…"} error={status.error} />
       ) : (

@@ -19,7 +19,7 @@ import {
   addWorkingMemory, assertWorkingMemoryText, readWorkingMemory, removeWorkingMemory, replaceWorkingMemory,
   WORKING_MEMORY_FILE, WORKING_MEMORY_MAX_CHARS,
 } from "../core/working-memory.ts";
-import { hostReadAllowed, rememberHostReadRoot } from "../core/host-read.ts";
+import { checkHostRead, logHostRead } from "../core/host-read.ts";
 import { coerciveHit, coerciveFeedback } from "../core/guard.ts";
 import { checkStyle } from "../core/style-gate.ts";
 import { classify } from "../core/cmd-rules.ts";
@@ -820,6 +820,10 @@ export function createTools(d: ToolDeps) {
               return txt('decision 只能是 "approved" 或 "rejected"。', { ok: false });
             }
             if (!p.by?.trim()) return txt("decide 要 by（谁批的）。", { ok: false });
+            // 宿主机命令 / 宿主读取的审批只能主人批（审批房贴表情或管理台），自己不能批自己
+            if (d.approval?.pendingRowId === p.id || getApproval(d.store, p.id)?.worker_id === "host") {
+              return txt(`审批 #${p.id} 是宿主机闸门，只能主人在审批房或管理台裁决。`, { ok: false, denied: true });
+            }
             const a = decideApproval(d.store, p.id, { decision: p.decision, by: p.by }, d.enqueue);
             return txt(JSON.stringify(a, null, 2), { ok: true, approval: a });
           }
@@ -1243,7 +1247,7 @@ export function createTools(d: ToolDeps) {
     executionMode: "sequential",
     description:
       `读文件。scope=sandbox（默认）只读沙盒：相对路径或 /work/...；`
-      + "scope=host 读宿主机：已配置的 volume / readRoots 直接可读，其他路径会发审批申请，批准后加入白名单。"
+      + "scope=host 读宿主机：代码/文档类文件和白名单目录直接可读；疑似密钥或环境变量文件（.env、*.pem、credentials 等）和未登记类型要主人审批，批准只放行这一次。"
       + "两种 scope 不互相猜：绝对宿主路径必须显式 scope=host。"
       + "文件太长会被截断，截断时会告诉你。提示词在沙盒里的 prompt/*.md，直接改。",
     parameters: Type.Object({
@@ -1293,16 +1297,31 @@ export function createTools(d: ToolDeps) {
         if (!raw || (!raw.startsWith("~") && !path.isAbsolute(raw))) {
           return txt("scope=host 要绝对路径或 ~/...", { ok: false });
         }
-        const target = path.resolve(expandHome(raw));
-        if (!hostReadAllowed(d.cfg, target)) {
+        const v = checkHostRead(d.cfg, raw);
+        const target = v.path;
+        const base = { path: target, rule: v.rule, why: v.why };
+        if (v.verdict === "deny") {
+          logHostRead(d.store, { ...base, outcome: "denied", approval_id: null, by: null });
+          return txt(`这个文件不许读（${v.why}）：${target}`, { ok: false, denied: true });
+        }
+        if (v.verdict === "ask") {
           if (!d.approval?.enabled) {
-            return txt(`宿主读取不在白名单：${target}。审批没开，先让主人把根目录加到 exec.shell.host.readRoots。`, { ok: false, needAllow: true });
+            logHostRead(d.store, { ...base, outcome: "unavailable", approval_id: null, by: null });
+            return txt(`读 ${target} 要主人审批（${v.why}），但审批没开，没读。可以请主人在管理台「权限 → 白名单」里加目录。`, { ok: false, needAllow: true });
           }
-          const r = await d.approval.request({ cmd: target, cwd: path.dirname(target), why: "读取宿主文件（批准后加入白名单）" });
+          const r = await d.approval.request({
+            cmd: target, cwd: path.dirname(target), kind: "read",
+            why: `读取宿主文件：${v.why}（只放行这一次）`,
+          });
+          logHostRead(d.store, {
+            ...base, outcome: r.decision === "approved" ? "approved" : r.decision === "rejected" ? "rejected" : "timeout",
+            approval_id: r.rowId ?? null, by: r.by ?? null,
+          });
           if (r.decision !== "approved") {
             return txt(`宿主读取没批（${r.decision}），没读：${target}`, { ok: false, denied: true });
           }
-          rememberHostReadRoot(d.cfg, target);
+        } else {
+          logHostRead(d.store, { ...base, outcome: "auto", approval_id: null, by: null });
         }
         try {
           const st = fs.statSync(target);

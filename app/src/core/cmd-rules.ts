@@ -11,6 +11,8 @@
  * → 动词白名单 + 路径归属」。
  */
 
+import { secretReason } from "./host-read-policy.ts";
+
 export type Verdict = "safe" | "ask" | "deny";
 
 export interface RuleContext {
@@ -152,6 +154,8 @@ function credHit(argv: string[], ctx: RuleContext): string | null {
     if (!a || a.startsWith("-")) continue;
     const abs = resolvePath(a, ctx);
     for (const re of CRED_PATTERNS) if (re.test(abs)) return abs;
+    // 和 read_file host 共用一份密钥判定（.env.*、*.pem、credentials、~/.aws 等）
+    if (secretReason(abs)) return abs;
   }
   return null;
 }

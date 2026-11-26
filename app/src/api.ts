@@ -42,6 +42,10 @@ import { formatTask, getTaskView, listTaskViews } from "./ops/tasks.ts";
 import { taskStats } from "./ops/task-stats.ts";
 import { auditTasks, type PmTaskRow } from "./core/pm.ts";
 import { getApprovalView, listApprovalViews } from "./ops/approvals.ts";
+import {
+  addHostReadRoot, checkHostRead, HostReadRootError, hostReadLogStats, hostReadSettings, listHostReadLog,
+  removeHostReadRoot, setUnknownPolicy,
+} from "./core/host-read.ts";
 import { addMemory, closeMemory, deleteMemory, listMemoriesGlobal, searchMemories, traceMemory, updateMemory } from "./ops/memories.ts";
 import { getProject, listProjects, updateProject } from "./ops/projects.ts";
 import { listPrompts, markFreshSession, readPersona, readPrompt, writePersona, writePrompt } from "./ops/runtime-files.ts";
@@ -109,6 +113,11 @@ export interface ApiDeps {
   switchModel?: (provider: string, model: string) => Promise<ModelSettings>;
   /** 管理台可选模型：返回当前有凭据的模型 */
   listModels?: () => Promise<{ provider: string; model: string; name: string }[]>;
+  /** 宿主机审批闸门：Web 裁决后让正在等的那条立刻放行/拒绝 */
+  hostGate?: {
+    readonly pendingRowId: number | null;
+    settleByRow(rowId: number, decision: "approved" | "rejected", by?: string): boolean;
+  };
 }
 
 const WEB_ROOT = path.join(APP_ROOT, "web");
@@ -969,13 +978,69 @@ export async function startApiServer(d: ApiDeps): Promise<http.Server | null> {
               throw new HttpError(400, 'decision 只能是 "approved" 或 "rejected"');
             }
             if (typeof body.by !== "string" || !body.by.trim()) throw new HttpError(400, "缺少 by");
-            if (!getApproval(d.store, id)) throw new HttpError(404, `没有审批 #${id}`);
-            return reply(200, decideApproval(d.store, id, {
+            const row = getApproval(d.store, id);
+            if (!row) throw new HttpError(404, `没有审批 #${id}`);
+            // 宿主机闸门（命令 / 读文件）只认浏览器登录会话：沙盒里也有 API token，不能让她自己批自己
+            const hostRow = row.worker_id === "host" || d.hostGate?.pendingRowId === id;
+            if (hostRow && !webSession) throw new HttpError(403, "宿主机审批只能在管理台登录后裁决");
+            const decided = decideApproval(d.store, id, {
               decision: body.decision,
               by: body.by,
-            }, d.enqueue));
+            }, d.enqueue);
+            if (hostRow) d.hostGate?.settleByRow(id, body.decision, body.by);
+            return reply(200, decided);
           }
           throw new HttpError(404, "用法：GET|POST /v1/approvals、GET /v1/approvals/:id、POST /v1/approvals/:id/decide");
+        }
+        case "host-read": {
+          // 白名单与读取记录。改动只认浏览器登录会话：沙盒拿得到 API token，不能让她给自己开白名单。
+          const needSession = () => {
+            if (!webSession) throw new HttpError(403, "改宿主读取白名单要在管理台登录后操作");
+          };
+          if (parts.length === 2 && method === "GET") {
+            const day = 86400_000;
+            return reply(200, {
+              ...hostReadSettings(d.cfg),
+              stats: { day: hostReadLogStats(d.store, Date.now() - day), week: hostReadLogStats(d.store, Date.now() - 7 * day) },
+            });
+          }
+          if (parts.length === 2 && method === "PUT") {
+            needSession();
+            if (body.unknown !== "ask" && body.unknown !== "allow") throw new HttpError(400, 'unknown 只能是 "ask" 或 "allow"');
+            setUnknownPolicy(d.cfg, body.unknown);
+            return reply(200, hostReadSettings(d.cfg));
+          }
+          if (parts[2] === "roots" && parts.length === 3 && method === "POST") {
+            needSession();
+            try {
+              addHostReadRoot(d.cfg, String(body.path ?? ""), typeof body.note === "string" ? body.note : "");
+            } catch (e) {
+              if (e instanceof HostReadRootError) throw new HttpError(400, e.message);
+              throw e;
+            }
+            return reply(201, hostReadSettings(d.cfg));
+          }
+          if (parts[2] === "roots" && parts.length === 3 && method === "DELETE") {
+            needSession();
+            const p = url.searchParams.get("path") ?? String(body.path ?? "");
+            if (!p) throw new HttpError(400, "缺少 path");
+            if (!removeHostReadRoot(d.cfg, p)) throw new HttpError(404, `白名单里没有（或不是管理台加的）：${p}`);
+            return reply(200, hostReadSettings(d.cfg));
+          }
+          if (parts[2] === "log" && parts.length === 3 && method === "GET") {
+            return reply(200, listHostReadLog(d.store, {
+              outcome: url.searchParams.get("outcome") || undefined,
+              q: url.searchParams.get("q") || undefined,
+              limit: qInt(url.searchParams.get("limit")),
+              before: qInt(url.searchParams.get("before")),
+            }));
+          }
+          if (parts[2] === "check" && parts.length === 3 && method === "GET") {
+            const p = url.searchParams.get("path") ?? "";
+            if (!p.startsWith("~") && !path.isAbsolute(p)) throw new HttpError(400, "path 要绝对路径或 ~/...");
+            return reply(200, checkHostRead(d.cfg, p));
+          }
+          throw new HttpError(404, "用法：GET|PUT /v1/host-read、POST|DELETE /v1/host-read/roots、GET /v1/host-read/log、GET /v1/host-read/check?path=");
         }
         case "usage": {
           const now = Date.now();

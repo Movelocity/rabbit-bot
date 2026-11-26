@@ -141,6 +141,7 @@ async function main() {
       enqueue: () => { app.queue.enqueue(makeWake("task-updated", [], "task updated")); },
       switchModel: (provider, model) => app.switchModel(provider, model),
       listModels: () => app.listAvailableModels(),
+      hostGate: app.approval,
     });
     if (cfg.exec.shell.enabled && cfg.exec.shell.mode === "docker") {
       const r = await ensureSandboxContainer(shellRunnerOptions(cfg));

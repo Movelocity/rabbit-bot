@@ -154,6 +154,42 @@ export interface Approval {
   decided_at_local: string | null;
 }
 
+/** 宿主读取白名单目录：config = 配置 readRoots，volume = 挂进沙盒的目录，web = 管理台加的 */
+export interface HostReadRoot {
+  path: string;
+  source: "config" | "volume" | "web";
+  note?: string;
+  added_at?: number;
+  exists: boolean;
+}
+
+export type HostReadOutcome = "auto" | "approved" | "rejected" | "timeout" | "denied" | "unavailable";
+
+export interface HostReadSettings {
+  unknown: "ask" | "allow";
+  roots: HostReadRoot[];
+  stats: { day: Partial<Record<HostReadOutcome, number>>; week: Partial<Record<HostReadOutcome, number>> };
+}
+
+export interface HostReadLogRow {
+  id: number;
+  ts: number;
+  path: string;
+  outcome: HostReadOutcome;
+  rule: string;
+  why: string;
+  approval_id: number | null;
+  by: string | null;
+}
+
+export interface HostReadCheck {
+  path: string;
+  verdict: "allow" | "ask" | "deny";
+  rule: string;
+  why: string;
+  root?: string;
+}
+
 /** shared/projects/<slug>/：context.md 是项目上下文，plan.md 是当前目标与下一步。 */
 export interface Project {
   slug: string;

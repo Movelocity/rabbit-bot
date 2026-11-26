@@ -36,6 +36,19 @@ export interface ApprovalResult {
   /** 批/拒的人 */
   by?: string;
   latencyMs: number;
+  /** approvals 表里的行 id（落库成功时才有） */
+  rowId?: number;
+}
+
+/** shell = 宿主机命令；read = 读宿主文件 */
+export type ApprovalKind = "shell" | "read";
+
+export interface ApprovalRequest {
+  cmd: string;
+  cwd: string;
+  why: string;
+  taskId?: number;
+  kind?: ApprovalKind;
 }
 
 interface Pending {
@@ -117,7 +130,7 @@ export class ApprovalGate {
     return { id: this.pending.id, cmd: this.pending.cmd, elapsedMs: Date.now() - this.pending.createdAt };
   }
 
-  async request(req: { cmd: string; cwd: string; why: string; taskId?: number }): Promise<ApprovalResult> {
+  async request(req: ApprovalRequest): Promise<ApprovalResult> {
     if (!this.enabled) return { id: 0, decision: "disabled", latencyMs: 0 };
     const run = () => this.ask(req);
     const p = this.chain.then(run, run);
@@ -125,14 +138,15 @@ export class ApprovalGate {
     return p;
   }
 
-  private ask(req: { cmd: string; cwd: string; why: string; taskId?: number }): Promise<ApprovalResult> {
+  private ask(req: ApprovalRequest): Promise<ApprovalResult> {
     const id = ++this.seq;
     const createdAt = Date.now();
     const timeoutMs = Math.max(500, this.cfg.timeoutMs || 600_000);
     const oneLine = req.cmd.replace(/\s+/g, " ").slice(0, 400);
+    const kind: ApprovalKind = req.kind ?? "shell";
     const text = [
-      `【要动本机】#${id}（${req.why}）`,
-      `命令：${oneLine}`,
+      kind === "read" ? `【要读本机文件】#${id}（${req.why}）` : `【要动本机】#${id}（${req.why}）`,
+      kind === "read" ? `文件：${oneLine}` : `命令：${oneLine}`,
       "",
       "同意：给这条消息贴 OK / 👍 表情",
       "拒绝：贴 No / 👎 表情",
@@ -146,7 +160,7 @@ export class ApprovalGate {
         const a = createApproval(this.deps.store, {
           taskId: req.taskId ?? this.deps.taskId ?? 0,
           workerId: this.deps.workerId ?? "host",
-          action: `shell: ${oneLine}`,
+          action: `${kind}: ${oneLine}`,
           detail: req.cwd,
           why: req.why,
           timeoutS: timeoutMs / 1000,
@@ -208,7 +222,23 @@ export class ApprovalGate {
         : `#${id} 关掉了审批，没有执行`;
       void this.send(this.cfg.roomId, line).catch(() => undefined);
     }
-    p.resolve({ id, decision, by, latencyMs });
+    p.resolve({ id, decision, by, latencyMs, rowId: p.approvalRowId });
+  }
+
+  /**
+   * Web / UFA 工具在 approvals 表上裁决后调这里：正在等的那条立刻放行或拒绝，
+   * 不用等到超时。不是当前等待的那条就什么都不做，返回 false。
+   */
+  /** 当前在等的那条在 approvals 表里的行 id；没有就是 null */
+  get pendingRowId(): number | null {
+    return this.pending?.approvalRowId ?? null;
+  }
+
+  settleByRow(rowId: number, decision: "approved" | "rejected", by?: string): boolean {
+    const p = this.pending;
+    if (!p || !p.approvalRowId || p.approvalRowId !== rowId) return false;
+    this.settle(p.id, decision, by);
+    return true;
   }
 
   /** 命令跑完了，回一句结果到审批房（只对过了审批的那条有意义） */
