@@ -19,10 +19,8 @@ import { ApiStatus } from "./components/ApiStatus.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { OverviewPage } from "./pages/OverviewPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
-import { TasksPage } from "./pages/TasksPage.tsx";
-import { OutputsPage } from "./pages/OutputsPage.tsx";
+import { WorkPage } from "./pages/WorkPage.tsx";
 import { ApprovalsPage } from "./pages/ApprovalsPage.tsx";
-import { ProjectsPage } from "./pages/ProjectsPage.tsx";
 import { MemoryPage } from "./pages/MemoryPage.tsx";
 import { ManagePage } from "./pages/ManagePage.tsx";
 
@@ -34,20 +32,16 @@ const ICON_URL = `${import.meta.env.BASE_URL}logo.png`;
 const TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "overview", label: "概览" },
   { tab: "chat", label: "会话" },
-  { tab: "tasks", label: "任务" },
-  { tab: "outputs", label: "产出" },
+  { tab: "work", label: "工作台" },
   { tab: "approvals", label: "权限" },
-  { tab: "projects", label: "项目" },
   { tab: "memories", label: "记忆" },
   { tab: "manage", label: "管理" },
 ];
 
 const TAB_HINTS: Record<string, string> = {
   overview: "调度 / 任务 / 额度一屏看完 · 每 10 秒刷新",
-  tasks: "飞书审批为主 · Web 备用",
-  outputs: "任务最终交付物 · Markdown / CSV / HTML 预览",
+  work: "任务 · 产出 · 项目 · 按 / 搜索任务 · 审批以飞书为主",
   approvals: "只读 · 审批请在飞书里完成",
-  projects: "shared/projects · context.md / plan.md · 可编辑",
   memories: "条目可改正文 / 删除；图谱只读 · 对象 / 关系 / 动作",
 };
 
@@ -228,9 +222,9 @@ export default function App() {
               reloadSignal={reloadSignal}
               onOpenTask={(id) => {
                 setTaskFocus(id);
-                setTab("tasks");
+                setTab("work");
               }}
-              onOpenTasks={() => setTab("tasks")}
+              onOpenTasks={() => setTab("work")}
               onOpenApprovals={() => setTab("approvals")}
               onOpenLogs={() => setManageView("llm-logs")}
             />
@@ -242,33 +236,23 @@ export default function App() {
               reloadSignal={reloadSignal}
               onOpenTask={(id) => {
                 setTaskFocus(id);
-                setTab("tasks");
+                setTab("work");
               }}
             />
           )}
-          {tab === "tasks" && (
-            <TasksPage
+          {tab === "work" && (
+            <WorkPage
               reloadSignal={reloadSignal}
               focusTaskId={taskFocus}
               onFocusHandled={() => setTaskFocus(null)}
             />
           )}
-          {tab === "outputs" && <OutputsPage reloadSignal={reloadSignal} />}
           {tab === "approvals" && (
             <ApprovalsPage
               reloadSignal={reloadSignal}
               onOpenTask={(id) => {
                 setTaskFocus(id);
-                setTab("tasks");
-              }}
-            />
-          )}
-          {tab === "projects" && (
-            <ProjectsPage
-              reloadSignal={reloadSignal}
-              onOpenTask={(id) => {
-                setTaskFocus(id);
-                setTab("tasks");
+                setTab("work");
               }}
             />
           )}

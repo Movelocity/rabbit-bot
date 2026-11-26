@@ -3,10 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const TABS = [
   "overview",
   "chat",
-  "tasks",
-  "outputs",
+  "work",
   "approvals",
-  "projects",
   "memories",
   "manage",
 ] as const;
@@ -59,7 +57,8 @@ function parseUrl(search: string): ParsedUrl {
     view = LEGACY_TAB_VIEW[tab];
     tab = "manage";
   }
-  if (tab === "plans") tab = "projects";
+  // 任务 / 产出 / 项目已合并为「工作台」；旧链接由 WorkPage 按 tab 落到对应范围
+  if (tab === "tasks" || tab === "outputs" || tab === "projects" || tab === "plans") tab = "work";
   if (tab === "manage" && view === "business") {
     tab = "memories";
     view = null;
@@ -105,6 +104,7 @@ export function useUrlState() {
       params.set("tab", tab);
       if (tab === "manage") params.set("view", manageView);
       else params.delete("view");
+      if (tab !== "work") params.delete("scope");
       const search = params.toString();
       const url = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
       const now = `${window.location.pathname}${window.location.search}${window.location.hash}`;
